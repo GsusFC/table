@@ -1,6 +1,7 @@
 /**
- * Ficha del proyecto leída de Notion por API (T-003). Solo viajan al renderer
- * los campos de la lista permitida; el token nunca sale del proceso principal.
+ * Ficha del proyecto leída de Notion (T-003) a través del MCP oficial, con la
+ * cuenta de Notion de cada persona. Solo viajan al renderer los campos de la
+ * lista permitida; las credenciales nunca salen del proceso principal.
  */
 import type { IsoDate } from './model'
 
@@ -13,7 +14,6 @@ export interface NotionOption {
 }
 
 export type ProjectFieldValue =
-  | { readonly kind: 'text'; readonly text: string }
   | { readonly kind: 'status'; readonly option: NotionOption | null }
   | { readonly kind: 'tags'; readonly options: readonly NotionOption[] }
   /** Fechas ISO de Notion (`2026-10-26` o con hora); `end` solo en rangos. */
@@ -44,8 +44,8 @@ export interface ProjectSnapshot {
 
 /**
  * Estado de la ficha de una tarjeta de Notion:
- * - `not-configured`: falta el token o la base de proyectos en Ajustes.
- * - `not-project`: la página no es una ficha de la base elegida; tarjeta web normal.
+ * - `not-configured`: Notion no está conectado en Ajustes.
+ * - `not-project`: la página no es una ficha de una base de proyectos; tarjeta web normal.
  * - `ready`: leída ahora.
  * - `error`: no se pudo leer; se muestra la caché, si hay, con su fecha.
  */
@@ -55,26 +55,23 @@ export type ProjectState =
   | { readonly status: 'ready'; readonly snapshot: ProjectSnapshot }
   | { readonly status: 'error'; readonly message: string; readonly cached: ProjectSnapshot | null }
 
-/** Ajustes de Notion visibles en la interfaz: nunca el token. */
+/** Conexión con Notion visible en la interfaz: quién está conectado, nunca credenciales. */
 export interface NotionSettingsView {
-  readonly hasToken: boolean
-  /** Últimos 4 caracteres del token, para reconocerlo. */
-  readonly tokenHint: string | null
-  readonly database: NotionDatabase | null
+  readonly connected: boolean
+  readonly workspaceName: string | null
+  readonly userName: string | null
 }
 
-export interface NotionDatabase {
-  readonly id: string
-  readonly title: string
-}
-
-/** Campos permitidos (lista cerrada): nombre en Notion, etiqueta y tipo esperado. */
+/**
+ * Campos permitidos (lista cerrada): nombre en Notion, etiqueta y tipo esperado.
+ * Una base es de proyectos si tiene `Title` y todos estos campos con su tipo.
+ * `Remaining days` no está: es una fórmula y el MCP de Notion no devuelve su valor.
+ */
 export const PROJECT_FIELDS = [
   { name: 'Status', label: 'Estado', type: 'status' },
   { name: 'Services', label: 'Servicios', type: 'multi_select' },
   { name: 'Start Date', label: 'Inicio', type: 'date' },
   { name: 'Due Date', label: 'Entrega', type: 'date' },
-  { name: 'Remaining days', label: 'Días restantes', type: 'formula' },
 ] as const
 
 /** Propiedad con el nombre del proyecto. */

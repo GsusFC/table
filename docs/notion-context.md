@@ -1,6 +1,6 @@
 # Notion como contexto del proyecto
 
-Estado: contrato propuesto sobre un principio aceptado. Esquema y uso comprobados contra la API el 2026-10-26, con la integración conectada a la base de proyectos. La ficha con lista cerrada está implementada en [T-003](tasks/003-ajustes-y-ficha-notion.md) (solo para la interfaz; la entrega a agentes es de la Fase 2).
+Estado: contrato propuesto sobre un principio aceptado. Esquema y uso comprobados contra la API el 2026-10-26, con la integración conectada a la base de proyectos. La ficha con lista cerrada está implementada en [T-003](tasks/003-ajustes-y-ficha-notion.md) (solo para la interfaz; la entrega a agentes es de la Fase 2). Table se conecta con el MCP oficial de Notion mediante OAuth con la cuenta de cada persona (decisión del usuario del 2026-10-26); la integración interna y su token quedan para el análisis del esquema hecho aquí.
 
 ## Fuente de verdad
 

@@ -1,21 +1,32 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { normalizeNotionId, type NotionDatabase, type NotionSettingsView } from '../../shared/notion'
+import type { NotionSettingsView } from '../../shared/notion'
 import { writeFileAtomic } from '../files'
 
 /**
  * Configuración global de Table (fuera de las mesas y de Git), en
- * `<userData>/settings.json`. Los tokens se guardan cifrados con el llavero
- * del sistema; el archivo nunca contiene un token en claro.
+ * `<userData>/settings.json`. Las credenciales se guardan cifradas con el
+ * llavero del sistema; el archivo nunca las contiene en claro.
  */
 interface SettingsFile {
-  readonly version: 1
+  readonly version: 2
   readonly notion: {
-    /** Token cifrado, en base64. */
-    readonly token: string | null
-    readonly tokenHint: string | null
-    readonly database: NotionDatabase | null
+    /** Credenciales OAuth del MCP de Notion (cliente registrado y tokens), cifradas, en base64. */
+    readonly connection: string | null
+    readonly workspaceName: string | null
+    readonly userName: string | null
   }
+}
+
+/** Credenciales de la conexión con el MCP de Notion. Formato del SDK de MCP; Table no las interpreta. */
+export interface NotionConnection {
+  readonly client: unknown
+  readonly tokens: unknown
+}
+
+export interface NotionIdentity {
+  readonly workspaceName: string | null
+  readonly userName: string | null
 }
 
 /** Cifrado del sistema; en Electron, `safeStorage` (Keychain en macOS). */
@@ -26,26 +37,19 @@ export interface SecretBox {
 }
 
 export interface SettingsStore {
-  /** Sube con cada cambio guardado: invalida lecturas de Notion iniciadas con la configuración anterior. */
+  /** Sube al conectar o desconectar: invalida lecturas de Notion iniciadas con la conexión anterior. */
   revision(): number
   notionView(): NotionSettingsView
-  /** Token descifrado, o null. Solo para el cliente de Notion del proceso principal. */
-  notionToken(): string | null
-  setNotionToken(token: string): Promise<void>
-  clearNotionToken(): Promise<void>
-  setNotionDatabase(database: NotionDatabase | null): Promise<void>
+  /** Credenciales descifradas, o null. Solo para el proceso principal. */
+  notionConnection(): NotionConnection | null
+  /** Guarda una conexión nueva (sube la revisión). */
+  connectNotion(connection: NotionConnection, identity: NotionIdentity): Promise<void>
+  /** Sustituye las credenciales de la conexión actual (tokens renovados) sin cambiar la revisión. */
+  updateNotionConnection(connection: NotionConnection): Promise<void>
+  disconnectNotion(): Promise<void>
 }
 
-const EMPTY: SettingsFile = { version: 1, notion: { token: null, tokenHint: null, database: null } }
-
-/** Los tokens de integración de Notion empiezan por `ntn_` (antes `secret_`). */
-export function parseNotionToken(value: unknown): string {
-  const token = typeof value === 'string' ? value.trim() : ''
-  if (!/^(ntn_|secret_)[A-Za-z0-9]{20,200}$/.test(token)) {
-    throw new Error('Pega el token completo de la integración de Notion (empieza por ntn_)')
-  }
-  return token
-}
+const EMPTY: SettingsFile = { version: 2, notion: { connection: null, workspaceName: null, userName: null } }
 
 export function createSettingsStore(userData: string, box: SecretBox): SettingsStore {
   const path = join(userData, 'settings.json')
@@ -54,15 +58,24 @@ export function createSettingsStore(userData: string, box: SecretBox): SettingsS
   let queue: Promise<unknown> = Promise.resolve()
 
   /** Cada cambio se calcula sobre el estado vigente dentro de la cola: dos cambios seguidos no se pisan. */
-  function update(change: (current: SettingsFile) => SettingsFile): Promise<void> {
+  function update(change: (current: SettingsFile) => SettingsFile, bump: boolean): Promise<void> {
     const write = queue.then(async () => {
       const next = change(settings)
       await writeFileAtomic(path, `${JSON.stringify(next, null, 2)}\n`)
       settings = next
-      revision += 1
+      if (bump) {
+        revision += 1
+      }
     })
     queue = write.catch(() => undefined)
     return write
+  }
+
+  function seal(connection: NotionConnection): string {
+    if (!box.isAvailable()) {
+      throw new Error('El llavero del sistema no está disponible; no se guarda la conexión con Notion')
+    }
+    return box.encrypt(JSON.stringify(connection)).toString('base64')
   }
 
   return {
@@ -71,41 +84,41 @@ export function createSettingsStore(userData: string, box: SecretBox): SettingsS
     },
 
     notionView() {
-      return { hasToken: settings.notion.token !== null, tokenHint: settings.notion.tokenHint, database: settings.notion.database }
+      const { connection, workspaceName, userName } = settings.notion
+      return { connected: connection !== null, workspaceName, userName }
     },
 
-    notionToken() {
-      if (!settings.notion.token || !box.isAvailable()) {
+    notionConnection() {
+      if (!settings.notion.connection || !box.isAvailable()) {
         return null
       }
       try {
-        return box.decrypt(Buffer.from(settings.notion.token, 'base64'))
+        const parsed = JSON.parse(box.decrypt(Buffer.from(settings.notion.connection, 'base64'))) as Partial<NotionConnection>
+        return { client: parsed.client, tokens: parsed.tokens }
       } catch {
-        // Llavero distinto (otro equipo o copia de datos): hay que volver a pegarlo.
+        // Llavero distinto (otro equipo o copia de datos): hay que volver a conectar.
         return null
       }
     },
 
-    async setNotionToken(token) {
-      const valid = parseNotionToken(token)
-      if (!box.isAvailable()) {
-        throw new Error('El llavero del sistema no está disponible; no se guarda el token')
-      }
-      const encrypted = box.encrypt(valid).toString('base64')
-      await update(current => ({ ...current, notion: { ...current.notion, token: encrypted, tokenHint: valid.slice(-4) } }))
+    async connectNotion(connection, identity) {
+      const sealed = seal(connection)
+      await update(current => ({ ...current, notion: { connection: sealed, ...identity } }), true)
     },
 
-    async clearNotionToken() {
-      await update(current => ({ ...current, notion: { ...current.notion, token: null, tokenHint: null } }))
+    async updateNotionConnection(connection) {
+      const sealed = seal(connection)
+      // Solo si sigue conectado: una renovación tardía no resucita una conexión quitada.
+      await update(current => (current.notion.connection ? { ...current, notion: { ...current.notion, connection: sealed } } : current), false)
     },
 
-    async setNotionDatabase(database) {
-      await update(current => ({ ...current, notion: { ...current.notion, database } }))
+    async disconnectNotion() {
+      await update(current => ({ ...current, notion: EMPTY.notion }), true)
     },
   }
 }
 
-/** Ajustes ilegibles o de otra versión: se empieza en blanco sin borrar el archivo hasta guardar. */
+/** Ajustes ilegibles o de otra versión (la 1 usaba un token pegado): se empieza en blanco. */
 function load(path: string): SettingsFile {
   let raw: string
   try {
@@ -116,17 +129,15 @@ function load(path: string): SettingsFile {
   try {
     const parsed = JSON.parse(raw) as Partial<SettingsFile> | null
     const notion = parsed?.notion
-    if (parsed?.version !== 1 || !notion) {
+    if (parsed?.version !== 2 || !notion) {
       return EMPTY
     }
-    const databaseId = typeof notion.database?.id === 'string' ? normalizeNotionId(notion.database.id) : null
     return {
-      version: 1,
+      version: 2,
       notion: {
-        token: typeof notion.token === 'string' ? notion.token : null,
-        tokenHint: typeof notion.tokenHint === 'string' ? notion.tokenHint.slice(-4) : null,
-        database:
-          databaseId && typeof notion.database?.title === 'string' ? { id: databaseId, title: notion.database.title } : null,
+        connection: typeof notion.connection === 'string' ? notion.connection : null,
+        workspaceName: typeof notion.workspaceName === 'string' ? notion.workspaceName : null,
+        userName: typeof notion.userName === 'string' ? notion.userName : null,
       },
     }
   } catch {

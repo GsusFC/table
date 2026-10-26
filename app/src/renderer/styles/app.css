@@ -1342,6 +1342,10 @@ kbd {
   color: var(--color-warning);
 }
 
+.project-relative {
+  color: var(--color-text-muted);
+}
+
 .spin {
   animation: spin 0.9s linear infinite;
 }

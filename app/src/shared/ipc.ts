@@ -13,7 +13,7 @@ import type {
   Point,
   Viewport,
 } from './model'
-import type { NotionDatabase, NotionSettingsView, ProjectSnapshot, ProjectState } from './notion'
+import type { NotionSettingsView, ProjectSnapshot, ProjectState } from './notion'
 import type { PanelBounds, SurfaceCardState, UnloadResult } from './surface'
 
 export const IPC = {
@@ -48,10 +48,9 @@ export const IPC = {
   /** renderer → main */
   appFlushDone: 'app:flush-done',
   settingsNotion: 'settings:notion',
-  settingsSetNotionToken: 'settings:set-notion-token',
-  settingsClearNotionToken: 'settings:clear-notion-token',
-  settingsListNotionDatabases: 'settings:list-notion-databases',
-  settingsSetNotionDatabase: 'settings:set-notion-database',
+  settingsConnectNotion: 'settings:connect-notion',
+  settingsCancelConnectNotion: 'settings:cancel-connect-notion',
+  settingsDisconnectNotion: 'settings:disconnect-notion',
   notionCachedProject: 'notion:cached-project',
   notionRefreshProject: 'notion:refresh-project',
 } as const
@@ -114,14 +113,15 @@ export interface TableApi {
    * que algo no se pudo guardar; entonces Table pregunta antes de cerrar.
    */
   onFlushRequest(handler: () => Promise<void>): () => void
-  /** Configuración global (T-003). El token entra pero nunca vuelve al renderer. */
+  /** Configuración global (T-003). Las credenciales de Notion nunca llegan al renderer. */
   readonly settings: {
     notion(): Promise<NotionSettingsView>
-    setNotionToken(token: string): Promise<NotionSettingsView>
-    clearNotionToken(): Promise<NotionSettingsView>
-    /** Bases compartidas con la integración; solo se puede elegir una de esta lista. */
-    listNotionDatabases(): Promise<NotionDatabase[]>
-    setNotionDatabase(databaseId: string | null): Promise<NotionSettingsView>
+    /** Abre el navegador para autorizar a Table en Notion y espera la respuesta. */
+    connectNotion(): Promise<NotionSettingsView>
+    /** Cancela una autorización en curso; `connectNotion` rechaza. */
+    cancelConnectNotion(): Promise<void>
+    /** Olvida la conexión y las fichas guardadas. */
+    disconnectNotion(): Promise<NotionSettingsView>
   }
   /** Ficha del proyecto de una tarjeta de Notion; la URL la toma el proceso principal de la mesa guardada. */
   readonly notion: {

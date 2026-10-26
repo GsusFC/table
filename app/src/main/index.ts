@@ -7,6 +7,7 @@ import {
   net,
   protocol,
   safeStorage,
+  shell,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
   type MenuItemConstructorOptions,
@@ -16,7 +17,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { CAPTURE_PROTOCOL, IPC, type PersistenceError } from '../shared/ipc'
-import type { NotionDatabase } from '../shared/notion'
 import type { MesaId } from '../shared/model'
 import { recognizeService } from '../shared/services'
 import {
@@ -30,8 +30,9 @@ import {
   parseViewport,
 } from '../shared/validate'
 import { log } from './log'
+import { authorizeNotion, createNotionMcp, NOTION_MCP_URL } from './notion/mcp'
 import { createProjectService, type ProjectService } from './notion/projects'
-import { createSettingsStore, parseNotionToken, type SettingsStore } from './settings/settingsStore'
+import { createSettingsStore, type SettingsStore } from './settings/settingsStore'
 import { runMeasure } from './measure'
 import { runSmoke, smokeHooks } from './smoke'
 import { createMesaStore } from './store/mesaStore'
@@ -64,8 +65,8 @@ let surface: SurfaceManager | null = null
 let store: MesaStore | null = null
 let settings: SettingsStore | null = null
 let projects: ProjectService | null = null
-/** Bases que Notion devolvió en la última comprobación: solo se puede elegir una de ellas. */
-let listedDatabases: readonly NotionDatabase[] = []
+/** Autorización con Notion en curso (navegador abierto); se puede cancelar. */
+let connectingNotion: AbortController | null = null
 /** Escrituras iniciadas por el proceso principal (capturas, títulos); se esperan al cerrar. */
 const pendingPersistence = new Set<Promise<unknown>>()
 
@@ -301,32 +302,31 @@ async function notionCardUrl(mesaId: unknown, cardId: unknown): Promise<string |
   return card.serviceId === 'notion' ? card.url : null
 }
 
-/** Ajustes de Notion y ficha del proyecto (T-003). El token nunca vuelve al renderer. */
+/** Conexión con Notion y ficha del proyecto (T-003). Las credenciales nunca llegan al renderer. */
 function registerNotionIpc(): void {
   handle(IPC.settingsNotion, () => requireSettings().notionView())
-  handle(IPC.settingsSetNotionToken, async token => {
-    await requireSettings().setNotionToken(parseNotionToken(token))
-    log('settings-notion-token', { action: 'saved' })
-    return requireSettings().notionView()
-  })
-  handle(IPC.settingsClearNotionToken, async () => {
-    await requireSettings().clearNotionToken()
-    log('settings-notion-token', { action: 'cleared' })
-    return requireSettings().notionView()
-  })
-  handle(IPC.settingsListNotionDatabases, async () => {
-    listedDatabases = await requireProjects().listDatabases()
-    return listedDatabases
-  })
-  handle(IPC.settingsSetNotionDatabase, async databaseId => {
-    let database: NotionDatabase | null = null
-    if (databaseId !== null) {
-      database = listedDatabases.find(candidate => candidate.id === databaseId) ?? null
-      if (!database) {
-        throw new Error('Esa base no está en la lista de Notion; vuelve a comprobar la conexión')
-      }
+  handle(IPC.settingsConnectNotion, async () => {
+    if (connectingNotion) {
+      throw new Error('Ya hay una conexión con Notion en curso')
     }
-    await requireSettings().setNotionDatabase(database)
+    const controller = new AbortController()
+    connectingNotion = controller
+    try {
+      const { connection, identity } = await authorizeNotion(url => shell.openExternal(url), controller.signal)
+      await requireSettings().connectNotion(connection, identity)
+      log('settings-notion', { action: 'connected' })
+      return requireSettings().notionView()
+    } finally {
+      connectingNotion = null
+    }
+  })
+  handle(IPC.settingsCancelConnectNotion, () => {
+    connectingNotion?.abort()
+  })
+  handle(IPC.settingsDisconnectNotion, async () => {
+    await requireSettings().disconnectNotion()
+    await requireProjects().clearCache()
+    log('settings-notion', { action: 'disconnected' })
     return requireSettings().notionView()
   })
   handle(IPC.notionCachedProject, async (mesaId, cardId) => {
@@ -497,8 +497,9 @@ void app.whenReady().then(async () => {
     encrypt: plain => safeStorage.encryptString(plain),
     decrypt: encrypted => safeStorage.decryptString(encrypted),
   })
-  // El smoke usa un servidor local con fichas sintéticas en lugar de la API de Notion.
-  projects = createProjectService(settings, app.getPath('userData'), smokeMode ? () => smokeHooks.notionApiBase : undefined)
+  // El smoke usa un servidor MCP local con fichas sintéticas en lugar del de Notion.
+  const notionMcp = createNotionMcp(settings, () => (smokeMode && smokeHooks.notionMcpUrl) || NOTION_MCP_URL)
+  projects = createProjectService(settings, notionMcp, app.getPath('userData'))
   Menu.setApplicationMenu(buildMenu())
   registerCaptureProtocol()
   registerIpc()
@@ -507,7 +508,7 @@ void app.whenReady().then(async () => {
   mainWindow = window
   log('app-ready', { electron: process.versions.electron, chrome: process.versions.chrome })
   if (smokeMode && surface) {
-    await runSmoke(window, surface)
+    await runSmoke(window, surface, settings)
     return
   }
   const measureFile = process.env['TABLE_MEASURE']

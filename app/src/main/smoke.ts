@@ -4,7 +4,19 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
+import { Server as McpServer } from '@modelcontextprotocol/sdk/server/index.js'
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import type { Card, Mesa, Point, Size } from '../shared/model'
+import {
+  FIXTURE_OTHER_SOURCE,
+  FIXTURE_PROJECT_PROPERTIES,
+  FIXTURE_PROJECT_SCHEMA,
+  FIXTURE_PROJECTS_SOURCE,
+  fixtureDataSourceResponse,
+  fixturePageResponse,
+} from './notion/fixtures'
+import type { SettingsStore } from './settings/settingsStore'
 import type { SurfaceManager } from './web/types'
 
 /**
@@ -31,8 +43,8 @@ export const smokeHooks = {
   confirmDiscard: (_origin: string, _reason: 'quit' | 'unload'): boolean => false,
   /** Si algo no se pudo guardar al cerrar; el smoke cierra igualmente. */
   confirmCloseWithUnsaved: (): boolean => true,
-  /** Servidor local con fichas sintéticas que sustituye a la API de Notion. */
-  notionApiBase: undefined as string | undefined,
+  /** Servidor MCP local con fichas sintéticas que sustituye al MCP de Notion. */
+  notionMcpUrl: undefined as string | undefined,
 }
 
 /** Chromium solo respeta `beforeunload` si la página recibió interacción del usuario. */
@@ -80,68 +92,50 @@ async function startFixtureServer(): Promise<{ server: Server; url: string }> {
   return { server, url: `http://127.0.0.1:${port}/` }
 }
 
-const NOTION_TOKEN = `ntn_${'s'.repeat(40)}`
-const NOTION_DATABASE = '11111111222243338444555555555555'
 const NOTION_PROJECT = 'aaaaaaaabbbb4ccc8dddeeeeeeeeeeee'
 const NOTION_OTHER = 'ffffffffbbbb4ccc8dddeeeeeeeeeeee'
 
-/** API de Notion falsa: una base, una ficha con campos excluidos rellenos y una página suelta. */
-async function startNotionServer(): Promise<{ server: Server; url: string }> {
+/**
+ * MCP de Notion falso (sin OAuth, sin estado): una ficha con campos excluidos
+ * rellenos en una base de proyectos y una página de otra base.
+ */
+async function startNotionMcpServer(): Promise<{ server: Server; url: string }> {
   const server = createServer((request, response) => {
-    const reply = (status: number, body: unknown): void => {
-      response.writeHead(status, { 'content-type': 'application/json' })
-      response.end(JSON.stringify(body))
-    }
-    if (request.headers.authorization !== `Bearer ${NOTION_TOKEN}`) {
-      reply(401, { object: 'error' })
-    } else if (request.method === 'POST' && request.url === '/v1/search') {
-      const projectSchema = {
-        Title: { type: 'title' },
-        Status: { type: 'status' },
-        Services: { type: 'multi_select' },
-        'Start Date': { type: 'date' },
-        'Due Date': { type: 'date' },
-        'Remaining days': { type: 'formula' },
-      }
-      reply(200, {
-        results: [
-          { object: 'database', id: NOTION_DATABASE, title: [{ plain_text: 'Proyectos de prueba' }], properties: projectSchema },
-          // Base dentro de una ficha: compartida con la integración, pero no es de proyectos.
-          { object: 'database', id: NOTION_OTHER, title: [{ plain_text: 'Contenidos de una ficha' }], properties: { Name: { type: 'title' } } },
-        ],
-        has_more: false,
-      })
-    } else if (request.url === `/v1/pages/${NOTION_PROJECT}`) {
-      reply(200, {
-        object: 'page',
-        id: NOTION_PROJECT,
-        last_edited_time: '2026-10-25T09:30:00.000Z',
-        parent: { type: 'database_id', database_id: NOTION_DATABASE },
-        properties: {
-          Title: { type: 'title', title: [{ plain_text: 'Proyecto sintético' }] },
-          Status: { type: 'status', status: { name: 'In progress', color: 'orange' } },
-          Services: { type: 'multi_select', multi_select: [{ name: 'Branding', color: 'blue' }] },
-          'Start Date': { type: 'date', date: { start: '2026-10-01', end: null } },
-          'Due Date': { type: 'date', date: null },
-          'Remaining days': { type: 'formula', formula: { type: 'number', number: 34 } },
-          Budget: { type: 'rich_text', rich_text: [{ plain_text: 'SECRETO-PRESUPUESTO' }] },
-          Leaders: { type: 'people', people: [{ id: 'SECRETO-PERSONA' }] },
-        },
-      })
-    } else if (request.url === `/v1/pages/${NOTION_OTHER}`) {
-      reply(200, { object: 'page', id: NOTION_OTHER, parent: { type: 'page_id', page_id: NOTION_PROJECT }, properties: {} })
-    } else {
-      reply(404, { object: 'error' })
-    }
+    const mcp = new McpServer({ name: 'notion-falso', version: '0.0.0' }, { capabilities: { tools: {} } })
+    mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: [{ name: 'notion-fetch', inputSchema: { type: 'object' as const, properties: { id: { type: 'string' } } } }],
+    }))
+    mcp.setRequestHandler(CallToolRequestSchema, async call => {
+      const id = String(call.params.arguments?.['id'] ?? '')
+      const text =
+        id === NOTION_PROJECT
+          ? fixturePageResponse(`https://www.notion.so/${id}`, FIXTURE_PROJECTS_SOURCE, FIXTURE_PROJECT_PROPERTIES)
+          : id === NOTION_OTHER
+            ? fixturePageResponse(`https://www.notion.so/${id}`, FIXTURE_OTHER_SOURCE, { Name: 'Página suelta' })
+            : id === FIXTURE_PROJECTS_SOURCE
+              ? fixtureDataSourceResponse(id, FIXTURE_PROJECT_SCHEMA)
+              : id === FIXTURE_OTHER_SOURCE
+                ? fixtureDataSourceResponse(id, { Name: { type: 'title' } })
+                : null
+      return text === null
+        ? { isError: true, content: [{ type: 'text' as const, text: '{"code":"object_not_found"}' }] }
+        : { content: [{ type: 'text' as const, text }] }
+    })
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
+    response.on('close', () => {
+      void transport.close()
+      void mcp.close()
+    })
+    void mcp.connect(transport).then(() => transport.handleRequest(request, response))
   })
   const { promise, resolve } = Promise.withResolvers<void>()
   server.listen(0, '127.0.0.1', resolve)
   await promise
   const { port } = server.address() as AddressInfo
-  return { server, url: `http://127.0.0.1:${port}` }
+  return { server, url: `http://127.0.0.1:${port}/mcp` }
 }
 
-export async function runSmoke(window: BrowserWindow, surface: SurfaceManager): Promise<void> {
+export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, settings: SettingsStore): Promise<void> {
   const checks: Check[] = []
   const record = (name: string, ok: boolean, detail?: unknown): void => {
     checks.push({ name, ok, detail })
@@ -568,26 +562,21 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager): 
     await inUi(`window.table.surface.unload(${JSON.stringify(guardedCard.id)})`)
     smokeHooks.confirmDiscard = () => false
 
-    // Ajustes y ficha de Notion (T-003) contra una API falsa con datos sintéticos.
-    const notionServer = await startNotionServer()
-    smokeHooks.notionApiBase = notionServer.url
+    // Conexión y ficha de Notion (T-003) contra un MCP falso con datos sintéticos. La
+    // autorización en el navegador no se puede automatizar: se guarda una conexión falsa.
+    const notionServer = await startNotionMcpServer()
+    smokeHooks.notionMcpUrl = notionServer.url
     try {
-      const saved = await inUi<{ hasToken: boolean; tokenHint: string }>(`window.table.settings.setNotionToken(${JSON.stringify(NOTION_TOKEN)})`)
+      const fakeSecret = 'credencial-sintetica-de-smoke'
+      await settings.connectNotion(
+        { client: { client_id: 'smoke', redirect_uris: ['http://127.0.0.1/callback'] }, tokens: { access_token: fakeSecret, token_type: 'Bearer' } },
+        { workspaceName: 'Estudio de prueba', userName: 'Persona de prueba' },
+      )
+      const view = await inUi<{ connected: boolean }>(`window.table.settings.notion()`)
       const settingsFile = readFileSync(join(app.getPath('userData'), 'settings.json'), 'utf8')
       record(
-        'ajustes: el token se guarda cifrado y no vuelve al renderer',
-        saved.hasToken && !settingsFile.includes(NOTION_TOKEN) && !JSON.stringify(saved).includes(NOTION_TOKEN),
-        { hint: saved.tokenHint },
-      )
-      const unlisted = await inUi<boolean>(
-        `window.table.settings.setNotionDatabase(${JSON.stringify(NOTION_DATABASE)}).then(() => false, () => true)`,
-      )
-      const databases = await inUi<{ id: string }[]>(`window.table.settings.listNotionDatabases()`)
-      await inUi(`window.table.settings.setNotionDatabase(${JSON.stringify(NOTION_DATABASE)})`)
-      record(
-        'ajustes: solo se listan y eligen bases con esquema de proyectos',
-        unlisted && databases.length === 1 && databases[0]!.id === NOTION_DATABASE,
-        { databases: databases.length },
+        'ajustes: la conexión se guarda cifrada y no llega al renderer',
+        view.connected && !settingsFile.includes(fakeSecret) && !JSON.stringify(view).includes(fakeSecret),
       )
 
       const notionMesa = await inUi<Mesa>(`window.table.mesas.create('Mesa de Notion')`)
@@ -601,11 +590,11 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager): 
       record(
         'notion: la ficha trae solo los campos permitidos',
         ready.status === 'ready' &&
-          ready.snapshot?.fields.map(field => field.name).join() === 'Status,Services,Start Date,Due Date,Remaining days' &&
+          ready.snapshot?.fields.map(field => field.name).join() === 'Status,Services,Start Date,Due Date' &&
           !JSON.stringify(ready).includes('SECRETO'),
         { status: ready.status },
       )
-      record('notion: una página que no es ficha queda como tarjeta web', (await refresh(otherCard!)).status === 'not-project')
+      record('notion: una página de otra base queda como tarjeta web', (await refresh(otherCard!)).status === 'not-project')
 
       ui.reload()
       await waitFor(() => inUi<boolean>(`[...document.querySelectorAll('.mesa-row-open')].some(b => b.textContent.includes('Mesa de Notion'))`), Boolean, 'mesa de Notion en el inicio')
@@ -618,17 +607,20 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager): 
       record('notion: la tarjeta muestra la ficha en el lienzo', face.includes('Branding') && !face.includes('SECRETO'))
       await shot('12-ficha-notion')
 
-      smokeHooks.notionApiBase = 'http://127.0.0.1:9'
+      notionServer.server.close()
+      notionServer.server.closeAllConnections()
       const offline = await refresh(projectCard!)
       record('notion: sin conexión devuelve la caché con su fecha', offline.status === 'error' && typeof offline.cached?.fetchedAt === 'string', {
         status: offline.status,
       })
 
-      await inUi(`window.table.settings.clearNotionToken()`)
-      record('ajustes: sin token la tarjeta vuelve a ser web', (await refresh(projectCard!)).status === 'not-configured')
+      await inUi(`window.table.settings.disconnectNotion()`)
+      const afterDisconnect = await refresh(projectCard!)
+      const cacheLeft = await inUi<unknown>(`window.table.notion.cachedProject(${JSON.stringify(notionMesa.id)}, ${JSON.stringify(projectCard!.id)})`)
+      record('ajustes: al desconectar la tarjeta vuelve a ser web y se borra la caché', afterDisconnect.status === 'not-configured' && cacheLeft === null)
       await inUi(`window.table.mesas.remove(${JSON.stringify(notionMesa.id)})`)
     } finally {
-      smokeHooks.notionApiBase = undefined
+      smokeHooks.notionMcpUrl = undefined
       notionServer.server.close()
     }
 

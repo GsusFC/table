@@ -145,9 +145,16 @@ function FieldValue({ field }: { readonly field: ProjectField }) {
         <Empty />
       )
     case 'date':
-      return value.start ? <span>{formatRange(value.start, value.end)}</span> : <Empty />
-    case 'text':
-      return value.text ? <span>{value.text}</span> : <Empty />
+      if (!value.start) {
+        return <Empty />
+      }
+      // La entrega dice además cuánto falta: sustituye a la fórmula «Remaining days», que el MCP no devuelve.
+      return (
+        <span>
+          {formatRange(value.start, value.end)}
+          {field.name === 'Due Date' && <span className="project-relative"> · {daysFromToday(value.end ?? value.start)}</span>}
+        </span>
+      )
   }
 }
 
@@ -173,4 +180,17 @@ function formatDay(value: string): string {
 
 function formatRange(start: string, end: string | null): string {
   return end ? `${formatDay(start)} – ${formatDay(end)}` : formatDay(start)
+}
+
+const dayDistance = new Intl.RelativeTimeFormat('es', { numeric: 'auto' })
+
+/** «en 34 días», «hoy», «hace 3 días», contando días naturales. */
+function daysFromToday(value: string): string {
+  const day = new Date(Date.parse(value.length === 10 ? `${value}T00:00:00` : value))
+  if (Number.isNaN(day.getTime())) {
+    return ''
+  }
+  const today = new Date()
+  const startOf = (date: Date): number => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
+  return dayDistance.format(Math.round((startOf(day) - startOf(today)) / 86_400_000), 'day')
 }

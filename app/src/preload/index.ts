@@ -74,10 +74,9 @@ const api: TableApi = {
   },
   settings: {
     notion: () => ipcRenderer.invoke(IPC.settingsNotion),
-    setNotionToken: token => ipcRenderer.invoke(IPC.settingsSetNotionToken, token),
-    clearNotionToken: () => ipcRenderer.invoke(IPC.settingsClearNotionToken),
-    listNotionDatabases: () => ipcRenderer.invoke(IPC.settingsListNotionDatabases),
-    setNotionDatabase: databaseId => ipcRenderer.invoke(IPC.settingsSetNotionDatabase, databaseId),
+    connectNotion: () => ipcRenderer.invoke(IPC.settingsConnectNotion),
+    cancelConnectNotion: () => ipcRenderer.invoke(IPC.settingsCancelConnectNotion),
+    disconnectNotion: () => ipcRenderer.invoke(IPC.settingsDisconnectNotion),
   },
   notion: {
     cachedProject: (mesaId, cardId) => ipcRenderer.invoke(IPC.notionCachedProject, mesaId, cardId),

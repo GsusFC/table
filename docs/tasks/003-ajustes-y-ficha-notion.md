@@ -1,4 +1,4 @@
-# Tarea 003 · Ajustes y ficha de Notion por API
+# Tarea 003 · Ajustes y ficha de Notion
 
 Estado: en curso desde el 2026-10-26. Fase: 1.
 
@@ -6,41 +6,43 @@ Aplica [D-012](../decisions.md) («el servicio reconocido añade capacidades») 
 
 ## Resultado esperado
 
-Una persona del equipo guarda una vez el token de la integración de Notion y elige la base de proyectos en Ajustes. Desde entonces, una tarjeta de Notion cuya página es una ficha de esa base muestra en el lienzo los datos autorizados del proyecto, leídos por la API, con su fecha y origen. Sin conexión, muestra la última copia como caché fechada.
+Una persona del equipo pulsa «Conectar con Notion» en Ajustes y autoriza a Table en el navegador con su cuenta. Desde entonces, una tarjeta de Notion cuya página es una ficha de una base de proyectos muestra en el lienzo los datos autorizados del proyecto, con su fecha y origen. Sin conexión, muestra la última copia como caché fechada.
+
+## Cambio de enfoque (2026-10-26)
+
+La primera versión usaba el token de una integración interna pegado en Ajustes y elegir la base de proyectos. Al usuario le resultaba engorroso y eligió conectar con el **MCP oficial de Notion** (`https://mcp.notion.com/mcp`): OAuth con PKCE y registro dinámico, sin token pegado ni servidor propio. Ensayo previo con la cuenta del usuario:
+
+- La autorización en el navegador funciona; el token dura 8 h y se renueva solo.
+- `notion-fetch` devuelve la ficha como JSON dentro de un texto pensado para IA (`<properties>{…}</properties>`) y la base a la que pertenece. Estado, servicios y fechas se leen bien; los colores salen del esquema de la base.
+- **`Remaining days` no se puede leer**: es una fórmula y el MCP solo devuelve una referencia (`formulaResult://…`), ni siquiera en consultas. La tarjeta muestra en su lugar cuánto falta para la fecha de entrega.
+- Ya no hace falta elegir la base: una página es ficha de proyecto si su base tiene los campos de proyecto.
 
 ## Alcance
 
-- **Ajustes** (configuración global, fuera de las mesas y de Git): botón en el carril lateral → diálogo.
-  - Token de Notion guardado cifrado con el llavero del sistema (`safeStorage` de Electron, Keychain en macOS). Nunca se muestra entero, no se registra ni se envía al renderer.
-  - «Comprobar conexión» lista las bases compartidas con la integración y se elige la de proyectos.
-- **Ficha del proyecto**: una tarjeta de Notion se reconoce como ficha si su página pertenece a la base elegida. La tarjeta muestra la ficha en lugar de la captura; entrar sigue abriendo la web de Notion.
-- **Lista de campos permitidos**, resuelta por nombre y tipo según el esquema comprobado: `Title`, `Status`, `Services`, `Start Date`, `Due Date`, `Remaining days`. Ausentes o de otro tipo se muestran como tales, sin inventar datos.
-- **Caché fechada**: la última ficha leída se guarda en local (datos de usuario de Table, no en Git) con su fecha. Se actualiza al abrir la mesa y con «Actualizar». Si falla, se muestra la copia con su fecha y el motivo.
+- **Ajustes** (configuración global, fuera de las mesas y de Git): botón en el carril lateral → diálogo con «Conectar con Notion» y, una vez conectado, quién está conectado y «Desconectar».
+  - Credenciales OAuth cifradas con el llavero del sistema (`safeStorage`, Keychain en macOS). Nunca se registran ni llegan al renderer.
+  - El código de autorización llega a un puerto local de un solo uso en `127.0.0.1`; se comprueba `state`. Se puede cancelar.
+- **Ficha del proyecto**: la tarjeta muestra la ficha en lugar de la captura; entrar sigue abriendo la web de Notion.
+- **Lista de campos permitidos**, comprobada por nombre y tipo en el esquema de la base: `Title`, `Status`, `Services`, `Start Date`, `Due Date`.
+- **Caché fechada** en local; se borra al desconectar.
 
 ## Fuera de alcance
 
-- Cuerpo de la página, páginas hijas y relaciones (`Account`, `Opportunity`): no se leen.
-- Entregar contexto a agentes (Fase 2) y escribir en Notion.
-- Campos configurables por el usuario (P-006): la lista es fija en esta tarea.
-- Token de Figma: llega con [T-005](005-frames-figma.md).
-
-## Decisiones dentro de la tarea
-
-- `Leaders` queda fuera: leer nombres exige la capacidad de usuarios, no concedida. `Preview` queda fuera hasta decidir si sirve de miniatura.
-- Versión de la API: `2022-06-28`, la del esquema comprobado.
+- Cuerpo de la página, páginas hijas y relaciones: no se copian (la respuesta del MCP trae el cuerpo; Table lo descarta).
+- Entregar contexto a agentes (Fase 2) y escribir en Notion: Table solo llama a `notion-fetch`, aunque el permiso de la conexión permite escribir.
+- Campos configurables por el usuario (P-006).
 
 ## Criterios de aceptación
 
-- [x] Ajustes guarda, sustituye y borra el token de Notion; el archivo de ajustes no contiene el token en claro y el renderer nunca lo recibe.
-- [x] «Comprobar conexión» informa de token inválido, sin bases compartidas o la lista de bases, y permite elegir la de proyectos. *Lista y elección comprobadas en el smoke; solo se acepta una base devuelta por Notion.*
-- [x] Una tarjeta de una ficha de la base elegida muestra los campos permitidos, con fecha de lectura y origen; una página de Notion que no es ficha sigue como tarjeta web normal.
-- [x] Un fixture con `Budget`, `Opportunity`, `Lead`, `Notion Link`, `Account` y `Leaders` no saca ninguno de esos campos de la ficha (test).
+- [x] Conectar y desconectar desde Ajustes; las credenciales no aparecen en `settings.json` ni llegan al renderer. *Guardado cifrado y desconexión comprobados en el smoke; la autorización real en el navegador falta probarla desde la app.*
+- [x] Una tarjeta de una ficha de proyecto muestra los campos permitidos, con fecha de lectura y origen; una página de otra base sigue como tarjeta web normal.
+- [x] Un fixture con `Budget`, `Lead`, `Notion Link`, `Preview`, la fórmula y un cuerpo con importes no saca nada de eso de la ficha (test y smoke).
 - [x] Sin conexión o con error, la tarjeta muestra la caché con su fecha y el motivo, sin declarar que está actualizada.
-- [x] Ni logs ni errores imprimen el token ni contenido de la ficha. *Los logs solo registran estado y código de error; los mensajes de error son fijos.*
-- [ ] Probado con la ficha real del piloto en el equipo del usuario. *La extracción se comprobó contra la ficha real por la API (5 campos con su tipo, 53 bases visibles para la integración); falta hacerlo desde la app.*
+- [x] Ni logs ni errores imprimen credenciales ni contenido de la ficha.
+- [ ] Probado con la ficha real del piloto desde la app, con la cuenta del usuario.
 
 ## Comprobaciones (2026-10-26)
 
-- Tests: extracción con lista cerrada sobre un fixture con todos los campos excluidos rellenos, página de otra base, campos ausentes o de otro tipo, e IDs de página en URLs de Notion.
-- Smoke contra una API de Notion falsa: token cifrado (no aparece en `settings.json` ni en la respuesta al renderer), elegir solo una base de la lista, ficha con los 5 campos y sin datos excluidos, página suelta como web, ficha visible en el lienzo, caché con fecha sin conexión, y vuelta a web al quitar el token.
-- Revisión separada de Codex (T-003 y T-004 juntas, solo lectura): 6 hallazgos. Corregidos: una respuesta de guardado antigua podía pisar texto nuevo de una nota (alta, T-004); cambios de ajustes concurrentes podían restaurar un token borrado; una lectura iniciada con ajustes anteriores podía reutilizarse; una caché tardía podía deshacer el resultado de la lectura; la caché en disco se reconstruye ahora con la lista cerrada. Documentado como límite: las capturas de páginas de Notion pueden mostrar `Budget` y no son aptas para agentes ([contexto de Notion](../notion-context.md)).
+- Tests: lectura del formato de `notion-fetch` con respuestas sintéticas (fixtures en `app/src/main/notion/fixtures.ts`), lista cerrada, esquema de proyectos, tipos inesperados, formatos no reconocidos y caché alterada.
+- Smoke contra un MCP falso local: conexión cifrada, ficha con los 4 campos y sin datos excluidos, página de otra base como web, ficha en el lienzo, caché sin conexión y desconexión que borra la caché.
+- Revisión separada de Codex sobre la versión con token: 6 hallazgos, 5 corregidos (siguen aplicando: escrituras de ajustes en cola, lecturas atadas a la conexión vigente, caché tardía ignorada, caché reconstruida con la lista cerrada) y 1 límite documentado: las capturas de páginas de Notion pueden mostrar `Budget` y no son aptas para agentes ([contexto de Notion](../notion-context.md)).
