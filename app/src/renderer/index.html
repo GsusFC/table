@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- 'unsafe-inline' en estilos: Vite y React Flow inyectan estilos en línea. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: table-capture:; connect-src 'self' ws://localhost:*; object-src 'none'; base-uri 'none'; frame-src 'none'"
+    />
+    <title>Table</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>
