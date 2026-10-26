@@ -9,6 +9,8 @@ import {
   type IpcMainInvokeEvent,
   type MenuItemConstructorOptions,
 } from 'electron'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { CAPTURE_PROTOCOL, IPC } from '../shared/ipc'
@@ -24,6 +26,7 @@ import {
   parseViewport,
 } from '../shared/validate'
 import { log } from './log'
+import { runSmoke } from './smoke'
 import { createMesaStore } from './store/mesaStore'
 import type { MesaStore } from './store/types'
 import { createSurfaceManager } from './web/surfaceManager'
@@ -31,6 +34,13 @@ import type { SurfaceManager } from './web/types'
 
 const devRendererUrl = process.env['ELECTRON_RENDERER_URL']
 const rendererFile = join(__dirname, '../renderer/index.html')
+
+const smokeMode = process.env['TABLE_SMOKE'] === '1'
+
+// El smoke trabaja con datos desechables, nunca con las mesas del usuario.
+if (smokeMode) {
+  app.setPath('userData', mkdtempSync(join(tmpdir(), 'table-smoke-')))
+}
 
 protocol.registerSchemesAsPrivileged([{ scheme: CAPTURE_PROTOCOL, privileges: { standard: true, secure: true } }])
 
@@ -270,11 +280,15 @@ app.on('web-contents-created', (_event, contents) => {
 
 app.on('window-all-closed', () => app.quit())
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
   store = createMesaStore(app.getPath('userData'))
   Menu.setApplicationMenu(buildMenu())
   registerCaptureProtocol()
   registerIpc()
-  mainWindow = createWindow()
+  const window = createWindow()
+  mainWindow = window
   log('app-ready', { electron: process.versions.electron, chrome: process.versions.chrome })
+  if (smokeMode && surface) {
+    await runSmoke(window, surface)
+  }
 })

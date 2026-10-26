@@ -1,0 +1,93 @@
+/*
+ * Tokens de la interfaz (docs/design.md). Colores, radios, espaciados,
+ * tipografía y capas viven aquí para poder cambiar la identidad sin tocar
+ * los componentes. La identidad definitiva sigue abierta (D-016).
+ */
+:root {
+  color-scheme: light;
+
+  /* Superficies */
+  --color-window: #f4f4f3;
+  --color-panel: #ffffff;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f7f7f5;
+  --color-surface-hover: #efefed;
+  --color-surface-pressed: #e7e7e4;
+  --color-canvas: #fbfbfa;
+  --color-canvas-dot: #dcdcd8;
+
+  /* Bordes */
+  --color-border: #e6e6e3;
+  --color-border-strong: #d6d6d2;
+
+  /* Texto */
+  --color-text: #1f1f1d;
+  --color-text-muted: #6f6f6a;
+  --color-text-faint: #9a9a94;
+  --color-text-inverse: #ffffff;
+
+  /* Acción principal: carbón, sin color */
+  --color-primary: #1f1f1d;
+  --color-primary-hover: #383835;
+
+  /* Único acento: estado activo, selección y foco */
+  --color-accent: #2f6fdf;
+  --color-accent-soft: #e6effd;
+
+  /* Estados (pasteles apagados) */
+  --color-danger: #a8322d;
+  --color-danger-soft: #fdeceb;
+  --color-warning: #8f6200;
+  --color-warning-soft: #fbf3db;
+  --color-success: #346538;
+  --color-success-soft: #edf3ec;
+  --color-neutral-soft: #efefed;
+
+  --color-scrim: rgba(20, 20, 18, 0.28);
+
+  /* Tipografía del sistema */
+  --font-ui: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-md: 13px;
+  --font-size-lg: 15px;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --line-height: 1.45;
+
+  /* Espaciado (múltiplos de 4) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+
+  /* Radios */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-panel: 12px;
+
+  /* Sombras casi inexistentes */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-card-hover: 0 2px 8px rgba(0, 0, 0, 0.05);
+  --shadow-overlay: 0 6px 24px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.06);
+
+  /* Estructura de la ventana */
+  --topbar-height: 52px;
+  --rail-width: 56px;
+  --traffic-lights-inset: 80px;
+  --control-height: 28px;
+
+  /* Escala fija de capas (los diálogos usan la capa superior nativa) */
+  --z-canvas-overlay: 10;
+  --z-menu: 20;
+
+  --focus-ring: 0 0 0 2px var(--color-panel), 0 0 0 4px var(--color-accent);
+  --duration-fast: 120ms;
+}
