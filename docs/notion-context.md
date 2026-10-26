@@ -1,6 +1,6 @@
 # Notion como contexto del proyecto
 
-Estado: contrato propuesto sobre un principio aceptado. Esquema comprobado contra la API el 2026-10-26 a partir de la ficha del proyecto piloto; la base todavía no está compartida con la integración.
+Estado: contrato propuesto sobre un principio aceptado. Esquema y uso comprobados contra la API el 2026-10-26, con la integración conectada a la base de proyectos.
 
 ## Fuente de verdad
 
@@ -10,35 +10,35 @@ El contexto de una tarea suma una selección explícita del lienzo. Mover el zoo
 
 ## Esquema comprobado
 
-Fuente: API de Notion (`Notion-Version: 2022-06-28`), integración interna de solo lectura conectada a la **ficha del proyecto piloto**. Leer la base devuelve `object_not_found`: la integración no está conectada a ella. Por eso no se han podido leer las opciones de `Status` ni recorrer otros proyectos. Los IDs de propiedad se resolvieron y se guardan fuera del repositorio (`.local/notion-schema.json`); el repositorio solo lleva nombres y tipos.
+Fuente: API de Notion (`Notion-Version: 2022-06-28`), integración interna de solo lectura conectada a la base de proyectos. Primero se leyó la ficha del proyecto piloto; después la base completa (157 proyectos), contando valores sin leerlos. Los IDs de propiedad y de la base se guardan fuera del repositorio (`.local/notion-schema.json`); el repositorio solo lleva nombres, tipos y recuentos.
 
-| Propiedad | Tipo real | Uso previsto | Exposición al agente | En el piloto |
+| Propiedad | Tipo real | Uso previsto | Exposición al agente | Proyectos con valor (de 157) |
 | --- | --- | --- | --- | --- |
-| `Title` | `title` | Nombre del proyecto. | Permitido en el contexto acordado. | Con valor |
-| `Status` | `status` | Filtro y situación del proyecto. | Permitido. | Con valor |
-| `Services` | `multi_select` | Tipo de encargo. | Permitido. | Vacío |
-| `Start Date`, `Due Date` | `date` | Plazos. | Permitido si es pertinente para la tarea. | Vacíos |
-| `Remaining days` | `formula` | Cuenta atrás derivada. | Permitido. | Con valor |
-| `Leaders` | `people` | Responsables. | Solo datos necesarios para la tarea. Leer nombres requiere la capacidad de usuarios, no concedida. | Vacío |
-| `Account` | `relation` | Cliente, en otra base. | Solo datos necesarios para la tarea; la base relacionada no está compartida. | Vacío |
-| `WORK Figma File` | `url` | Archivo único del proyecto. | Referencia autorizada. | **Vacío** |
-| `Pinterest Link` | `url` | Tablero de referencias. | Referencia autorizada. | **Vacío** |
-| `Pinterest` | `url` | Duplicado del anterior, mismo tipo. | No elegir automáticamente entre ambas. | **Vacío** |
-| `Preview` | `files` | Imagen del proyecto; candidata a miniatura de la tarjeta. | Por decidir. | Con valor |
-| `Budget` | `rich_text` | Información económica interna, como texto libre (no número). | **Excluido.** | Vacío |
-| `Opportunity` | `relation` | Oportunidad comercial, en otra base. | Excluido por defecto hasta aclarar su contenido. | Vacío |
-| `Lead` | `url` | Sin uso documentado. | Excluido por defecto hasta aclarar. | Vacío |
-| `Notion Link` | `url` | Sin uso documentado. | Excluido por defecto hasta aclarar. | Vacío |
+| `Title` | `title` | Nombre del proyecto. | Permitido en el contexto acordado. | — |
+| `Status` | `status` | Situación del proyecto. | Permitido. | 157 |
+| `Services` | `multi_select` (19 opciones) | Tipo de encargo. | Permitido. | 24 |
+| `Start Date`, `Due Date` | `date` | Plazos. | Permitido si es pertinente para la tarea. | No contado |
+| `Remaining days` | `formula` | Cuenta atrás derivada. | Permitido. | — |
+| `Leaders` | `people` | Responsables. | Solo datos necesarios para la tarea. Leer nombres requiere la capacidad de usuarios, no concedida. | 63 |
+| `Account` | `relation` | Cliente, en otra base. | Solo datos necesarios para la tarea. Invisible en el esquema de la base porque la base relacionada no está compartida; aparece en la ficha sin valores accesibles. | No accesible |
+| `WORK Figma File` | `url` | Archivo del proyecto. | Fuera del flujo de enlaces (D-012). | **0** |
+| `Pinterest Link` | `url` | Tablero de referencias. | Fuera del flujo de enlaces (D-012). | 1 |
+| `Pinterest` | `url` | Duplicado del anterior. | Fuera del flujo de enlaces (D-012). | 1 |
+| `Preview` | `files` | Imagen del proyecto; candidata a miniatura de la tarjeta. | Por decidir. | No contado |
+| `Budget` | `rich_text` | Información económica interna, como texto libre (no número). | **Excluido.** | 2 |
+| `Opportunity` | `relation` | Oportunidad comercial, en otra base. Mismo caso que `Account`. | Excluido por defecto hasta aclarar su contenido. | No accesible |
+| `Lead` | `url` | Sin uso documentado. | Excluido por defecto hasta aclarar. | No contado |
+| `Notion Link` | `url` | Sin uso documentado. | Excluido por defecto hasta aclarar. | No contado |
 
 Diferencias con el documento guía: `Account` es una relación con otra base, no un texto; `Budget` es texto libre, así que un filtro no puede depender de su formato; hay cinco propiedades no descritas (`Remaining days`, `Preview`, `Opportunity`, `Lead`, `Notion Link`).
 
-**El piloto no tiene enlazado ni el archivo de Figma ni Pinterest.** El archivo usado en T-001 se configuró a mano.
+**Los campos de enlaces casi no se usan:** `WORK Figma File` está vacío en los 157 proyectos, y cada campo de Pinterest tiene valor en uno. El piloto tampoco los tiene; el archivo de T-001 se configuró a mano. Confirma [D-012](decisions.md): los enlaces se añaden en Table.
 
 Por [D-012](decisions.md), los enlaces no se leen de estos campos: el usuario los añade en Table y Table reconoce el servicio. Los campos `url` de la base (`WORK Figma File`, `Pinterest`, `Pinterest Link`, `Lead`, `Notion Link`) quedan fuera del flujo de enlaces, y la duda entre `Pinterest` y `Pinterest Link` deja de bloquear.
 
 El cuerpo de la ficha contiene contenido propio (19 bloques de primer nivel: párrafos, columnas, una cita y un aviso destacado). La exclusión de información económica debe cubrir también el cuerpo, como indica la sección de exclusión.
 
-Estados descritos por el usuario: `Not started`, `Blocked`, `In progress`, `Done`, `Archive`. No se han podido verificar sin acceso a la base. El filtro de proyectos activos es configurable; no se fija su semántica sin validar la base.
+Estados de `Status`, comprobados: `Not started` y `Blocked` (grupo To-do), `In progress` (grupo In progress), `Done` y `Archive` (grupo Complete). Reparto: 9 en curso, 7 sin empezar, 107 terminados y 34 archivados. Con las mesas libres (D-013), el estado sirve como contexto, no para crear mesas.
 
 El portal descrito contiene Project Tracker, En marcha, Entregables, Resumen/Live Process y una cuenta atrás. Esas etiquetas no se usan como IDs ni se presupone que correspondan a un mismo tipo de bloque.
 

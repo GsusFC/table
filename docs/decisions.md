@@ -54,7 +54,7 @@ La exclusión de `Budget` del contexto de agentes es un requisito del documento 
 
 ## Preguntas abiertas
 
-- Acceso de la integración de Notion a cada ficha enlazada (D-013): conectarla una vez a la base de proyectos evita conectar ficha a ficha. No está hecho.
+- Bases relacionadas (`Account`, `Opportunity`): no compartidas con la integración. Decidir si el contexto de los agentes necesita el cliente; `Opportunity` sigue excluida por defecto.
 - Cómo se representan las páginas y frames de un archivo de Figma en el lienzo. Propuesta: un único editor web cargado por archivo y tarjetas ligeras de página o frame (miniatura por API) que llevan ese editor al nodo, en vez de un editor por página. Cada editor de Figma cargado ocupó ~1,6 GiB en T-001.
 - Uso de `Opportunity`, `Lead` y `Notion Link`, para decidir si el contexto entregado a los agentes los incluye. Ver [contexto de Notion](notion-context.md#esquema-comprobado).
 - Notion como tarjeta web editable dentro de Table: login y edición no probados en T-001.
