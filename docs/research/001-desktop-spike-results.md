@@ -138,7 +138,9 @@ Las consultas son comprobaciones silenciosas, no peticiones al usuario. `clipboa
 
 Mensajes de Chromium en consola sin efecto observado: `sandbox_extension_issue_file … Operation not permitted`, `task_policy_set … invalid argument` y `error messaging the mach port for IMKCFRunLoopWakeUpReliable` (método de entrada de macOS).
 
-Pendiente: edición reversible, persistencia de la sesión tras reiniciar, copiar y pegar, y Pinterest.
+**Copiar y pegar texto:** funciona según el usuario, sin ninguna solicitud de permiso nueva en el registro. El pegado de Figma no necesitó `clipboard-read`. Falta precisar si se probó pegar texto copiado en otra aplicación y copiar o pegar capas de Figma.
+
+Pendiente: edición reversible, persistencia de la sesión tras reiniciar y Pinterest.
 
 ## Incremento C · Conservación, descarga y memoria
 
