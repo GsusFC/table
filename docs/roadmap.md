@@ -20,7 +20,7 @@ Salida: evidencia de que la edición integrada y su ciclo de vida funcionan, dec
 
 ## Fase 1 · El proyecto en un sitio
 
-- [ ] Crear la mesa de un proyecto; decidir si desde la base de Notion o libremente.
+- [ ] Crear mesas libremente, con nombre, y añadir enlaces al crearlas o después ([D-013](decisions.md)).
 - [ ] «Añadir URL» con clic derecho; reconocer Figma, Notion, Pinterest y otras webs, y crear la tarjeta web ([D-012](decisions.md)).
 - [ ] Configuración global: credenciales de Notion y preferencias comunes, fuera de la mesa y de Git.
 - [ ] Mostrar la ficha autorizada de Notion de la mesa por API.

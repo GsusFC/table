@@ -18,6 +18,7 @@ Fecha inicial: 2026-10-26. Este registro distingue lo acordado de las recomendac
 | D-010 | Electron + React + TypeScript, con `WebContentsView` para la web integrada, como base del prototipo de Fase 1. Revisable si el escenario B de memoria no cumple sus umbrales. | Decisión expresa del usuario del 2026-10-26, tras recomendación del asistente, basada en [T-001](research/001-desktop-spike-results.md): login, sesión, edición y portapapeles reales en Figma y Pinterest; memoria 39 % por debajo de Figma de escritorio; descarga sin crecimiento residual. No decide lienzo, terminal ni almacenamiento (P-002, P-004, P-005), ni el stack definitivo del producto. Sustituye a P-001 y P-003. |
 | D-011 | Equipo de referencia para las mediciones: Apple M2 Pro, 16 GiB, macOS 27.2 (el Mac del usuario). | Confirmado por el usuario el 2026-10-26. Las mediciones de T-001 se hicieron en él con las demás aplicaciones cerradas. La carga habitual con todas las herramientas abiertas no está medida. |
 | D-012 | Los enlaces de una mesa los añade el usuario en Table (clic derecho → «Añadir URL»), a medida que los tiene. Table reconoce el servicio por la URL (Figma, Notion, Pinterest u otra web) y todos se abren como tarjeta web con el mismo ciclo de vida; el reconocimiento solo añade capacidades propias de cada servicio. Credenciales y preferencias comunes van en una configuración global. | Decisión del usuario del 2026-10-26: leer los enlaces de campos de Notion no es usable (campos duplicados como `Pinterest`/`Pinterest Link`, fichas sin enlaces). Consecuencias: los campos URL de la base de Notion dejan de ser la fuente de los enlaces y se cierra la duda entre los dos campos de Pinterest. Notion sigue siendo la fuente del contexto (D-002). |
+| D-013 | Las mesas se crean libremente, como un proyecto de Claude: nombre propio y, en ese momento o después, los enlaces que se tengan (ficha o base de Notion, Figma, Pinterest u otros). El catálogo de servicios reconocidos debe poder ampliarse. | Decisión del usuario del 2026-10-26. Responde a cómo se crea una mesa: no se elige de una lista de Notion. Objetivo declarado por el usuario: que los agentes reciban contexto de todo lo que se añada a la mesa, idealmente con las plataformas conectadas a los agentes. Ese objetivo es la dirección de Fase 2; el modelo de conexión sigue abierto (P-013, P-014). |
 
 La exclusión de `Budget` del contexto de agentes es un requisito del documento guía, desarrollado en [contexto de Notion](notion-context.md). Su cumplimiento requiere controlar las vías reales de acceso, no solo el prompt inicial.
 
@@ -37,6 +38,8 @@ La exclusión de `Budget` del contexto de agentes es un requisito del documento 
 | P-010 | Uso individual local para el primer prototipo. | Confirmar quién prueba la herramienta y cómo se recupera o comparte una mesa. |
 | P-011 | Tarjetas de decisión y conexiones con significado. | Validar su valor en sesiones reales sin ampliar prematuramente el alcance. |
 | P-012 | Publicación mediante API de Notion, sin depender de Workers. | Revisar estructura real del portal y operaciones necesarias. |
+| P-013 | Servicio como unidad extensible: patrón de URL que lo reconoce y capacidades opcionales (vista web, miniatura, contexto para agentes). Añadir un servicio nuevo no toca el modelo de tarjetas. | Concretar en Fase 1 con Figma, Notion y Pinterest; validar que un servicio nuevo se añade sin cambiar el núcleo. |
+| P-014 | Contexto para agentes desde la mesa: Table actúa como pasarela (MCP local, P-009) y cada servicio aporta su contexto con su filtro. Las conexiones directas de las plataformas con los agentes (MCP oficiales de Notion o Figma) serían opcionales por servicio. | Elegir en Fase 2. La pasarela permite filtrar (`Budget`, `Opportunity`); una conexión directa da más contexto con menos trabajo, pero no garantiza exclusiones (ver [contexto de Notion](notion-context.md#exclusión-real-de-información)). |
 
 ## Alternativas y revisión
 
@@ -51,7 +54,7 @@ La exclusión de `Budget` del contexto de agentes es un requisito del documento 
 
 ## Preguntas abiertas
 
-- Cómo se crea una mesa: eligiendo un proyecto de la base de Notion, o libremente y añadiendo después la ficha de Notion como un enlace más (D-012). En el segundo caso, la integración necesita acceso a cada ficha; conectarla una vez a la base de proyectos lo resuelve. Esa conexión aún no se ha hecho.
+- Acceso de la integración de Notion a cada ficha enlazada (D-013): conectarla una vez a la base de proyectos evita conectar ficha a ficha. No está hecho.
 - Si D-003 limita Table a una tarjeta de Figma por mesa o es solo la costumbre del estudio.
 - Uso de `Opportunity`, `Lead` y `Notion Link`, para decidir si el contexto entregado a los agentes los incluye. Ver [contexto de Notion](notion-context.md#esquema-comprobado).
 - Notion como tarjeta web editable dentro de Table: login y edición no probados en T-001.

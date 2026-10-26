@@ -44,7 +44,7 @@ Una propuesta de interacción es ampliar la tarjeta activa en una superficie de 
 
 | Entidad | Datos necesarios |
 | --- | --- |
-| Mesa | ID local, referencia al proyecto de Notion, posiciones y versión del esquema. |
+| Mesa | ID local, nombre, enlaces añadidos por el usuario con su servicio reconocido, posiciones y versión del esquema (D-013). |
 | Tarjeta | ID, tipo, posición, referencia a origen y fecha de actualización. |
 | Frame | File key, node ID, versión cuando exista y caché de miniatura. |
 | Referencia | URL, fecha de captura, artefacto local y nota. |
@@ -60,6 +60,8 @@ No almacenar secretos en estas entidades. Los registros pueden contener datos pr
 Mantener separadas las responsabilidades de lectura de proyecto, gestión de vistas web, ejecución de terminal, almacenamiento y publicación. Los perfiles de arnés no deben invadir el modelo de tarjetas.
 
 Para un contexto externo, resolver explícitamente qué campos y bloques están permitidos. La conexión filtrada entrega el contexto tanto a MCP como a exportaciones temporales. Los resultados requieren referencias a las fuentes utilizadas para poder relacionarlos con el lienzo.
+
+Servicios (propuesta P-013): cada servicio reconocido es un patrón de URL más capacidades opcionales: vista web, miniatura y contexto para agentes. Figma, Notion y Pinterest son los primeros; uno nuevo se añade sin cambiar el modelo de tarjetas. El contexto que cada servicio aporta a los agentes pasa por Table con su filtro (P-014); las conexiones directas de una plataforma con el arnés serían opcionales y quedan fuera del control de Table.
 
 ## Memoria y alternativas
 

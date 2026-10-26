@@ -29,7 +29,7 @@ El nombre de trabajo es Table; la propuesta original se denominaba Lienzo FLOC*.
 
 ## Experiencia prevista
 
-1. Crear o abrir la mesa de un proyecto activo. Pendiente: si se elige desde la base de Notion o se crea libremente.
+1. Crear una mesa libremente, como un proyecto de Claude, y añadir en ese momento los enlaces que se tengan ([D-013](decisions.md)).
 2. Añadir los enlaces a medida que se tienen: clic derecho → «Añadir URL». Table reconoce el servicio (Figma, Notion, Pinterest u otra web) y crea la tarjeta ([D-012](decisions.md)).
 3. Añadir notas y conexiones.
 4. Abrir una sesión con el arnés elegido y entregarle el contexto pertinente.
