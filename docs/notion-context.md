@@ -1,6 +1,6 @@
 # Notion como contexto del proyecto
 
-Estado: contrato propuesto sobre un principio aceptado. Esquema y uso comprobados contra la API el 2026-10-26, con la integración conectada a la base de proyectos.
+Estado: contrato propuesto sobre un principio aceptado. Esquema y uso comprobados contra la API el 2026-10-26, con la integración conectada a la base de proyectos. La ficha con lista cerrada está implementada en [T-003](tasks/003-ajustes-y-ficha-notion.md) (solo para la interfaz; la entrega a agentes es de la Fase 2).
 
 ## Fuente de verdad
 
@@ -60,6 +60,8 @@ La lista de campos permitidos es preferible a enviar toda la ficha y borrar una 
 Una conexión MCP directa con permisos amplios puede recuperar datos excluidos del prompt. Para garantizar el filtro, el arnés debe usar una vía filtrada y no disponer de una ruta alternativa hacia esos datos dentro del entorno controlado.
 
 Límite explícito: Table no puede asegurar que un arnés arbitrario, ejecutado con los permisos y credenciales generales del usuario, nunca acceda a información por otros medios. Si se necesita esa garantía, habrá que definir un entorno restringido, credenciales acotadas y pruebas negativas. «No lo incluyas en el prompt» no cumple ese requisito.
+
+**Capturas de páginas de Notion.** Una tarjeta web guarda una captura de lo que se vio al salir; si la página muestra `Budget`, la captura lo contiene. Es una copia local para el usuario, que ya ve esa página en Notion. Por eso las capturas de páginas de Notion no pueden formar parte del contexto ni de la selección visual que se entregue a un agente; hasta que la Fase 2 defina esa entrega, solo la ficha filtrada es apta (hallazgo de la revisión de Codex del 2026-10-26).
 
 ## Escritura y decisiones
 

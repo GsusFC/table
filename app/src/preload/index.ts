@@ -28,6 +28,15 @@ const api: TableApi = {
     update: (mesaId, cardId, patch) => ipcRenderer.invoke(IPC.cardsUpdate, mesaId, cardId, patch),
     remove: (mesaId, cardId) => ipcRenderer.invoke(IPC.cardsRemove, mesaId, cardId),
   },
+  notes: {
+    add: (mesaId, position) => ipcRenderer.invoke(IPC.notesAdd, mesaId, position),
+    update: (mesaId, noteId, patch) => ipcRenderer.invoke(IPC.notesUpdate, mesaId, noteId, patch),
+    remove: (mesaId, noteId) => ipcRenderer.invoke(IPC.notesRemove, mesaId, noteId),
+  },
+  edges: {
+    add: (mesaId, source, target) => ipcRenderer.invoke(IPC.edgesAdd, mesaId, source, target),
+    remove: (mesaId, edgeId) => ipcRenderer.invoke(IPC.edgesRemove, mesaId, edgeId),
+  },
   surface: {
     openMesa: mesaId => ipcRenderer.invoke(IPC.surfaceOpenMesa, mesaId),
     enter: (mesaId, cardId) => ipcRenderer.invoke(IPC.surfaceEnter, mesaId, cardId),
@@ -62,6 +71,17 @@ const api: TableApi = {
     return () => {
       flushHandlers.delete(handler)
     }
+  },
+  settings: {
+    notion: () => ipcRenderer.invoke(IPC.settingsNotion),
+    setNotionToken: token => ipcRenderer.invoke(IPC.settingsSetNotionToken, token),
+    clearNotionToken: () => ipcRenderer.invoke(IPC.settingsClearNotionToken),
+    listNotionDatabases: () => ipcRenderer.invoke(IPC.settingsListNotionDatabases),
+    setNotionDatabase: databaseId => ipcRenderer.invoke(IPC.settingsSetNotionDatabase, databaseId),
+  },
+  notion: {
+    cachedProject: (mesaId, cardId) => ipcRenderer.invoke(IPC.notionCachedProject, mesaId, cardId),
+    refreshProject: (mesaId, cardId) => ipcRenderer.invoke(IPC.notionRefreshProject, mesaId, cardId),
   },
 }
 

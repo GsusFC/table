@@ -6,6 +6,7 @@ import {
   Menu,
   net,
   protocol,
+  safeStorage,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
   type MenuItemConstructorOptions,
@@ -15,6 +16,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { CAPTURE_PROTOCOL, IPC, type PersistenceError } from '../shared/ipc'
+import type { NotionDatabase } from '../shared/notion'
 import type { MesaId } from '../shared/model'
 import { recognizeService } from '../shared/services'
 import {
@@ -22,11 +24,14 @@ import {
   parseHttpUrl,
   parseId,
   parseMesaName,
+  parseNotePatch,
   parsePanelBounds,
   parsePoint,
   parseViewport,
 } from '../shared/validate'
 import { log } from './log'
+import { createProjectService, type ProjectService } from './notion/projects'
+import { createSettingsStore, parseNotionToken, type SettingsStore } from './settings/settingsStore'
 import { runMeasure } from './measure'
 import { runSmoke, smokeHooks } from './smoke'
 import { createMesaStore } from './store/mesaStore'
@@ -57,6 +62,10 @@ const FLUSH_TIMEOUT_MS = 2_000
 let mainWindow: BrowserWindow | null = null
 let surface: SurfaceManager | null = null
 let store: MesaStore | null = null
+let settings: SettingsStore | null = null
+let projects: ProjectService | null = null
+/** Bases que Notion devolvió en la última comprobación: solo se puede elegir una de ellas. */
+let listedDatabases: readonly NotionDatabase[] = []
 /** Escrituras iniciadas por el proceso principal (capturas, títulos); se esperan al cerrar. */
 const pendingPersistence = new Set<Promise<unknown>>()
 
@@ -228,6 +237,16 @@ function registerIpc(): void {
     return 'unloaded'
   })
 
+  handle(IPC.notesAdd, (mesaId, position) => requireStore().addNote(parseId(mesaId), parsePoint(position)))
+  handle(IPC.notesUpdate, (mesaId, noteId, patch) =>
+    requireStore().updateNote(parseId(mesaId), parseId(noteId), parseNotePatch(patch)),
+  )
+  handle(IPC.notesRemove, (mesaId, noteId) => requireStore().removeNote(parseId(mesaId), parseId(noteId)))
+  handle(IPC.edgesAdd, (mesaId, source, target) =>
+    requireStore().addEdge(parseId(mesaId), parseId(source), parseId(target)),
+  )
+  handle(IPC.edgesRemove, (mesaId, edgeId) => requireStore().removeEdge(parseId(mesaId), parseId(edgeId)))
+
   handle(IPC.surfaceOpenMesa, mesaId => requireSurface().openMesa(mesaId === null ? null : parseId(mesaId)))
   handle(IPC.surfaceEnter, async (mesaId, cardId) => {
     const parsedMesa = parseId(mesaId)
@@ -254,6 +273,69 @@ function registerIpc(): void {
     } catch (error) {
       log('panel-bounds-rejected', { message: error instanceof Error ? error.message : String(error) })
     }
+  })
+}
+
+function requireSettings(): SettingsStore {
+  if (!settings) {
+    throw new Error('Los ajustes no están listos')
+  }
+  return settings
+}
+
+function requireProjects(): ProjectService {
+  if (!projects) {
+    throw new Error('Notion no está listo')
+  }
+  return projects
+}
+
+/** URL guardada de una tarjeta de Notion; el renderer solo aporta los IDs. */
+async function notionCardUrl(mesaId: unknown, cardId: unknown): Promise<string | null> {
+  const parsedCard = parseId(cardId)
+  const mesa = await requireStore().get(parseId(mesaId))
+  const card = mesa.cards.find(candidate => candidate.id === parsedCard)
+  if (!card) {
+    throw new Error('La tarjeta no existe')
+  }
+  return card.serviceId === 'notion' ? card.url : null
+}
+
+/** Ajustes de Notion y ficha del proyecto (T-003). El token nunca vuelve al renderer. */
+function registerNotionIpc(): void {
+  handle(IPC.settingsNotion, () => requireSettings().notionView())
+  handle(IPC.settingsSetNotionToken, async token => {
+    await requireSettings().setNotionToken(parseNotionToken(token))
+    log('settings-notion-token', { action: 'saved' })
+    return requireSettings().notionView()
+  })
+  handle(IPC.settingsClearNotionToken, async () => {
+    await requireSettings().clearNotionToken()
+    log('settings-notion-token', { action: 'cleared' })
+    return requireSettings().notionView()
+  })
+  handle(IPC.settingsListNotionDatabases, async () => {
+    listedDatabases = await requireProjects().listDatabases()
+    return listedDatabases
+  })
+  handle(IPC.settingsSetNotionDatabase, async databaseId => {
+    let database: NotionDatabase | null = null
+    if (databaseId !== null) {
+      database = listedDatabases.find(candidate => candidate.id === databaseId) ?? null
+      if (!database) {
+        throw new Error('Esa base no está en la lista de Notion; vuelve a comprobar la conexión')
+      }
+    }
+    await requireSettings().setNotionDatabase(database)
+    return requireSettings().notionView()
+  })
+  handle(IPC.notionCachedProject, async (mesaId, cardId) => {
+    const url = await notionCardUrl(mesaId, cardId)
+    return url ? requireProjects().cached(url) : null
+  })
+  handle(IPC.notionRefreshProject, async (mesaId, cardId) => {
+    const url = await notionCardUrl(mesaId, cardId)
+    return url ? requireProjects().refresh(url) : { status: 'not-project' }
   })
 }
 
@@ -410,9 +492,17 @@ void app.whenReady().then(async () => {
     return
   }
   store = createMesaStore(app.getPath('userData'))
+  settings = createSettingsStore(app.getPath('userData'), {
+    isAvailable: () => safeStorage.isEncryptionAvailable(),
+    encrypt: plain => safeStorage.encryptString(plain),
+    decrypt: encrypted => safeStorage.decryptString(encrypted),
+  })
+  // El smoke usa un servidor local con fichas sintéticas en lugar de la API de Notion.
+  projects = createProjectService(settings, app.getPath('userData'), smokeMode ? () => smokeHooks.notionApiBase : undefined)
   Menu.setApplicationMenu(buildMenu())
   registerCaptureProtocol()
   registerIpc()
+  registerNotionIpc()
   const window = createWindow()
   mainWindow = window
   log('app-ready', { electron: process.versions.electron, chrome: process.versions.chrome })

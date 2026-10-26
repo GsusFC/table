@@ -1187,3 +1187,294 @@ kbd {
   height: 16px;
   font-size: 10px;
 }
+
+/* ---------- Ajustes y ficha de Notion (T-003) ---------- */
+
+.rail {
+  padding-bottom: var(--space-2);
+}
+
+.rail-button-end {
+  margin-top: auto;
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 420px;
+}
+
+.settings-heading {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+}
+
+.settings-help {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.settings-row .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-preview-project {
+  background: var(--color-surface);
+}
+
+.project-face {
+  position: relative;
+  height: 100%;
+  padding: var(--space-3) var(--space-8) var(--space-3) var(--space-3);
+}
+
+.project-refresh {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+}
+
+.project-fields {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  gap: var(--space-1);
+}
+
+.project-field {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  align-items: center;
+  min-height: 20px;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+}
+
+.project-field dt {
+  color: var(--color-text-muted);
+}
+
+.project-field dd {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-empty {
+  color: var(--color-text-faint);
+}
+
+.project-chips {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+
+.project-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: var(--color-neutral-soft);
+  color: var(--color-text);
+  font-size: var(--font-size-xs);
+}
+
+/* Colores de opción de Notion, apagados como el resto de estados. */
+.project-chip[data-color='orange'],
+.project-chip[data-color='yellow'],
+.project-chip[data-color='brown'] {
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+.project-chip[data-color='green'] {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.project-chip[data-color='blue'],
+.project-chip[data-color='purple'] {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.project-chip[data-color='red'],
+.project-chip[data-color='pink'] {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.project-source {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+}
+
+.project-source span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-source-stale {
+  color: var(--color-warning);
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
+
+/* ---------- Notas y conexiones (T-004) ---------- */
+
+.canvas .react-flow {
+  --xy-edge-stroke-default: var(--color-text-faint);
+  --xy-edge-stroke-width-default: 1.5;
+  --xy-edge-stroke-selected-default: var(--color-accent);
+  --xy-connectionline-stroke-default: var(--color-accent);
+  --xy-connectionline-stroke-width-default: 1.5;
+}
+
+.canvas .react-flow__edge.selected .react-flow__edge-path {
+  stroke-width: 2;
+}
+
+.note {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  transition: box-shadow var(--duration-fast) ease-out;
+}
+
+.note:hover {
+  box-shadow: var(--shadow-card-hover);
+}
+
+.note-text,
+.note-input {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: var(--space-3);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-md);
+  line-height: var(--line-height);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.note-text {
+  overflow: hidden;
+}
+
+.note-placeholder {
+  color: var(--color-text-faint);
+}
+
+.note-input {
+  width: 100%;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  cursor: text;
+}
+
+.note-input:focus-visible {
+  box-shadow: none;
+}
+
+.note-editing {
+  background: var(--color-surface);
+}
+
+.canvas .react-flow__node:focus-visible .note {
+  box-shadow: var(--focus-ring);
+}
+
+.canvas .react-flow__node.selected .note,
+.note-editing {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+/* Asas para conectar: en el centro de cada lado, visibles al pasar por encima. */
+.canvas .react-flow__handle.connection-handle {
+  z-index: 1;
+  width: 10px;
+  min-width: 0;
+  height: 10px;
+  min-height: 0;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease-out;
+}
+
+.canvas .react-flow__node:hover .connection-handle.connectionindicator,
+.canvas .react-flow__node.selected .connection-handle.connectionindicator {
+  opacity: 1;
+}
+
+.canvas .react-flow__handle.connection-handle:hover {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
+
+/* Mientras se arrastra una conexión, todo el elemento acepta soltarla. */
+.canvas .react-flow__handle.connection-drop {
+  inset: 0;
+  width: auto;
+  min-width: 0;
+  height: auto;
+  min-height: 0;
+  transform: none;
+  border: none;
+  border-radius: var(--radius-lg);
+  background: transparent;
+}
+
+.canvas .react-flow__handle.connection-drop.connectingto.valid {
+  box-shadow: 0 0 0 2px var(--color-accent);
+}

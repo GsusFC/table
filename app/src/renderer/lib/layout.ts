@@ -135,3 +135,44 @@ export function alignEdge(rects: readonly Rect[], edge: 'left' | 'top'): Map<str
   }
   return result
 }
+
+export type Side = 'top' | 'right' | 'bottom' | 'left'
+
+export interface ConnectionEnd extends Point {
+  readonly side: Side
+}
+
+/** Punto medio de un lado del rectángulo. */
+function sideMidpoint(rect: Rect, side: Side): ConnectionEnd {
+  switch (side) {
+    case 'top':
+      return { x: rect.x + rect.width / 2, y: rect.y, side }
+    case 'bottom':
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height, side }
+    case 'left':
+      return { x: rect.x, y: rect.y + rect.height / 2, side }
+    case 'right':
+      return { x: rect.x + rect.width, y: rect.y + rect.height / 2, side }
+  }
+}
+
+/**
+ * Extremos de una conexión entre dos elementos: los lados enfrentados según
+ * su posición relativa (izquierda/derecha si están más separados en
+ * horizontal, arriba/abajo si no), para que la línea no cruce los elementos
+ * aunque se muevan. Las conexiones no tienen dirección ni lados guardados.
+ */
+export function connectionEnds(source: Rect, target: Rect): { source: ConnectionEnd; target: ConnectionEnd } {
+  const dx = target.x + target.width / 2 - (source.x + source.width / 2)
+  const dy = target.y + target.height / 2 - (source.y + source.height / 2)
+  // Separación relativa al tamaño: dos elementos anchos y cercanos en vertical se unen por arriba/abajo.
+  const horizontal = Math.abs(dx) / (source.width + target.width) >= Math.abs(dy) / (source.height + target.height)
+  if (horizontal) {
+    return dx >= 0
+      ? { source: sideMidpoint(source, 'right'), target: sideMidpoint(target, 'left') }
+      : { source: sideMidpoint(source, 'left'), target: sideMidpoint(target, 'right') }
+  }
+  return dy >= 0
+    ? { source: sideMidpoint(source, 'bottom'), target: sideMidpoint(target, 'top') }
+    : { source: sideMidpoint(source, 'top'), target: sideMidpoint(target, 'bottom') }
+}

@@ -31,10 +31,16 @@ Una persona del equipo guarda una vez el token de la integración de Notion y el
 
 ## Criterios de aceptación
 
-- [ ] Ajustes guarda, sustituye y borra el token de Notion; el archivo de ajustes no contiene el token en claro y el renderer nunca lo recibe.
-- [ ] «Comprobar conexión» informa de token inválido, sin bases compartidas o la lista de bases, y permite elegir la de proyectos.
-- [ ] Una tarjeta de una ficha de la base elegida muestra los campos permitidos, con fecha de lectura y origen; una página de Notion que no es ficha sigue como tarjeta web normal.
-- [ ] Un fixture con `Budget`, `Opportunity`, `Lead`, `Notion Link`, `Account` y `Leaders` no saca ninguno de esos campos de la ficha (test).
-- [ ] Sin conexión o con error, la tarjeta muestra la caché con su fecha y el motivo, sin declarar que está actualizada.
-- [ ] Ni logs ni errores imprimen el token ni contenido de la ficha.
-- [ ] Probado con la ficha real del piloto en el equipo del usuario.
+- [x] Ajustes guarda, sustituye y borra el token de Notion; el archivo de ajustes no contiene el token en claro y el renderer nunca lo recibe.
+- [x] «Comprobar conexión» informa de token inválido, sin bases compartidas o la lista de bases, y permite elegir la de proyectos. *Lista y elección comprobadas en el smoke; solo se acepta una base devuelta por Notion.*
+- [x] Una tarjeta de una ficha de la base elegida muestra los campos permitidos, con fecha de lectura y origen; una página de Notion que no es ficha sigue como tarjeta web normal.
+- [x] Un fixture con `Budget`, `Opportunity`, `Lead`, `Notion Link`, `Account` y `Leaders` no saca ninguno de esos campos de la ficha (test).
+- [x] Sin conexión o con error, la tarjeta muestra la caché con su fecha y el motivo, sin declarar que está actualizada.
+- [x] Ni logs ni errores imprimen el token ni contenido de la ficha. *Los logs solo registran estado y código de error; los mensajes de error son fijos.*
+- [ ] Probado con la ficha real del piloto en el equipo del usuario. *La extracción se comprobó contra la ficha real por la API (5 campos con su tipo, 53 bases visibles para la integración); falta hacerlo desde la app.*
+
+## Comprobaciones (2026-10-26)
+
+- Tests: extracción con lista cerrada sobre un fixture con todos los campos excluidos rellenos, página de otra base, campos ausentes o de otro tipo, e IDs de página en URLs de Notion.
+- Smoke contra una API de Notion falsa: token cifrado (no aparece en `settings.json` ni en la respuesta al renderer), elegir solo una base de la lista, ficha con los 5 campos y sin datos excluidos, página suelta como web, ficha visible en el lienzo, caché con fecha sin conexión, y vuelta a web al quitar el token.
+- Revisión separada de Codex (T-003 y T-004 juntas, solo lectura): 6 hallazgos. Corregidos: una respuesta de guardado antigua podía pisar texto nuevo de una nota (alta, T-004); cambios de ajustes concurrentes podían restaurar un token borrado; una lectura iniciada con ajustes anteriores podía reutilizarse; una caché tardía podía deshacer el resultado de la lectura; la caché en disco se reconstruye ahora con la lista cerrada. Documentado como límite: las capturas de páginas de Notion pueden mostrar `Budget` y no son aptas para agentes ([contexto de Notion](../notion-context.md)).

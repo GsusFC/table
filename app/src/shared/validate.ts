@@ -1,4 +1,12 @@
-import { MAX_MESA_NAME_LENGTH, type CardPatch, type Point, type Size, type Viewport } from './model'
+import {
+  MAX_MESA_NAME_LENGTH,
+  MAX_NOTE_TEXT_LENGTH,
+  type CardPatch,
+  type NotePatch,
+  type Point,
+  type Size,
+  type Viewport,
+} from './model'
 import type { PanelBounds } from './surface'
 
 /**
@@ -110,6 +118,30 @@ export function parseCardPatch(value: unknown): CardPatch {
     throw new Error(`Campo no admitido: ${unknownKeys.join(', ')}`)
   }
   return {
+    ...(record['position'] === undefined ? {} : { position: parsePoint(record['position']) }),
+    ...(record['size'] === undefined ? {} : { size: parseSize(record['size']) }),
+  }
+}
+
+/** Texto de una nota tal cual (sin recortar), con un máximo de caracteres. */
+export function parseNoteText(value: unknown): string {
+  if (typeof value !== 'string') {
+    throw new Error('Texto no válido')
+  }
+  if (value.length > MAX_NOTE_TEXT_LENGTH) {
+    throw new Error(`La nota admite hasta ${MAX_NOTE_TEXT_LENGTH.toLocaleString('es')} caracteres`)
+  }
+  return value
+}
+
+export function parseNotePatch(value: unknown): NotePatch {
+  const record = asRecord(value, 'Cambio')
+  const unknownKeys = Object.keys(record).filter(key => key !== 'text' && key !== 'position' && key !== 'size')
+  if (unknownKeys.length > 0) {
+    throw new Error(`Campo no admitido: ${unknownKeys.join(', ')}`)
+  }
+  return {
+    ...(record['text'] === undefined ? {} : { text: parseNoteText(record['text']) }),
     ...(record['position'] === undefined ? {} : { position: parsePoint(record['position']) }),
     ...(record['size'] === undefined ? {} : { size: parseSize(record['size']) }),
   }

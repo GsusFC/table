@@ -20,9 +20,15 @@ En una mesa se pueden escribir notas internas y conectar tarjetas y notas entre 
 
 ## Criterios de aceptación
 
-- [ ] Crear, editar, mover, redimensionar y borrar notas; el texto se conserva tras reabrir.
-- [ ] Conectar tarjeta↔tarjeta, tarjeta↔nota y nota↔nota; no se duplica una conexión ni se conecta un elemento consigo mismo.
-- [ ] Borrar un elemento borra sus conexiones; borrar una conexión no toca los elementos.
-- [ ] Una mesa guardada con la versión 1 se abre sin pérdida y se guarda como versión 2.
-- [ ] Selección múltiple, ordenar, alinear e imán funcionan con notas.
-- [ ] Tests del guardado y la migración; smoke de punta a punta.
+- [ ] Crear, editar, mover, redimensionar y borrar notas; el texto se conserva tras reabrir. *Verificado con el smoke salvo redimensionar con el ratón (el guardado del tamaño sí está en los tests) y reabrir Table entera (el smoke recarga la interfaz y lee del disco).*
+- [x] Conectar tarjeta↔tarjeta, tarjeta↔nota y nota↔nota; no se duplica una conexión ni se conecta un elemento consigo mismo.
+- [x] Borrar un elemento borra sus conexiones; borrar una conexión no toca los elementos.
+- [x] Una mesa guardada con la versión 1 se abre sin pérdida y se guarda como versión 2.
+- [ ] Selección múltiple, ordenar, alinear e imán funcionan con notas. *Verificado: `⌘A`, «Alinear arriba» y «Ordenar en cuadrícula» con una nota (smoke) y el imán y la cuadrícula con tamaños de nota (tests). Falta probar a mano el imán arrastrando una nota y `⇧`+clic.*
+- [x] Tests del guardado y la migración; smoke de punta a punta.
+
+## Comprobaciones (2026-10-26)
+
+- Tests: notas (crear, editar, borrar), conexiones (los tres tipos, autoconexión, duplicado en ambos sentidos, IDs ajenos o inexistentes, borrado en cascada de tarjeta y nota en la misma escritura), migración de una mesa sintética de la versión 1 y archivos de la versión 2 dañados, que no se tocan. Geometría de las conexiones y cuadrícula/imán con notas.
+- Smoke: clic derecho → «Añadir nota», escribir con `⌘A`/`⌫` sin afectar al lienzo, `Esc` guarda, arrastrar nota→tarjeta y tarjeta→tarjeta, rechazo de duplicado y autoconexión, `⌘A` + alinear y ordenar con la nota, clic en una línea + `⌫`, recarga con texto y conexión conservados, borrar la nota con su conexión.
+- Pendiente: prueba manual del usuario (aspecto de notas, asas y líneas; arrastrar conexiones con el ratón real).

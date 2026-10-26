@@ -1,22 +1,38 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises'
+import { readdir, readFile, rm, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   DEFAULT_CARD_SIZE,
+  DEFAULT_NOTE_SIZE,
   DEFAULT_VIEWPORT,
+  edgeKey,
   SCHEMA_VERSION,
   type Card,
   type CardId,
   type CardPatch,
+  type Edge,
+  type EdgeId,
   type Mesa,
   type MesaId,
   type MesaListing,
   type MesaSummary,
+  type Note,
+  type NoteId,
+  type NotePatch,
   type Point,
   type Viewport,
 } from '../../shared/model'
-import { parseHttpUrl, parseId, parseMesaName, parsePoint, parseSize, parseViewport } from '../../shared/validate'
+import {
+  parseHttpUrl,
+  parseId,
+  parseMesaName,
+  parseNoteText,
+  parsePoint,
+  parseSize,
+  parseViewport,
+} from '../../shared/validate'
+import { writeFileAtomic } from '../files'
 import { log } from '../log'
 import type { MesaStore } from './types'
 
@@ -102,31 +118,91 @@ function checkCard(value: unknown): Card {
   }
 }
 
+function checkNote(value: unknown): Note {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(INVALID)
+  }
+  const n = value as { readonly [K in keyof Note]?: unknown }
+  return {
+    id: checkSame(n.id, parseId),
+    text: checkSame(n.text, parseNoteText),
+    position: checkSame(n.position, parsePoint),
+    size: checkSame(n.size, parseSize),
+    createdAt: checkDate(n.createdAt),
+    updatedAt: checkDate(n.updatedAt),
+  }
+}
+
+function checkEdge(value: unknown): Edge {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(INVALID)
+  }
+  const e = value as { readonly [K in keyof Edge]?: unknown }
+  return {
+    id: checkSame(e.id, parseId),
+    source: checkSame(e.source, parseId),
+    target: checkSame(e.target, parseId),
+    createdAt: checkDate(e.createdAt),
+  }
+}
+
+/** Versión anterior admitida: se lee migrada a la actual. */
+const MIGRATABLE_SCHEMA_VERSION = 1
+
 /**
- * Validación completa de un archivo de mesa: versión, IDs (únicos), nombre,
- * fechas, viewport y cada tarjeta. Cualquier fallo lanza; el archivo no se toca.
+ * Validación completa de un archivo de mesa: versión, IDs (únicos en toda la
+ * mesa), nombre, fechas, viewport, cada tarjeta y nota, y conexiones entre
+ * elementos que existen, sin autoconexiones ni duplicados (en cualquier
+ * sentido). La versión 1 se migra en memoria: sin notas ni conexiones.
+ * Cualquier fallo lanza; el archivo no se toca.
  */
 function checkMesa(value: unknown, id: MesaId): Mesa {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error(INVALID)
   }
   const fields = value as { readonly [K in keyof Mesa]?: unknown }
-  if (fields.schemaVersion !== SCHEMA_VERSION) {
-    throw new Error(
-      `La mesa usa una versión de esquema no admitida (${String(fields.schemaVersion)}; se espera ${SCHEMA_VERSION})`,
-    )
+  const version = fields.schemaVersion
+  if (version !== SCHEMA_VERSION && version !== MIGRATABLE_SCHEMA_VERSION) {
+    throw new Error(`La mesa usa una versión de esquema no admitida (${String(version)}; se espera ${SCHEMA_VERSION})`)
   }
   if (fields.id !== id || !Array.isArray(fields.cards)) {
     throw new Error(INVALID)
   }
-  const mesaId = checkSame(fields.id, parseId)
-  const cards = fields.cards.map(checkCard)
-  const ids = new Set<string>([mesaId])
-  for (const card of cards) {
-    if (ids.has(card.id)) {
+  let rawNotes: readonly unknown[] = []
+  let rawEdges: readonly unknown[] = []
+  if (version === SCHEMA_VERSION) {
+    if (!Array.isArray(fields.notes) || !Array.isArray(fields.edges)) {
       throw new Error(INVALID)
     }
-    ids.add(card.id)
+    rawNotes = fields.notes
+    rawEdges = fields.edges
+  } else if (fields.notes !== undefined || fields.edges !== undefined) {
+    throw new Error(INVALID)
+  }
+  const mesaId = checkSame(fields.id, parseId)
+  const cards = fields.cards.map(checkCard)
+  const notes = rawNotes.map(checkNote)
+  const edges = rawEdges.map(checkEdge)
+  const ids = new Set<string>([mesaId])
+  const addUnique = (itemId: string): void => {
+    if (ids.has(itemId)) {
+      throw new Error(INVALID)
+    }
+    ids.add(itemId)
+  }
+  const elements = new Set<string>()
+  for (const item of [...cards, ...notes]) {
+    addUnique(item.id)
+    elements.add(item.id)
+  }
+  const pairs = new Set<string>()
+  for (const edge of edges) {
+    addUnique(edge.id)
+    const key = edgeKey(edge.source, edge.target)
+    if (edge.source === edge.target || !elements.has(edge.source) || !elements.has(edge.target) || pairs.has(key)) {
+      throw new Error(INVALID)
+    }
+    pairs.add(key)
   }
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -136,6 +212,8 @@ function checkMesa(value: unknown, id: MesaId): Mesa {
     updatedAt: checkDate(fields.updatedAt),
     viewport: checkSame(fields.viewport, parseViewport),
     cards,
+    notes,
+    edges,
   }
 }
 
@@ -162,18 +240,6 @@ export function createMesaStore(baseDir: string): MesaStore {
     return result
   }
 
-  async function writeAtomic(path: string, dir: string, data: string | Buffer): Promise<void> {
-    await mkdir(dir, { recursive: true })
-    const tmp = join(dir, `.${randomUUID()}.tmp`)
-    try {
-      await writeFile(tmp, data)
-      await rename(tmp, path)
-    } catch (error) {
-      await unlink(tmp).catch(() => undefined)
-      throw error
-    }
-  }
-
   async function readMesa(id: MesaId): Promise<Mesa> {
     let raw: string
     try {
@@ -194,7 +260,7 @@ export function createMesaStore(baseDir: string): MesaStore {
   }
 
   async function writeMesa(mesa: Mesa): Promise<void> {
-    await writeAtomic(mesaPath(mesa.id), mesasDir, `${JSON.stringify(mesa, null, 2)}\n`)
+    await writeFileAtomic(mesaPath(mesa.id), `${JSON.stringify(mesa, null, 2)}\n`)
   }
 
   /** Lee, aplica el cambio y guarda dentro de la cola de la mesa. */
@@ -227,6 +293,19 @@ export function createMesaStore(baseDir: string): MesaStore {
         result: updated,
       }
     })
+  }
+
+  function findNote(mesa: Mesa, noteId: NoteId): Note {
+    const note = mesa.notes.find(n => n.id === noteId)
+    if (!note) {
+      throw new Error('La nota no existe')
+    }
+    return note
+  }
+
+  /** Quita las conexiones que tocan `elementId`. */
+  function edgesWithout(mesa: Mesa, elementId: CardId | NoteId): readonly Edge[] {
+    return mesa.edges.filter(edge => edge.source !== elementId && edge.target !== elementId)
   }
 
   return {
@@ -277,6 +356,8 @@ export function createMesaStore(baseDir: string): MesaStore {
         updatedAt: at,
         viewport: DEFAULT_VIEWPORT,
         cards: [],
+        notes: [],
+        edges: [],
       }
       await withQueue(id, () => writeMesa(mesa))
       return mesa
@@ -343,8 +424,87 @@ export function createMesaStore(baseDir: string): MesaStore {
         const mesa = await readMesa(mId)
         findCard(mesa, cId)
         const at = now()
-        await writeMesa({ ...mesa, updatedAt: at, cards: mesa.cards.filter(c => c.id !== cId) })
+        // Sus conexiones se borran en la misma escritura.
+        await writeMesa({
+          ...mesa,
+          updatedAt: at,
+          cards: mesa.cards.filter(c => c.id !== cId),
+          edges: edgesWithout(mesa, cId),
+        })
         await rm(cardCapturePath(mId, cId), { force: true })
+      })
+    },
+
+    async addNote(mesaId: MesaId, position: Point): Promise<Note> {
+      return mutate(parseId(mesaId), (mesa, at) => {
+        const note: Note = {
+          id: randomUUID(),
+          text: '',
+          position,
+          size: DEFAULT_NOTE_SIZE,
+          createdAt: at,
+          updatedAt: at,
+        }
+        return { mesa: { ...mesa, updatedAt: at, notes: [...mesa.notes, note] }, result: note }
+      })
+    },
+
+    async updateNote(mesaId: MesaId, noteId: NoteId, patch: NotePatch): Promise<Note> {
+      const nId = parseId(noteId)
+      return mutate(parseId(mesaId), (mesa, at) => {
+        const updated: Note = {
+          ...findNote(mesa, nId),
+          ...(patch.text === undefined ? {} : { text: patch.text }),
+          ...(patch.position === undefined ? {} : { position: patch.position }),
+          ...(patch.size === undefined ? {} : { size: patch.size }),
+          updatedAt: at,
+        }
+        return {
+          mesa: { ...mesa, updatedAt: at, notes: mesa.notes.map(n => (n.id === nId ? updated : n)) },
+          result: updated,
+        }
+      })
+    },
+
+    async removeNote(mesaId: MesaId, noteId: NoteId): Promise<void> {
+      const nId = parseId(noteId)
+      await mutate(parseId(mesaId), (mesa, at) => {
+        findNote(mesa, nId)
+        return {
+          mesa: { ...mesa, updatedAt: at, notes: mesa.notes.filter(n => n.id !== nId), edges: edgesWithout(mesa, nId) },
+          result: undefined,
+        }
+      })
+    },
+
+    async addEdge(mesaId: MesaId, source: CardId | NoteId, target: CardId | NoteId): Promise<Edge> {
+      const sourceId = parseId(source)
+      const targetId = parseId(target)
+      return mutate(parseId(mesaId), (mesa, at) => {
+        if (sourceId === targetId) {
+          throw new Error('Un elemento no se puede conectar consigo mismo')
+        }
+        const exists = (elementId: string): boolean =>
+          mesa.cards.some(c => c.id === elementId) || mesa.notes.some(n => n.id === elementId)
+        if (!exists(sourceId) || !exists(targetId)) {
+          throw new Error('El elemento no existe')
+        }
+        const key = edgeKey(sourceId, targetId)
+        if (mesa.edges.some(edge => edgeKey(edge.source, edge.target) === key)) {
+          throw new Error('Ya están conectados')
+        }
+        const edge: Edge = { id: randomUUID(), source: sourceId, target: targetId, createdAt: at }
+        return { mesa: { ...mesa, updatedAt: at, edges: [...mesa.edges, edge] }, result: edge }
+      })
+    },
+
+    async removeEdge(mesaId: MesaId, edgeId: EdgeId): Promise<void> {
+      const eId = parseId(edgeId)
+      await mutate(parseId(mesaId), (mesa, at) => {
+        if (!mesa.edges.some(edge => edge.id === eId)) {
+          throw new Error('La conexión no existe')
+        }
+        return { mesa: { ...mesa, updatedAt: at, edges: mesa.edges.filter(edge => edge.id !== eId) }, result: undefined }
       })
     },
 
@@ -354,7 +514,7 @@ export function createMesaStore(baseDir: string): MesaStore {
       return withQueue(mId, async () => {
         const mesa = await readMesa(mId)
         findCard(mesa, cId)
-        await writeAtomic(cardCapturePath(mId, cId), mesaCapturesDir(mId), jpeg)
+        await writeFileAtomic(cardCapturePath(mId, cId), jpeg)
         const at = now()
         let updated: Card | undefined
         const cards = mesa.cards.map(c => {

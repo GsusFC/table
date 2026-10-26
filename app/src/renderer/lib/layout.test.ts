@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { alignEdge, arrangeInGrid, GRID, magnetSnap, type Rect } from './layout'
+import { alignEdge, arrangeInGrid, connectionEnds, GRID, magnetSnap, type Rect } from './layout'
 
 /** Paso de una tarjeta de 320×220 con separación, redondeado a la rejilla. */
 const STEP_X = 360
@@ -84,5 +84,51 @@ describe('alignEdge', () => {
   it('alinea arriba', () => {
     const positions = alignEdge([rect('a', 0, 90), rect('b', 400, 30)], 'top')
     expect(positions.get('a')).toEqual({ x: 0, y: 30 })
+  })
+})
+
+describe('con notas', () => {
+  /** Nota por defecto: 240×144, más pequeña que una tarjeta. */
+  const note = (id: string, x: number, y: number): Rect => rect(id, x, y, 240, 144)
+
+  it('ordena tarjetas y notas mezcladas sin solapes', () => {
+    const items = [rect('a', 0, 0), note('n1', 400, 10), note('n2', 0, 400), rect('b', 400, 400)]
+    const positions = arrangeInGrid(items)
+    const placed = items.map(item => ({ ...item, ...positions.get(item.id) }))
+    for (const [i, a] of placed.entries()) {
+      for (const b of placed.slice(i + 1)) {
+        const overlap = a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+        expect(overlap).toBe(false)
+      }
+    }
+  })
+
+  it('el imán alinea una nota con el borde de una tarjeta', () => {
+    const { position, guides } = magnetSnap(note('n', 324, 500), [rect('a', 0, 0)], 8)
+    expect(position.x).toBe(320)
+    expect(guides.vertical).toBe(320)
+  })
+})
+
+describe('connectionEnds', () => {
+  it('une lados enfrentados en horizontal', () => {
+    const ends = connectionEnds(rect('a', 0, 0), rect('b', 600, 40))
+    expect(ends.source).toEqual({ x: 320, y: 110, side: 'right' })
+    expect(ends.target).toEqual({ x: 600, y: 150, side: 'left' })
+  })
+
+  it('une lados enfrentados en vertical y en sentido contrario', () => {
+    const ends = connectionEnds(rect('a', 0, 600), rect('b', 20, 0, 240, 144))
+    expect(ends.source).toEqual({ x: 160, y: 600, side: 'top' })
+    expect(ends.target).toEqual({ x: 140, y: 144, side: 'bottom' })
+  })
+
+  it('es simétrico: invertir origen y destino da los mismos puntos', () => {
+    const a = rect('a', 0, 0)
+    const b = rect('b', -500, 100)
+    const forward = connectionEnds(a, b)
+    const backward = connectionEnds(b, a)
+    expect(backward.source).toEqual(forward.target)
+    expect(backward.target).toEqual(forward.source)
   })
 })

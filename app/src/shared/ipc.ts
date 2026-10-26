@@ -1,4 +1,19 @@
-import type { Card, CardId, CardPatch, Mesa, MesaId, MesaListing, Point, Viewport } from './model'
+import type {
+  Card,
+  CardId,
+  CardPatch,
+  Edge,
+  EdgeId,
+  Mesa,
+  MesaId,
+  MesaListing,
+  Note,
+  NoteId,
+  NotePatch,
+  Point,
+  Viewport,
+} from './model'
+import type { NotionDatabase, NotionSettingsView, ProjectSnapshot, ProjectState } from './notion'
 import type { PanelBounds, SurfaceCardState, UnloadResult } from './surface'
 
 export const IPC = {
@@ -11,6 +26,11 @@ export const IPC = {
   cardsAdd: 'cards:add',
   cardsUpdate: 'cards:update',
   cardsRemove: 'cards:remove',
+  notesAdd: 'notes:add',
+  notesUpdate: 'notes:update',
+  notesRemove: 'notes:remove',
+  edgesAdd: 'edges:add',
+  edgesRemove: 'edges:remove',
   surfaceOpenMesa: 'surface:open-mesa',
   surfaceEnter: 'surface:enter',
   surfaceExit: 'surface:exit',
@@ -27,6 +47,13 @@ export const IPC = {
   appFlushRequest: 'app:flush-request',
   /** renderer → main */
   appFlushDone: 'app:flush-done',
+  settingsNotion: 'settings:notion',
+  settingsSetNotionToken: 'settings:set-notion-token',
+  settingsClearNotionToken: 'settings:clear-notion-token',
+  settingsListNotionDatabases: 'settings:list-notion-databases',
+  settingsSetNotionDatabase: 'settings:set-notion-database',
+  notionCachedProject: 'notion:cached-project',
+  notionRefreshProject: 'notion:refresh-project',
 } as const
 
 /**
@@ -52,6 +79,18 @@ export interface TableApi {
     /** Descarga su web (respetando `beforeunload`) y la borra con su captura. */
     remove(mesaId: MesaId, cardId: CardId): Promise<UnloadResult>
   }
+  readonly notes: {
+    /** Crea una nota vacía con su esquina superior izquierda en `position`. */
+    add(mesaId: MesaId, position: Point): Promise<Note>
+    update(mesaId: MesaId, noteId: NoteId, patch: NotePatch): Promise<Note>
+    /** Borra la nota y sus conexiones. */
+    remove(mesaId: MesaId, noteId: NoteId): Promise<void>
+  }
+  readonly edges: {
+    /** Conecta dos tarjetas o notas; rechaza autoconexiones y duplicados en cualquier sentido. */
+    add(mesaId: MesaId, source: CardId | NoteId, target: CardId | NoteId): Promise<Edge>
+    remove(mesaId: MesaId, edgeId: EdgeId): Promise<void>
+  }
   readonly surface: {
     /**
      * Mesa visible. Descarga respetando `beforeunload` las webs de otra mesa;
@@ -75,6 +114,20 @@ export interface TableApi {
    * que algo no se pudo guardar; entonces Table pregunta antes de cerrar.
    */
   onFlushRequest(handler: () => Promise<void>): () => void
+  /** Configuración global (T-003). El token entra pero nunca vuelve al renderer. */
+  readonly settings: {
+    notion(): Promise<NotionSettingsView>
+    setNotionToken(token: string): Promise<NotionSettingsView>
+    clearNotionToken(): Promise<NotionSettingsView>
+    /** Bases compartidas con la integración; solo se puede elegir una de esta lista. */
+    listNotionDatabases(): Promise<NotionDatabase[]>
+    setNotionDatabase(databaseId: string | null): Promise<NotionSettingsView>
+  }
+  /** Ficha del proyecto de una tarjeta de Notion; la URL la toma el proceso principal de la mesa guardada. */
+  readonly notion: {
+    cachedProject(mesaId: MesaId, cardId: CardId): Promise<ProjectSnapshot | null>
+    refreshProject(mesaId: MesaId, cardId: CardId): Promise<ProjectState>
+  }
 }
 
 /** Guardado fallido en el proceso principal (captura o título de una tarjeta). */

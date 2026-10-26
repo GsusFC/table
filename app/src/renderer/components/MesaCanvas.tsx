@@ -1,4 +1,5 @@
 import {
+  applyEdgeChanges,
   applyNodeChanges,
   Background,
   BackgroundVariant,
@@ -9,15 +10,32 @@ import {
   useReactFlow,
   useStore,
   ViewportPortal,
+  type Connection,
+  type EdgeChange,
+  type EdgeTypes,
   type NodeChange,
   type NodePositionChange,
+  type NodeProps,
   type NodeTypes,
   type OnNodeDrag,
   type ResizeParams,
   type Viewport,
 } from '@xyflow/react'
-import { AlignStartHorizontal, AlignStartVertical, Copy, Download, LayoutGrid, LogIn, Plus, Trash2 } from 'lucide-react'
 import {
+  AlignStartHorizontal,
+  AlignStartVertical,
+  Copy,
+  Download,
+  LayoutGrid,
+  Link,
+  LogIn,
+  PencilLine,
+  Plus,
+  StickyNote,
+  Trash2,
+} from 'lucide-react'
+import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -26,7 +44,21 @@ import {
   type ClipboardEvent,
   type KeyboardEvent,
 } from 'react'
-import { DEFAULT_CARD_SIZE, type Card, type CardId, type CardPatch, type Mesa, type Point } from '../../shared/model'
+import {
+  DEFAULT_CARD_SIZE,
+  DEFAULT_NOTE_SIZE,
+  edgeKey,
+  type Card,
+  type CardId,
+  type CardPatch,
+  type Edge,
+  type EdgeId,
+  type Mesa,
+  type Note,
+  type NoteId,
+  type NotePatch,
+  type Point,
+} from '../../shared/model'
 import type { SurfaceCardState, UnloadResult } from '../../shared/surface'
 import { copyText } from '../lib/clipboard'
 import { errorMessage } from '../lib/errors'
@@ -37,8 +69,10 @@ import { readPastedUrls } from '../lib/url'
 import { AddUrlField } from './AddUrlField'
 import { CanvasContext, type CanvasContextValue } from './canvasContext'
 import { CardNode, type CardNodeType } from './CardNode'
+import { ConnectionEdge, ConnectionHandles, type ConnectionEdgeType } from './Connections'
 import { ConfirmDialog } from './Dialog'
 import { Menu, type MenuItem } from './Menu'
+import { NoteNode, type NoteNodeType } from './NoteNode'
 
 export type Notify = (text: string, tone?: 'info' | 'error') => void
 
@@ -51,6 +85,11 @@ interface MesaCanvasProps {
   readonly onAddCard: (url: string, position: Point) => Promise<Card>
   readonly onUpdateCard: (cardId: CardId, patch: CardPatch) => void
   readonly onRemoveCard: (cardId: CardId) => Promise<UnloadResult>
+  readonly onAddNote: (position: Point) => Promise<Note>
+  readonly onUpdateNote: (noteId: NoteId, patch: NotePatch) => void
+  readonly onRemoveNote: (noteId: NoteId) => Promise<void>
+  readonly onAddEdge: (source: CardId | NoteId, target: CardId | NoteId) => Promise<Edge>
+  readonly onRemoveEdge: (edgeId: EdgeId) => Promise<void>
   readonly onSaveViewport: (viewport: Viewport) => void
   readonly onEnter: (cardId: CardId) => void
   readonly notify: Notify
@@ -58,8 +97,23 @@ interface MesaCanvasProps {
   readonly registerFlush: (flush: () => void) => () => void
 }
 
-const NODE_TYPES: NodeTypes = { card: CardNode }
+type MesaNode = CardNodeType | NoteNodeType
+
+/** Tarjeta web con asas de conexión; `CardNode` solo dibuja la tarjeta. */
+const ConnectableCardNode = memo(function ConnectableCardNode(props: NodeProps<CardNodeType>) {
+  return (
+    <>
+      <CardNode {...props} />
+      <ConnectionHandles />
+    </>
+  )
+})
+
+const NODE_TYPES: NodeTypes = { card: ConnectableCardNode, note: NoteNode }
+const EDGE_TYPES: EdgeTypes = { connection: ConnectionEdge }
 const VIEWPORT_SAVE_DELAY_MS = 400
+/** Retardo del guardado del texto de una nota mientras se escribe. */
+const NOTE_TEXT_SAVE_DELAY_MS = 500
 const PASTE_OFFSET = 24
 const MIN_ZOOM = 0.1
 const MAX_ZOOM = 4
@@ -68,12 +122,13 @@ const ARIA_LABELS = {
   'controls.ariaLabel': 'Controles del lienzo',
   'controls.zoomIn.ariaLabel': 'Acercar',
   'controls.zoomOut.ariaLabel': 'Alejar',
-  'controls.fitView.ariaLabel': 'Ver todas las tarjetas',
-  'node.a11yDescription.default': 'Tarjeta web. Enter para entrar en la web.',
-  'node.a11yDescription.keyboardDisabled': 'Tarjeta web. Enter para entrar en la web.',
+  'controls.fitView.ariaLabel': 'Ver todo',
+  'node.a11yDescription.default': 'Enter para entrar en la web o editar la nota.',
+  'node.a11yDescription.keyboardDisabled': 'Enter para entrar en la web o editar la nota.',
+  'edge.a11yDescription.default': 'Conexión. ⌫ para borrarla.',
 }
 
-function toNode(card: Card): CardNodeType {
+function cardNode(card: Card): CardNodeType {
   return {
     id: card.id,
     type: 'card',
@@ -84,34 +139,62 @@ function toNode(card: Card): CardNodeType {
   }
 }
 
+function noteNode(note: Note): NoteNodeType {
+  return {
+    id: note.id,
+    type: 'note',
+    position: note.position,
+    width: note.size.width,
+    height: note.size.height,
+    data: { note },
+  }
+}
+
+function initialNodes(mesa: Mesa): MesaNode[] {
+  return [...mesa.cards.map(cardNode), ...mesa.notes.map(noteNode)]
+}
+
 /** Mantiene la geometría local (el usuario puede estar arrastrando) y toma el resto del disco. */
-function mergeNodes(previous: readonly CardNodeType[], cards: readonly Card[]): CardNodeType[] {
+function mergeNodes(previous: readonly MesaNode[], cards: readonly Card[], notes: readonly Note[]): MesaNode[] {
   const byId = new Map(previous.map(node => [node.id, node]))
-  return cards.map(card => {
+  const mergedCards = cards.map((card): MesaNode => {
     const existing = byId.get(card.id)
-    if (!existing) {
-      return toNode(card)
+    if (existing?.type !== 'card') {
+      return cardNode(card)
     }
     return existing.data.card === card ? existing : { ...existing, data: { card } }
   })
+  const mergedNotes = notes.map((note): MesaNode => {
+    const existing = byId.get(note.id)
+    if (existing?.type !== 'note') {
+      return noteNode(note)
+    }
+    return existing.data.note === note ? existing : { ...existing, data: { note } }
+  })
+  return [...mergedCards, ...mergedNotes]
+}
+
+function connectionEdge(edge: Edge, selected = false): ConnectionEdgeType {
+  return { id: edge.id, type: 'connection', source: edge.source, target: edge.target, selected, ariaLabel: 'Conexión' }
 }
 
 const roundPoint = (point: Point): Point => ({ x: Math.round(point.x), y: Math.round(point.y) })
 
-/** Distancia en píxeles de pantalla a la que el imán atrae una tarjeta. */
+/** Distancia en píxeles de pantalla a la que el imán atrae un elemento. */
 const MAGNET_SCREEN_PX = 8
 
-function rectOf(node: CardNodeType): Rect {
+function rectOf(node: MesaNode): Rect {
+  const fallback = node.type === 'note' ? DEFAULT_NOTE_SIZE : DEFAULT_CARD_SIZE
   return {
     id: node.id,
     x: node.position.x,
     y: node.position.y,
-    width: node.measured?.width ?? node.width ?? DEFAULT_CARD_SIZE.width,
-    height: node.measured?.height ?? node.height ?? DEFAULT_CARD_SIZE.height,
+    width: node.measured?.width ?? node.width ?? fallback.width,
+    height: node.measured?.height ?? node.height ?? fallback.height,
   }
 }
 
-function isDragPosition(change: NodeChange<CardNodeType>): change is NodePositionChange & { position: Point } {
+function isDragPosition(change: NodeChange<MesaNode>): change is NodePositionChange & { position: Point } {
   return change.type === 'position' && change.dragging === true && change.position !== undefined
 }
 
@@ -131,10 +214,13 @@ interface AddFieldState {
   readonly flow: Point
 }
 
-interface CardMenuState {
-  readonly cardId: CardId
+/** Menú de un elemento (tarjeta o nota), anclado en coordenadas de la ventana. */
+interface ItemMenuState {
+  readonly id: CardId | NoteId
   readonly anchor: Point
 }
+
+type RemovalState = { readonly kind: 'card'; readonly card: Card } | { readonly kind: 'note'; readonly note: Note }
 
 function CanvasInner({
   mesa,
@@ -144,17 +230,26 @@ function CanvasInner({
   onAddCard,
   onUpdateCard,
   onRemoveCard,
+  onAddNote,
+  onUpdateNote,
+  onRemoveNote,
+  onAddEdge,
+  onRemoveEdge,
   onSaveViewport,
   onEnter,
   notify,
   registerFlush,
 }: MesaCanvasProps) {
-  const flow = useReactFlow<CardNodeType>()
+  const flow = useReactFlow<MesaNode, ConnectionEdgeType>()
   const containerRef = useRef<HTMLDivElement>(null)
-  const [nodes, setNodes] = useState<CardNodeType[]>(() => mesa.cards.map(toNode))
+  const [nodes, setNodes] = useState<MesaNode[]>(() => initialNodes(mesa))
+  const [edges, setEdges] = useState<ConnectionEdgeType[]>(() => mesa.edges.map(edge => connectionEdge(edge)))
   const [addField, setAddField] = useState<AddFieldState | null>(null)
-  const [cardMenu, setCardMenu] = useState<CardMenuState | null>(null)
-  const [confirmRemove, setConfirmRemove] = useState<Card | null>(null)
+  /** Menú contextual del lienzo vacío («Añadir URL», «Añadir nota»), en coordenadas de la ventana. */
+  const [paneMenu, setPaneMenu] = useState<Point | null>(null)
+  const [itemMenu, setItemMenu] = useState<ItemMenuState | null>(null)
+  const [confirmRemove, setConfirmRemove] = useState<RemovalState | null>(null)
+  const [editingNoteId, setEditingNoteId] = useState<NoteId | null>(null)
   const [guides, setGuides] = useState<Guides>(NO_GUIDES)
   const zoom = useStore(state => state.transform[2])
   /** Con Opción (Alt) pulsada se arrastra sin imán ni rejilla. */
@@ -172,29 +267,22 @@ function CanvasInner({
   }, [])
 
   useEffect(() => {
-    setNodes(previous => mergeNodes(previous, mesa.cards))
-  }, [mesa.cards])
+    setNodes(previous => mergeNodes(previous, mesa.cards, mesa.notes))
+  }, [mesa.cards, mesa.notes])
 
-  // Opción B: con una web en el panel no queda nada del lienzo abierto debajo.
-  // Al salir, el foco vuelve a la tarjeta de la que se salió.
-  const lastEntered = useRef<CardId | null>(null)
+  // Las conexiones vienen del disco; solo la selección es local.
   useEffect(() => {
-    if (enteredCardId) {
-      lastEntered.current = enteredCardId
-      setAddField(null)
-      setCardMenu(null)
-      setConfirmRemove(null)
-      return
-    }
-    const previous = lastEntered.current
-    lastEntered.current = null
-    if (previous) {
-      const node = containerRef.current?.querySelector<HTMLElement>(
-        `.react-flow__node[data-id="${CSS.escape(previous)}"]`,
-      )
-      ;(node ?? containerRef.current)?.focus({ preventScroll: true })
-    }
-  }, [enteredCardId])
+    setEdges(previous => {
+      const selected = new Set(previous.filter(edge => edge.selected).map(edge => edge.id))
+      return mesa.edges.map(edge => connectionEdge(edge, selected.has(edge.id)))
+    })
+  }, [mesa.edges])
+
+  const closeOverlays = useCallback(() => {
+    setAddField(null)
+    setPaneMenu(null)
+    setItemMenu(null)
+  }, [])
 
   // Vista guardada con retardo; lo pendiente se guarda al salir de la mesa o al cerrar Table.
   const pendingViewport = useRef<Viewport | null>(null)
@@ -211,8 +299,67 @@ function CanvasInner({
       saveViewportRef.current(viewport)
     }
   }, [])
-  useEffect(() => flushViewport, [flushViewport])
-  useEffect(() => registerFlush(flushViewport), [registerFlush, flushViewport])
+
+  // Texto de las notas guardado con retardo mientras se escribe; igual que la vista,
+  // lo pendiente se guarda al terminar de editar, al salir de la mesa o al cerrar Table.
+  const pendingTexts = useRef(new Map<NoteId, string>())
+  const textTimer = useRef<number | undefined>(undefined)
+  const updateNoteRef = useRef(onUpdateNote)
+  useEffect(() => {
+    updateNoteRef.current = onUpdateNote
+  })
+  const flushNoteTexts = useCallback(() => {
+    window.clearTimeout(textTimer.current)
+    const pending = [...pendingTexts.current]
+    pendingTexts.current.clear()
+    for (const [noteId, text] of pending) {
+      updateNoteRef.current(noteId, { text })
+    }
+  }, [])
+  const changeNoteText = useCallback(
+    (noteId: NoteId, text: string) => {
+      pendingTexts.current.set(noteId, text)
+      window.clearTimeout(textTimer.current)
+      textTimer.current = window.setTimeout(flushNoteTexts, NOTE_TEXT_SAVE_DELAY_MS)
+    },
+    [flushNoteTexts],
+  )
+  const stopEditingNote = useCallback(
+    (noteId: NoteId) => {
+      flushNoteTexts()
+      setEditingNoteId(current => (current === noteId ? null : current))
+    },
+    [flushNoteTexts],
+  )
+
+  const flushPending = useCallback(() => {
+    flushViewport()
+    flushNoteTexts()
+  }, [flushViewport, flushNoteTexts])
+  useEffect(() => flushPending, [flushPending])
+  useEffect(() => registerFlush(flushPending), [registerFlush, flushPending])
+
+  // Opción B: con una web en el panel no queda nada del lienzo abierto debajo.
+  // Al salir, el foco vuelve a la tarjeta de la que se salió.
+  const lastEntered = useRef<CardId | null>(null)
+  useEffect(() => {
+    if (enteredCardId) {
+      lastEntered.current = enteredCardId
+      closeOverlays()
+      setConfirmRemove(null)
+      flushNoteTexts()
+      setEditingNoteId(null)
+      return
+    }
+    const previous = lastEntered.current
+    lastEntered.current = null
+    if (previous) {
+      const node = containerRef.current?.querySelector<HTMLElement>(
+        `.react-flow__node[data-id="${CSS.escape(previous)}"]`,
+      )
+      ;(node ?? containerRef.current)?.focus({ preventScroll: true })
+    }
+  }, [enteredCardId, closeOverlays, flushNoteTexts])
 
   const onMoveEnd = useCallback(
     (_event: unknown, viewport: Viewport) => {
@@ -224,12 +371,12 @@ function CanvasInner({
   )
 
   /**
-   * Imán al arrastrar: una tarjeta sola se alinea con bordes o centros de las
-   * demás y, si no hay ninguna cerca, con la rejilla; un grupo se mueve a la
-   * rejilla conservando las distancias entre sus tarjetas.
+   * Imán al arrastrar: un elemento solo se alinea con bordes o centros de los
+   * demás y, si no hay ninguno cerca, con la rejilla; un grupo se mueve a la
+   * rejilla conservando las distancias entre sus elementos.
    */
   const onNodesChange = useCallback(
-    (changes: NodeChange<CardNodeType>[]) => {
+    (changes: NodeChange<MesaNode>[]) => {
       const moving = changes.filter(isDragPosition)
       if (moving.length === 0 || magnetOff.current) {
         if (moving.length > 0) {
@@ -262,23 +409,34 @@ function CanvasInner({
     [flow],
   )
 
+  const onEdgesChange = useCallback((changes: EdgeChange<ConnectionEdgeType>[]) => {
+    setEdges(previous => applyEdgeChanges(changes, previous))
+  }, [])
+
   const cardsById = useMemo(() => new Map(mesa.cards.map(card => [card.id, card])), [mesa.cards])
+  const notesById = useMemo(() => new Map(mesa.notes.map(note => [note.id, note])), [mesa.notes])
 
   /** Guarda las posiciones que cambiaron respecto a lo guardado. */
   const savePositions = useCallback(
-    (positions: Iterable<readonly [CardId, Point]>) => {
-      for (const [cardId, raw] of positions) {
+    (positions: Iterable<readonly [CardId | NoteId, Point]>) => {
+      for (const [id, raw] of positions) {
         const position = roundPoint(raw)
-        const saved = cardsById.get(cardId)?.position
-        if (!saved || saved.x !== position.x || saved.y !== position.y) {
-          onUpdateCard(cardId, { position })
+        const card = cardsById.get(id)
+        const saved = (card ?? notesById.get(id))?.position
+        if (saved && saved.x === position.x && saved.y === position.y) {
+          continue
+        }
+        if (card) {
+          onUpdateCard(id, { position })
+        } else if (notesById.has(id)) {
+          onUpdateNote(id, { position })
         }
       }
     },
-    [cardsById, onUpdateCard],
+    [cardsById, notesById, onUpdateCard, onUpdateNote],
   )
 
-  const onNodeDragStop = useCallback<OnNodeDrag<CardNodeType>>(
+  const onNodeDragStop = useCallback<OnNodeDrag<MesaNode>>(
     (_event, _node, dragged) => {
       setGuides(NO_GUIDES)
       savePositions(dragged.map(node => [node.id, node.position] as const))
@@ -288,7 +446,7 @@ function CanvasInner({
 
   const selectedCount = nodes.filter(node => node.selected).length
 
-  /** Ordena o alinea las tarjetas seleccionadas y guarda sus posiciones. */
+  /** Ordena o alinea los elementos seleccionados y guarda sus posiciones. */
   const arrangeSelection = useCallback(
     (kind: 'grid' | 'left' | 'top') => {
       const rects = flow
@@ -316,7 +474,7 @@ function CanvasInner({
       if (!rect) {
         return
       }
-      setCardMenu(null)
+      setItemMenu(null)
       setAddField({
         left: clientX - rect.left,
         top: clientY - rect.top,
@@ -325,6 +483,18 @@ function CanvasInner({
       })
     },
     [flow],
+  )
+
+  /** Crea una nota con su esquina en el punto de la ventana y empieza a editarla. */
+  const addNoteAt = useCallback(
+    (clientX: number, clientY: number) => {
+      const position = roundPoint(flow.screenToFlowPosition({ x: clientX, y: clientY }))
+      onAddNote(position).then(
+        note => setEditingNoteId(note.id),
+        (error: unknown) => notify(errorMessage(error)),
+      )
+    },
+    [flow, onAddNote, notify],
   )
 
   /** Esquina de una tarjeta centrada en la vista, desplazada `offset` pasos. */
@@ -350,7 +520,8 @@ function CanvasInner({
   const openCenteredAddField = useCallback(() => {
     const slot = visibleCenterSlot()
     if (slot) {
-      setCardMenu(null)
+      setItemMenu(null)
+      setPaneMenu(null)
       setAddField({ ...slot, centered: true })
     }
   }, [visibleCenterSlot])
@@ -391,58 +562,133 @@ function CanvasInner({
     })
   }
 
+  // Conexiones: sin autoconexiones ni duplicados en cualquier sentido (el almacén lo vuelve a comprobar).
+  const edgeKeys = useMemo(() => new Set(mesa.edges.map(edge => edgeKey(edge.source, edge.target))), [mesa.edges])
+  const isValidConnection = useCallback(
+    (connection: ConnectionEdgeType | Connection) =>
+      connection.source !== connection.target && !edgeKeys.has(edgeKey(connection.source, connection.target)),
+    [edgeKeys],
+  )
+  const onConnect = useCallback(
+    (connection: Connection) => {
+      if (isValidConnection(connection)) {
+        onAddEdge(connection.source, connection.target).catch((error: unknown) => notify(errorMessage(error)))
+      }
+    },
+    [isValidConnection, onAddEdge, notify],
+  )
+
+  const removeNote = useCallback(
+    (noteId: NoteId) => {
+      pendingTexts.current.delete(noteId)
+      setEditingNoteId(current => (current === noteId ? null : current))
+      onRemoveNote(noteId).catch((error: unknown) => notify(errorMessage(error)))
+    },
+    [onRemoveNote, notify],
+  )
+
+  /** Una nota vacía se borra sin preguntar; con texto, se confirma. */
+  const requestRemoveNote = useCallback(
+    (note: Note) => {
+      const text = pendingTexts.current.get(note.id) ?? note.text
+      if (text.trim().length === 0) {
+        removeNote(note.id)
+      } else {
+        setConfirmRemove({ kind: 'note', note })
+      }
+    },
+    [removeNote],
+  )
+
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key === 'Escape' && (addField || cardMenu)) {
+    if (event.key === 'Escape' && (addField || itemMenu || paneMenu)) {
       event.preventDefault()
-      setAddField(null)
-      setCardMenu(null)
+      closeOverlays()
       return
     }
     const target = event.target
-    // ⌘A / Ctrl+A selecciona todas las tarjetas.
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a' && !isEditable(target)) {
+    if (isEditable(target)) {
+      return
+    }
+    // ⌘A / Ctrl+A selecciona todos los elementos.
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a') {
       event.preventDefault()
       setNodes(previous => previous.map(node => (node.selected ? node : { ...node, selected: true })))
       return
     }
-    if (event.key === 'Enter' && target instanceof HTMLElement && target.classList.contains('react-flow__node')) {
-      const cardId = target.dataset['id']
-      if (cardId) {
+    // ⌫ borra las conexiones seleccionadas (sin elementos seleccionados: borrar
+    // elementos tiene su propia acción).
+    if (event.key === 'Backspace' || event.key === 'Delete') {
+      const selectedEdges = edges.filter(edge => edge.selected)
+      if (selectedEdges.length > 0 && !nodes.some(node => node.selected)) {
         event.preventDefault()
-        onEnter(cardId)
+        for (const edge of selectedEdges) {
+          onRemoveEdge(edge.id).catch((error: unknown) => notify(errorMessage(error)))
+        }
+      }
+      return
+    }
+    if (event.key === 'Enter' && target instanceof HTMLElement && target.classList.contains('react-flow__node')) {
+      const id = target.dataset['id']
+      if (id && notesById.has(id)) {
+        event.preventDefault()
+        setEditingNoteId(id)
+      } else if (id) {
+        event.preventDefault()
+        onEnter(id)
       }
     }
   }
 
-  const closeCardMenu = useCallback(() => setCardMenu(null), [])
+  const closeMenus = useCallback(() => {
+    setItemMenu(null)
+    setPaneMenu(null)
+  }, [])
 
   const resizeEnd = useCallback(
-    (cardId: CardId, params: ResizeParams) => {
-      onUpdateCard(cardId, {
+    (id: CardId | NoteId, params: ResizeParams) => {
+      const patch = {
         position: roundPoint(params),
         size: { width: Math.round(params.width), height: Math.round(params.height) },
-      })
+      }
+      if (flow.getNode(id)?.type === 'note') {
+        onUpdateNote(id, patch)
+      } else {
+        onUpdateCard(id, patch)
+      }
     },
-    [onUpdateCard],
+    [flow, onUpdateCard, onUpdateNote],
   )
+
+  const menuCard = itemMenu ? cardsById.get(itemMenu.id) : undefined
+  const menuNote = itemMenu ? notesById.get(itemMenu.id) : undefined
 
   const context = useMemo<CanvasContextValue>(
     () => ({
       mesaId: mesa.id,
       states,
-      menuCardId: cardMenu?.cardId ?? null,
+      menuCardId: menuCard?.id ?? null,
+      editingNoteId,
       enter: onEnter,
       openMenu: (cardId, anchor) => {
         setAddField(null)
-        setCardMenu(current => (current?.cardId === cardId ? null : { cardId, anchor }))
+        setPaneMenu(null)
+        setItemMenu(current => (current?.id === cardId ? null : { id: cardId, anchor }))
       },
       resizeEnd,
+      changeNoteText,
+      stopEditingNote,
     }),
-    [mesa.id, states, cardMenu?.cardId, onEnter, resizeEnd],
+    [mesa.id, states, menuCard?.id, editingNoteId, onEnter, resizeEnd, changeNoteText, stopEditingNote],
   )
 
-  const menuCard = cardMenu ? cardsById.get(cardMenu.cardId) : undefined
   const menuItems = useMemo((): MenuItem[] => {
+    if (menuNote) {
+      return [
+        { label: 'Editar texto', icon: PencilLine, onSelect: () => setEditingNoteId(menuNote.id) },
+        { label: 'Eliminar', icon: Trash2, danger: true, onSelect: () => requestRemoveNote(menuNote) },
+      ]
+    }
     if (!menuCard) {
       return []
     }
@@ -475,12 +721,33 @@ function CanvasInner({
           )
         },
       },
-      { label: 'Eliminar', icon: Trash2, danger: true, onSelect: () => setConfirmRemove(menuCard) },
+      { label: 'Eliminar', icon: Trash2, danger: true, onSelect: () => setConfirmRemove({ kind: 'card', card: menuCard }) },
     )
     return items
-  }, [menuCard, states, onEnter, notify])
+  }, [menuCard, menuNote, states, onEnter, notify, requestRemoveNote])
 
-  const removeLoaded = confirmRemove ? cardStatus(states.get(confirmRemove.id)).loaded : false
+  const paneMenuItems = useMemo((): MenuItem[] => {
+    if (!paneMenu) {
+      return []
+    }
+    return [
+      { label: 'Añadir URL', icon: Link, onSelect: () => openAddFieldAt(paneMenu.x, paneMenu.y) },
+      { label: 'Añadir nota', icon: StickyNote, onSelect: () => addNoteAt(paneMenu.x, paneMenu.y) },
+    ]
+  }, [paneMenu, openAddFieldAt, addNoteAt])
+
+  const removedId = confirmRemove?.kind === 'card' ? confirmRemove.card.id : confirmRemove?.note.id
+  const removedEdgeCount = removedId
+    ? mesa.edges.filter(edge => edge.source === removedId || edge.target === removedId).length
+    : 0
+  const edgesNotice =
+    removedEdgeCount === 0
+      ? null
+      : removedEdgeCount === 1
+        ? 'También se borrará su conexión.'
+        : `También se borrarán sus ${removedEdgeCount} conexiones.`
+  const removeLoaded = confirmRemove?.kind === 'card' ? cardStatus(states.get(confirmRemove.card.id)).loaded : false
+  const isEmpty = mesa.cards.length === 0 && mesa.notes.length === 0
 
   return (
     <CanvasContext.Provider value={context}>
@@ -499,29 +766,39 @@ function CanvasInner({
           }
         }}
       >
-        <ReactFlow<CardNodeType>
+        <ReactFlow<MesaNode, ConnectionEdgeType>
           nodes={nodes}
+          edges={edges}
           nodeTypes={NODE_TYPES}
+          edgeTypes={EDGE_TYPES}
           onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          onConnect={onConnect}
+          isValidConnection={isValidConnection}
           onNodeDragStop={onNodeDragStop}
-          onNodeDoubleClick={(_event, node) => onEnter(node.id)}
+          onNodeDoubleClick={(_event, node) => {
+            if (node.type === 'note') {
+              setEditingNoteId(node.id)
+            } else {
+              onEnter(node.id)
+            }
+          }}
           onNodeContextMenu={(event, node) => {
             event.preventDefault()
             setAddField(null)
-            setCardMenu({ cardId: node.id, anchor: { x: event.clientX, y: event.clientY } })
+            setPaneMenu(null)
+            setItemMenu({ id: node.id, anchor: { x: event.clientX, y: event.clientY } })
           }}
           onPaneContextMenu={event => {
             event.preventDefault()
-            openAddFieldAt(event.clientX, event.clientY)
-          }}
-          onPaneClick={() => {
             setAddField(null)
-            setCardMenu(null)
+            setItemMenu(null)
+            setPaneMenu({ x: event.clientX, y: event.clientY })
           }}
+          onPaneClick={closeOverlays}
           onMoveStart={() => {
             // Están anclados a un punto de la pantalla: moverse los dejaría fuera de sitio.
-            setAddField(null)
-            setCardMenu(null)
+            closeOverlays()
           }}
           onMoveEnd={onMoveEnd}
           defaultViewport={mesa.viewport}
@@ -561,8 +838,8 @@ function CanvasInner({
         </ReactFlow>
 
         {selectedCount >= 2 && !enteredCardId && (
-          <div className="selection-bar" role="toolbar" aria-label="Ordenar tarjetas seleccionadas">
-            <span className="selection-bar-count tabular">{selectedCount} tarjetas</span>
+          <div className="selection-bar" role="toolbar" aria-label="Ordenar la selección">
+            <span className="selection-bar-count tabular">{selectedCount} seleccionados</span>
             <button type="button" className="button button-small" onClick={() => arrangeSelection('grid')}>
               <LayoutGrid aria-hidden size={14} strokeWidth={1.75} />
               Ordenar en cuadrícula
@@ -588,11 +865,11 @@ function CanvasInner({
           </div>
         )}
 
-        {mesa.cards.length === 0 && !addField && (
+        {isEmpty && !addField && !paneMenu && (
           <div className="canvas-empty">
             <p className="canvas-empty-title">Mesa vacía</p>
             <p className="canvas-empty-text">
-              Clic derecho en el lienzo para añadir una URL, o pégala con <kbd>{PASTE_KEY}</kbd>.
+              Clic derecho en el lienzo para añadir una URL o una nota, o pega una URL con <kbd>{PASTE_KEY}</kbd>.
             </p>
             <button type="button" className="button button-primary" onClick={openCenteredAddField}>
               <Plus aria-hidden size={15} strokeWidth={1.75} />
@@ -612,25 +889,29 @@ function CanvasInner({
         )}
       </div>
 
-      {cardMenu && menuCard && (
+      {paneMenu && (
+        <Menu anchor={paneMenu} label="Añadir al lienzo" items={paneMenuItems} onClose={closeMenus} />
+      )}
+
+      {itemMenu && (menuCard || menuNote) && (
         <Menu
-          anchor={cardMenu.anchor}
+          anchor={itemMenu.anchor}
           align="end"
-          label={`Acciones de ${menuCard.title ?? displayHost(menuCard.url)}`}
+          label={menuCard ? `Acciones de ${menuCard.title ?? displayHost(menuCard.url)}` : 'Acciones de la nota'}
           items={menuItems}
-          onClose={closeCardMenu}
+          onClose={closeMenus}
         />
       )}
 
-      {confirmRemove && (
+      {confirmRemove?.kind === 'card' && (
         <ConfirmDialog
           title="Eliminar tarjeta"
           confirmLabel="Eliminar"
           description={
             <>
               <p>
-                Se borrará «{confirmRemove.title ?? displayHost(confirmRemove.url)}» de esta mesa con su captura. La
-                web original no cambia.
+                Se borrará «{confirmRemove.card.title ?? displayHost(confirmRemove.card.url)}» de esta mesa con su
+                captura. La web original no cambia.{edgesNotice && ` ${edgesNotice}`}
               </p>
               {removeLoaded && (
                 <p className="dialog-note">
@@ -641,10 +922,24 @@ function CanvasInner({
             </>
           }
           onConfirm={async () => {
-            const result = await onRemoveCard(confirmRemove.id)
+            const result = await onRemoveCard(confirmRemove.card.id)
             if (result === 'kept') {
               notify('La web avisó de cambios sin guardar; la tarjeta se conserva', 'info')
             }
+          }}
+          onClose={() => setConfirmRemove(null)}
+        />
+      )}
+
+      {confirmRemove?.kind === 'note' && (
+        <ConfirmDialog
+          title="Eliminar nota"
+          confirmLabel="Eliminar"
+          description={<p>Se borrará la nota con su texto.{edgesNotice && ` ${edgesNotice}`}</p>}
+          onConfirm={async () => {
+            pendingTexts.current.delete(confirmRemove.note.id)
+            setEditingNoteId(current => (current === confirmRemove.note.id ? null : current))
+            await onRemoveNote(confirmRemove.note.id)
           }}
           onClose={() => setConfirmRemove(null)}
         />
@@ -653,7 +948,7 @@ function CanvasInner({
   )
 }
 
-/** Lienzo de una mesa: React Flow con tarjetas web (P-002). Montar con `key={mesa.id}`. */
+/** Lienzo de una mesa: React Flow con tarjetas web, notas y conexiones. Montar con `key={mesa.id}`. */
 export function MesaCanvas(props: MesaCanvasProps) {
   return (
     <ReactFlowProvider>

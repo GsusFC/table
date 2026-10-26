@@ -7,6 +7,7 @@ import { serviceById } from '../../shared/services'
 import { absoluteDate, displayHost, relativeDate } from '../lib/format'
 import { cardStatus } from '../lib/status'
 import { useCanvas } from './canvasContext'
+import { ProjectFace, ProjectSource, useProjectView } from './ProjectFace'
 import { ServiceBadge } from './ServiceBadge'
 
 export type CardNodeType = Node<{ card: Card }, 'card'>
@@ -15,7 +16,10 @@ export const CARD_MIN_WIDTH = 200
 export const CARD_MIN_HEIGHT = 150
 export const CARD_MAX_DIMENSION = 4000
 
-/** Tarjeta web en el lienzo: captura, servicio, título y estado de su web. */
+/**
+ * Tarjeta web en el lienzo: captura, servicio, título y estado de su web. Si es
+ * una ficha de la base de proyectos de Notion, muestra la ficha en lugar de la captura.
+ */
 export const CardNode = memo(function CardNode({ id, data, selected }: NodeProps<CardNodeType>) {
   const canvas = useCanvas()
   const { card } = data
@@ -23,7 +27,8 @@ export const CardNode = memo(function CardNode({ id, data, selected }: NodeProps
   const state = canvas.states.get(card.id)
   const status = cardStatus(state)
   const host = displayHost(state?.currentUrl ?? card.url)
-  const title = (status.loaded ? state?.title : null) ?? card.title ?? host
+  const project = useProjectView(canvas.mesaId, card.id, service.id === 'notion')
+  const title = project.snapshot?.title || ((status.loaded ? state?.title : null) ?? card.title ?? host)
 
   const captureSrc = card.capturedAt
     ? `${CAPTURE_PROTOCOL}://${canvas.mesaId}/${card.id}?v=${encodeURIComponent(card.capturedAt)}`
@@ -67,8 +72,10 @@ export const CardNode = memo(function CardNode({ id, data, selected }: NodeProps
           </button>
         </header>
 
-        <div className="card-preview">
-          {showCapture ? (
+        <div className={project.snapshot ? 'card-preview card-preview-project' : 'card-preview'}>
+          {project.snapshot ? (
+            <ProjectFace view={project} />
+          ) : showCapture ? (
             <img
               className="card-capture"
               src={captureSrc}
@@ -96,7 +103,9 @@ export const CardNode = memo(function CardNode({ id, data, selected }: NodeProps
               {title}
             </span>
             <span className="card-meta">
-              {!status.loaded && card.capturedAt ? (
+              {project.snapshot ? (
+                <ProjectSource snapshot={project.snapshot} problem={project.problem} />
+              ) : !status.loaded && card.capturedAt ? (
                 <time dateTime={card.capturedAt} title={absoluteDate(card.capturedAt)}>
                   Captura {relativeDate(card.capturedAt)}
                 </time>

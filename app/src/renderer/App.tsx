@@ -5,10 +5,15 @@ import {
   type Card,
   type CardId,
   type CardPatch,
+  type Edge,
+  type EdgeId,
   type Mesa,
   type MesaId,
   type MesaListing,
   type MesaSummary,
+  type Note,
+  type NoteId,
+  type NotePatch,
   type Point,
 } from '../shared/model'
 import { serviceById } from '../shared/services'
@@ -18,6 +23,7 @@ import { Home } from './components/Home'
 import { MesaCanvas } from './components/MesaCanvas'
 import { NewMesaDialog } from './components/NewMesaDialog'
 import { Rail } from './components/Rail'
+import { SettingsDialog } from './components/SettingsDialog'
 import { ServiceBadge } from './components/ServiceBadge'
 import { TopBar, type EnteredCard, type Notice, type SaveStatus } from './components/TopBar'
 import { errorMessage } from './lib/errors'
@@ -39,6 +45,7 @@ interface NavHistory {
 type DialogState =
   | { readonly kind: 'new-mesa' }
   | { readonly kind: 'delete-mesa'; readonly mesa: Pick<MesaSummary, 'id' | 'name' | 'cardCount'> }
+  | { readonly kind: 'settings' }
 
 const HOME: Route = { kind: 'home' }
 const NOTICE_MS = { info: 4000, error: 8000 } as const
@@ -84,16 +91,11 @@ let noticeCounter = 0
 type FailureKey = string
 const failureKey = (mesaId: MesaId | null, operation: string): FailureKey => `${mesaId ?? '*'}|${operation}`
 
-/** Operaciones de guardado de una tarjeta según los campos que cambian. */
-function geometryOperations(cardId: CardId, patch: CardPatch): string[] {
-  const operations: string[] = []
-  if (patch.position) {
-    operations.push(`card:${cardId}:position`)
-  }
-  if (patch.size) {
-    operations.push(`card:${cardId}:size`)
-  }
-  return operations
+/** Operaciones de guardado de una tarjeta o nota según los campos que cambian. */
+function patchOperations(kind: 'card' | 'note', id: CardId | NoteId, patch: NotePatch): string[] {
+  return (['text', 'position', 'size'] as const)
+    .filter(field => patch[field] !== undefined)
+    .map(field => `${kind}:${id}:${field}`)
 }
 
 /** Qué hacer con los fallos de una escritura: mesa y operaciones que registra o resuelve. */
@@ -400,13 +402,15 @@ export function App() {
   const back = history.entries[history.index - 1]
   const forward = history.entries[history.index + 1]
 
-  const openNewMesa = (): void => {
+  /** Los diálogos no se abren con una web en el panel: la vista nativa los taparía. */
+  const openDialog = (next: DialogState): void => {
     if (enteredRef.current) {
-      api.surface.exit().then(() => setDialog({ kind: 'new-mesa' }), notifyError)
+      api.surface.exit().then(() => setDialog(next), notifyError)
     } else {
-      setDialog({ kind: 'new-mesa' })
+      setDialog(next)
     }
   }
+  const openNewMesa = (): void => openDialog({ kind: 'new-mesa' })
 
   const createMesa = async (name: string, urls: readonly string[]): Promise<void> => {
     const created = await api.mesas.create(name)
@@ -453,8 +457,8 @@ export function App() {
 
   // Operaciones sobre la mesa abierta. El lienzo se monta con `key={mesa.id}`.
   const mesaId = mesa?.id ?? null
-  const replaceCard = useCallback((ownerId: MesaId, update: (cards: readonly Card[]) => readonly Card[]) => {
-    setMesa(current => (current && current.id === ownerId ? { ...current, cards: update(current.cards) } : current))
+  const patchMesa = useCallback((ownerId: MesaId, update: (current: Mesa) => Mesa) => {
+    setMesa(current => (current && current.id === ownerId ? update(current) : current))
   }, [])
 
   const addCard = useCallback(
@@ -463,10 +467,13 @@ export function App() {
         throw new Error('No hay ninguna mesa abierta')
       }
       const card = await track(api.cards.add(mesaId, url, position))
-      replaceCard(mesaId, cards => [...cards.filter(existing => existing.id !== card.id), card])
+      patchMesa(mesaId, current => ({
+        ...current,
+        cards: [...current.cards.filter(existing => existing.id !== card.id), card],
+      }))
       return card
     },
-    [mesaId, track, replaceCard],
+    [mesaId, track, patchMesa],
   )
 
   const updateCard = useCallback(
@@ -474,12 +481,16 @@ export function App() {
       if (!mesaId) {
         return
       }
-      track(api.cards.update(mesaId, cardId, patch), { mesaId, operations: geometryOperations(cardId, patch) }).then(
-        card => replaceCard(mesaId, cards => cards.map(existing => (existing.id === card.id ? card : existing))),
+      track(api.cards.update(mesaId, cardId, patch), { mesaId, operations: patchOperations('card', cardId, patch) }).then(
+        card =>
+          patchMesa(mesaId, current => ({
+            ...current,
+            cards: current.cards.map(existing => (existing.id === card.id ? card : existing)),
+          })),
         notifyError,
       )
     },
-    [mesaId, track, replaceCard, notifyError],
+    [mesaId, track, patchMesa, notifyError],
   )
 
   const removeCard = useCallback(
@@ -489,14 +500,102 @@ export function App() {
       }
       const result = await track(api.cards.remove(mesaId, cardId))
       if (result === 'unloaded') {
-        replaceCard(mesaId, cards => cards.filter(existing => existing.id !== cardId))
+        // El almacén borró también sus conexiones.
+        patchMesa(mesaId, current => ({
+          ...current,
+          cards: current.cards.filter(existing => existing.id !== cardId),
+          edges: current.edges.filter(edge => edge.source !== cardId && edge.target !== cardId),
+        }))
         // La tarjeta ya no existe: sus guardados fallidos dejan de importar.
         const prefix = failureKey(mesaId, `card:${cardId}:`)
         clearFailures(key => key.startsWith(prefix))
       }
       return result
     },
-    [mesaId, track, replaceCard, clearFailures],
+    [mesaId, track, patchMesa, clearFailures],
+  )
+
+  const addNote = useCallback(
+    async (position: Point): Promise<Note> => {
+      if (!mesaId) {
+        throw new Error('No hay ninguna mesa abierta')
+      }
+      const note = await track(api.notes.add(mesaId, position))
+      patchMesa(mesaId, current => ({
+        ...current,
+        notes: [...current.notes.filter(existing => existing.id !== note.id), note],
+      }))
+      return note
+    },
+    [mesaId, track, patchMesa],
+  )
+
+  const updateNote = useCallback(
+    (noteId: NoteId, patch: NotePatch) => {
+      if (!mesaId) {
+        return
+      }
+      // El texto se ve ya, sin esperar al disco (se acaba de editar en la nota).
+      const { text } = patch
+      if (text !== undefined) {
+        patchMesa(mesaId, current => ({
+          ...current,
+          notes: current.notes.map(existing => (existing.id === noteId ? { ...existing, text } : existing)),
+        }))
+      }
+      track(api.notes.update(mesaId, noteId, patch), { mesaId, operations: patchOperations('note', noteId, patch) }).then(
+        // El texto local manda: ya se puso al escribir y las escrituras van en orden. Una
+        // respuesta de un guardado anterior no debe pisar lo escrito después.
+        note =>
+          patchMesa(mesaId, current => ({
+            ...current,
+            notes: current.notes.map(existing => (existing.id === note.id ? { ...note, text: existing.text } : existing)),
+          })),
+        notifyError,
+      )
+    },
+    [mesaId, track, patchMesa, notifyError],
+  )
+
+  const removeNote = useCallback(
+    async (noteId: NoteId): Promise<void> => {
+      if (!mesaId) {
+        throw new Error('No hay ninguna mesa abierta')
+      }
+      await track(api.notes.remove(mesaId, noteId))
+      // El almacén borró también sus conexiones.
+      patchMesa(mesaId, current => ({
+        ...current,
+        notes: current.notes.filter(existing => existing.id !== noteId),
+        edges: current.edges.filter(edge => edge.source !== noteId && edge.target !== noteId),
+      }))
+      const prefix = failureKey(mesaId, `note:${noteId}:`)
+      clearFailures(key => key.startsWith(prefix))
+    },
+    [mesaId, track, patchMesa, clearFailures],
+  )
+
+  const addEdge = useCallback(
+    async (source: CardId | NoteId, target: CardId | NoteId): Promise<Edge> => {
+      if (!mesaId) {
+        throw new Error('No hay ninguna mesa abierta')
+      }
+      const edge = await track(api.edges.add(mesaId, source, target))
+      patchMesa(mesaId, current => ({ ...current, edges: [...current.edges, edge] }))
+      return edge
+    },
+    [mesaId, track, patchMesa],
+  )
+
+  const removeEdge = useCallback(
+    async (edgeId: EdgeId): Promise<void> => {
+      if (!mesaId) {
+        throw new Error('No hay ninguna mesa abierta')
+      }
+      await track(api.edges.remove(mesaId, edgeId))
+      patchMesa(mesaId, current => ({ ...current, edges: current.edges.filter(edge => edge.id !== edgeId) }))
+    },
+    [mesaId, track, patchMesa],
   )
 
   const saveViewport = useCallback(
@@ -567,7 +666,13 @@ export function App() {
         onDismissNotice={() => setNotice(null)}
       />
 
-      {railOpen && <Rail homeActive={route.kind === 'home'} onHome={() => navigate(HOME)} />}
+      {railOpen && (
+        <Rail
+          homeActive={route.kind === 'home'}
+          onHome={() => navigate(HOME)}
+          onSettings={() => openDialog({ kind: 'settings' })}
+        />
+      )}
 
       <main ref={panelRef} className="panel">
         {route.kind === 'home' && (
@@ -592,6 +697,11 @@ export function App() {
               onAddCard={addCard}
               onUpdateCard={updateCard}
               onRemoveCard={removeCard}
+              onAddNote={addNote}
+              onUpdateNote={updateNote}
+              onRemoveNote={removeNote}
+              onAddEdge={addEdge}
+              onRemoveEdge={removeEdge}
               onSaveViewport={saveViewport}
               onEnter={enterCard}
               notify={notify}
@@ -634,6 +744,8 @@ export function App() {
           onClose={() => setDialog(null)}
         />
       )}
+
+      {!entered && dialog?.kind === 'settings' && <SettingsDialog onClose={() => setDialog(null)} />}
     </div>
   )
 }

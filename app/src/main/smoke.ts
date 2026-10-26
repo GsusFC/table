@@ -4,13 +4,14 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import type { Card, Mesa } from '../shared/model'
+import type { Card, Mesa, Point, Size } from '../shared/model'
 import type { SurfaceManager } from './web/types'
 
 /**
- * Recorrido de T-002 sobre la app real, con datos en una carpeta temporal y
- * páginas sintéticas locales. Usa la interfaz (clics, menú contextual, campo
- * «Añadir URL») cuando el criterio de aceptación es de interfaz, y la API del
+ * Recorrido de T-002 y T-004 sobre la app real, con datos en una carpeta
+ * temporal y páginas sintéticas locales. Usa la interfaz (clics, menú
+ * contextual, campo «Añadir URL», notas y conexiones arrastradas) cuando el
+ * criterio de aceptación es de interfaz, y la API del
  * preload para preparar datos. Si `TABLE_SMOKE_SHOTS` apunta a una carpeta,
  * guarda capturas de la interfaz local en cada paso.
  */
@@ -30,6 +31,8 @@ export const smokeHooks = {
   confirmDiscard: (_origin: string, _reason: 'quit' | 'unload'): boolean => false,
   /** Si algo no se pudo guardar al cerrar; el smoke cierra igualmente. */
   confirmCloseWithUnsaved: (): boolean => true,
+  /** Servidor local con fichas sintéticas que sustituye a la API de Notion. */
+  notionApiBase: undefined as string | undefined,
 }
 
 /** Chromium solo respeta `beforeunload` si la página recibió interacción del usuario. */
@@ -77,6 +80,52 @@ async function startFixtureServer(): Promise<{ server: Server; url: string }> {
   return { server, url: `http://127.0.0.1:${port}/` }
 }
 
+const NOTION_TOKEN = `ntn_${'s'.repeat(40)}`
+const NOTION_DATABASE = '11111111222243338444555555555555'
+const NOTION_PROJECT = 'aaaaaaaabbbb4ccc8dddeeeeeeeeeeee'
+const NOTION_OTHER = 'ffffffffbbbb4ccc8dddeeeeeeeeeeee'
+
+/** API de Notion falsa: una base, una ficha con campos excluidos rellenos y una página suelta. */
+async function startNotionServer(): Promise<{ server: Server; url: string }> {
+  const server = createServer((request, response) => {
+    const reply = (status: number, body: unknown): void => {
+      response.writeHead(status, { 'content-type': 'application/json' })
+      response.end(JSON.stringify(body))
+    }
+    if (request.headers.authorization !== `Bearer ${NOTION_TOKEN}`) {
+      reply(401, { object: 'error' })
+    } else if (request.method === 'POST' && request.url === '/v1/search') {
+      reply(200, { results: [{ object: 'database', id: NOTION_DATABASE, title: [{ plain_text: 'Proyectos de prueba' }] }], has_more: false })
+    } else if (request.url === `/v1/pages/${NOTION_PROJECT}`) {
+      reply(200, {
+        object: 'page',
+        id: NOTION_PROJECT,
+        last_edited_time: '2026-10-25T09:30:00.000Z',
+        parent: { type: 'database_id', database_id: NOTION_DATABASE },
+        properties: {
+          Title: { type: 'title', title: [{ plain_text: 'Proyecto sintético' }] },
+          Status: { type: 'status', status: { name: 'In progress', color: 'orange' } },
+          Services: { type: 'multi_select', multi_select: [{ name: 'Branding', color: 'blue' }] },
+          'Start Date': { type: 'date', date: { start: '2026-10-01', end: null } },
+          'Due Date': { type: 'date', date: null },
+          'Remaining days': { type: 'formula', formula: { type: 'number', number: 34 } },
+          Budget: { type: 'rich_text', rich_text: [{ plain_text: 'SECRETO-PRESUPUESTO' }] },
+          Leaders: { type: 'people', people: [{ id: 'SECRETO-PERSONA' }] },
+        },
+      })
+    } else if (request.url === `/v1/pages/${NOTION_OTHER}`) {
+      reply(200, { object: 'page', id: NOTION_OTHER, parent: { type: 'page_id', page_id: NOTION_PROJECT }, properties: {} })
+    } else {
+      reply(404, { object: 'error' })
+    }
+  })
+  const { promise, resolve } = Promise.withResolvers<void>()
+  server.listen(0, '127.0.0.1', resolve)
+  await promise
+  const { port } = server.address() as AddressInfo
+  return { server, url: `http://127.0.0.1:${port}` }
+}
+
 export async function runSmoke(window: BrowserWindow, surface: SurfaceManager): Promise<void> {
   const checks: Check[] = []
   const record = (name: string, ok: boolean, detail?: unknown): void => {
@@ -103,6 +152,57 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager): 
     writeFileSync(join(shotsDir, `${name}.png`), image.toPNG())
   }
   const nodeCount = (): Promise<number> => inUi(`document.querySelectorAll('.react-flow__node').length`)
+  const edgeCount = (): Promise<number> => inUi(`document.querySelectorAll('.react-flow__edge').length`)
+  /** Clic derecho en el lienzo vacío, en píxeles dentro del panel de React Flow. */
+  const openPaneMenu = (x: number, y: number): Promise<unknown> =>
+    inUi(`(() => {
+      const pane = document.querySelector('.react-flow__pane')
+      const r = pane.getBoundingClientRect()
+      pane.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + ${x}, clientY: r.top + ${y}, button: 2 }))
+    })()`)
+  const clickMenuItem = async (label: string): Promise<void> => {
+    await waitFor(() => inUi<boolean>(`!!document.querySelector('.menu')`), Boolean, `menú con «${label}»`)
+    await inUi(`[...document.querySelectorAll('.menu [role="menuitem"]')].find(b => b.textContent.includes(${JSON.stringify(label)})).click()`)
+  }
+  /**
+   * Clic real (eventos de entrada de Electron) en una zona vacía del lienzo
+   * para quitar la selección: con `selectionOnDrag`, React Flow solo trata el
+   * clic en el lienzo a partir de `pointerdown`/`pointerup` reales.
+   */
+  const clearSelection = async (): Promise<void> => {
+    const point = await inUi<{ x: number; y: number }>(`(() => {
+      const r = document.querySelector('.react-flow__pane').getBoundingClientRect()
+      return { x: Math.round(r.left + r.width * 0.85), y: Math.round(r.top + r.height * 0.6) }
+    })()`)
+    ui.sendInputEvent({ type: 'mouseDown', x: point.x, y: point.y, button: 'left', clickCount: 1 })
+    ui.sendInputEvent({ type: 'mouseUp', x: point.x, y: point.y, button: 'left', clickCount: 1 })
+    await waitFor(
+      () => inUi<number>(`document.querySelectorAll('.react-flow__node.selected, .react-flow__edge.selected').length`),
+      count => count === 0,
+      'sin selección',
+    )
+  }
+  /**
+   * Arrastra una conexión con eventos del ratón: desde el asa `side` del
+   * elemento `fromId` hasta el centro del elemento `toId`.
+   */
+  const dragConnection = (fromId: string, side: 'left' | 'right', toId: string): Promise<unknown> =>
+    inUi(`(async () => {
+      const frame = () => new Promise(resolve => requestAnimationFrame(() => resolve()))
+      const center = element => {
+        const r = element.getBoundingClientRect()
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+      }
+      const handle = document.querySelector(${JSON.stringify(`.react-flow__node[data-id="${fromId}"] .connection-handle[data-handlepos="${side}"]`)})
+      const from = center(handle)
+      const to = center(document.querySelector(${JSON.stringify(`.react-flow__node[data-id="${toId}"]`)}))
+      handle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: from.x, clientY: from.y, button: 0 }))
+      for (const t of [0.3, 0.7, 1, 1]) {
+        document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: from.x + (to.x - from.x) * t, clientY: from.y + (to.y - from.y) * t, buttons: 1 }))
+        await frame()
+      }
+      document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: to.x, clientY: to.y, button: 0 }))
+    })()`)
   const { server, url: fixtureUrl } = await startFixtureServer()
 
   let closingMesaId: string | null = null
@@ -137,11 +237,8 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager): 
     await shot('03-lienzo')
 
     // «Añadir URL» desde el menú contextual del lienzo.
-    await inUi(`(() => {
-      const pane = document.querySelector('.react-flow__pane')
-      const r = pane.getBoundingClientRect()
-      pane.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 200, clientY: r.top + 420, button: 2 }))
-    })()`)
+    await openPaneMenu(200, 420)
+    await clickMenuItem('Añadir URL')
     await waitFor(() => inUi<boolean>(`!!document.querySelector('.add-url-input')`), Boolean, 'campo Añadir URL')
     await inUi(`(() => {
       const input = document.querySelector('.add-url-input')
@@ -216,7 +313,7 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager): 
       current => current.cards.every(card => card.position.x % 24 === 0 && card.position.y % 24 === 0),
       'posiciones ordenadas guardadas',
     ).catch(() => null)
-    const overlaps = (cards: readonly Card[]): boolean =>
+    const overlaps = (cards: readonly { readonly position: Point; readonly size: Size }[]): boolean =>
       cards.some((a, i) =>
         cards.some(
           (b, j) =>
@@ -229,6 +326,142 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager): 
       )
     record('ordenar: la selección queda en cuadrícula, sin solapes y guardada', arranged !== null && !overlaps(arranged.cards))
     await shot('08-ordenadas')
+
+    // T-004: notas y conexiones. Primero se quita la selección de ⌘A.
+    const getMesa = (): Promise<Mesa> => inUi<Mesa>(`window.table.mesas.get(${JSON.stringify(mesa.id)})`)
+    await clearSelection()
+    await openPaneMenu(900, 150)
+    await clickMenuItem('Añadir nota')
+    await waitFor(() => inUi<boolean>(`document.activeElement?.classList.contains('note-input') === true`), Boolean, 'nota en edición')
+    const withNote = await getMesa()
+    const note = withNote.notes[0]
+    record('notas: clic derecho → Añadir nota crea una nota vacía y la abre para escribir', withNote.notes.length === 1 && note?.text === '')
+    if (!note) {
+      throw new Error('No se creó la nota')
+    }
+    const noteSelector = JSON.stringify(`.react-flow__node[data-id="${note.id}"]`)
+    const noteText = 'Nota sintética\nsegunda línea'
+    await inUi(`(() => {
+      const input = document.activeElement
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, ${JSON.stringify(noteText)})
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', metaKey: true, ctrlKey: true, bubbles: true, cancelable: true }))
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }))
+    })()`)
+    record(
+      'teclado: ⌘A y ⌫ en el texto de una nota no seleccionan ni borran elementos',
+      await inUi<boolean>(
+        `document.querySelectorAll('.react-flow__node.selected').length === 0 && document.querySelectorAll('.react-flow__node').length === 5 && document.activeElement?.classList.contains('note-input') === true`,
+      ),
+    )
+    await shot('09-nota-en-edicion')
+    await inUi(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`)
+    const savedNote = await waitFor(getMesa, current => current.notes[0]?.text === noteText, 'texto de la nota guardado').catch(() => null)
+    record('notas: Esc termina la edición y el texto queda guardado', savedNote !== null && (await inUi<boolean>(`!document.querySelector('.note-input')`)))
+
+    // Conectar arrastrando desde el asa izquierda de la nota hasta la tarjeta sintética.
+    await dragConnection(note.id, 'left', fixtureCard.id)
+    const connected = await waitFor(getMesa, current => current.edges.length === 1, 'conexión guardada').catch(() => null)
+    const edge = connected?.edges[0]
+    record(
+      'conexiones: arrastrar desde una nota hasta una tarjeta las conecta',
+      !!edge && edge.source === note.id && edge.target === fixtureCard.id && (await waitFor(edgeCount, count => count === 1, 'línea de la conexión').then(() => true, () => false)),
+      edge,
+    )
+    record(
+      'conexiones: no se repite en sentido contrario ni se conecta un elemento consigo',
+      await inUi<boolean>(`Promise.all([
+        window.table.edges.add(${JSON.stringify(mesa.id)}, ${JSON.stringify(fixtureCard.id)}, ${JSON.stringify(note.id)}).then(() => false, () => true),
+        window.table.edges.add(${JSON.stringify(mesa.id)}, ${JSON.stringify(note.id)}, ${JSON.stringify(note.id)}).then(() => false, () => true),
+      ]).then(results => results.every(Boolean))`),
+    )
+    await shot('10-conexion')
+
+    // ⌘A incluye la nota: «Alinear arriba» la mueve con las tarjetas.
+    await inUi(`(() => {
+      const canvas = document.querySelector('.canvas')
+      canvas.focus()
+      canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', metaKey: true, ctrlKey: true, bubbles: true }))
+    })()`)
+    await waitFor(() => inUi<boolean>(`!!document.querySelector('.selection-bar')`), Boolean, 'barra de selección con la nota')
+    await inUi(`document.querySelector('.selection-bar [aria-label="Alinear arriba"]').click()`)
+    const aligned = await waitFor(
+      getMesa,
+      current => [...current.cards, ...current.notes].every(item => item.position.y === 0),
+      'alineados arriba',
+    ).catch(() => null)
+    record(
+      'selección: ⌘A y «Alinear arriba» incluyen la nota',
+      aligned !== null,
+      aligned ? undefined : (await getMesa()).notes.concat().map(item => item.position).concat((await getMesa()).cards.map(item => item.position)),
+    )
+
+    // «Ordenar en cuadrícula» con la misma selección también coloca la nota.
+    await inUi(`[...document.querySelectorAll('.selection-bar button')].find(b => b.textContent.includes('Ordenar en cuadrícula')).click()`)
+    const regridded = await waitFor(
+      getMesa,
+      current => !overlaps([...current.cards, ...current.notes]),
+      'tarjetas y nota ordenadas sin solapes',
+    ).catch(() => null)
+    record('ordenar: la cuadrícula incluye la nota, sin solapes', regridded !== null)
+
+    // Conexión tarjeta↔tarjeta arrastrada; clic en la línea y ⌫ la borra sin tocar las tarjetas.
+    await clearSelection()
+    const figmaCard = added[1]!
+    await dragConnection(fixtureCard.id, 'right', figmaCard.id)
+    const twoEdges = await waitFor(getMesa, current => current.edges.length === 2, 'conexión entre tarjetas').catch(() => null)
+    const cardEdge = twoEdges?.edges.find(item => item.source === fixtureCard.id && item.target === figmaCard.id)
+    record('conexiones: arrastrar entre dos tarjetas las conecta', !!cardEdge)
+    if (cardEdge) {
+      await waitFor(edgeCount, count => count === 2, 'dos líneas')
+      await inUi(`document.querySelector(${JSON.stringify(`.react-flow__edge[data-id="${cardEdge.id}"]`)}).dispatchEvent(new MouseEvent('click', { bubbles: true }))`)
+      await waitFor(() => inUi<number>(`document.querySelectorAll('.react-flow__edge.selected').length`), count => count === 1, 'línea seleccionada')
+      await shot('11-conexion-seleccionada')
+      await inUi(`(() => {
+        const canvas = document.querySelector('.canvas')
+        canvas.focus()
+        canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true }))
+      })()`)
+      const afterEdgeRemoval = await waitFor(getMesa, current => current.edges.length === 1, 'conexión borrada con ⌫').catch(() => null)
+      record(
+        'conexiones: seleccionar una línea y ⌫ la borra sin tocar los elementos',
+        afterEdgeRemoval !== null && afterEdgeRemoval.cards.length === 4 && afterEdgeRemoval.notes.length === 1 && afterEdgeRemoval.edges[0]?.source === note.id,
+      )
+    }
+
+    // Persistencia: recargar la interfaz y leer la mesa del disco.
+    ui.reload()
+    await waitFor(() => inUi<number>(`document.querySelectorAll('.mesa-row-open').length`), count => count === 2, 'inicio tras recargar')
+    await inUi(`[...document.querySelectorAll('.mesa-row-open')].find(b => b.textContent.includes('Mesa de prueba')).click()`)
+    await waitFor(nodeCount, count => count === 5, 'tarjetas y nota tras recargar')
+    const shownText = await inUi<string>(`document.querySelector(${noteSelector} + ' .note-text')?.innerText ?? ''`)
+    const reloaded = await getMesa()
+    record(
+      'persistencia: la nota conserva su texto y su conexión tras recargar',
+      shownText === noteText &&
+        reloaded.notes[0]?.text === noteText &&
+        reloaded.edges.length === 1 &&
+        (await waitFor(edgeCount, count => count === 1, 'conexión tras recargar').then(() => true, () => false)),
+      { shownText },
+    )
+
+    // Borrar la nota desde su menú: se confirma (tiene texto) y se va con su conexión.
+    await inUi(`(() => {
+      const node = document.querySelector(${noteSelector})
+      const r = node.getBoundingClientRect()
+      node.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 20, button: 2 }))
+    })()`)
+    await clickMenuItem('Eliminar')
+    await waitFor(() => inUi<boolean>(`!!document.querySelector('dialog[open] .button-danger')`), Boolean, 'confirmar borrar nota')
+    await inUi(`document.querySelector('dialog[open] .button-danger').click()`)
+    const afterRemove = await waitFor(getMesa, current => current.notes.length === 0, 'nota borrada').catch(() => null)
+    record(
+      'borrar: eliminar la nota borra su conexión y no toca las tarjetas',
+      afterRemove !== null &&
+        afterRemove.edges.length === 0 &&
+        afterRemove.cards.length === 4 &&
+        (await waitFor(edgeCount, count => count === 0, 'sin líneas').then(() => true, () => false)),
+    )
 
     // beforeunload en la web de una tarjeta.
     const guardedUrl = `${fixtureUrl}guarded`
@@ -319,6 +552,66 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager): 
     await inUi(`window.table.surface.exit()`)
     await inUi(`window.table.surface.unload(${JSON.stringify(guardedCard.id)})`)
     smokeHooks.confirmDiscard = () => false
+
+    // Ajustes y ficha de Notion (T-003) contra una API falsa con datos sintéticos.
+    const notionServer = await startNotionServer()
+    smokeHooks.notionApiBase = notionServer.url
+    try {
+      const saved = await inUi<{ hasToken: boolean; tokenHint: string }>(`window.table.settings.setNotionToken(${JSON.stringify(NOTION_TOKEN)})`)
+      const settingsFile = readFileSync(join(app.getPath('userData'), 'settings.json'), 'utf8')
+      record(
+        'ajustes: el token se guarda cifrado y no vuelve al renderer',
+        saved.hasToken && !settingsFile.includes(NOTION_TOKEN) && !JSON.stringify(saved).includes(NOTION_TOKEN),
+        { hint: saved.tokenHint },
+      )
+      const unlisted = await inUi<boolean>(
+        `window.table.settings.setNotionDatabase(${JSON.stringify(NOTION_DATABASE)}).then(() => false, () => true)`,
+      )
+      const databases = await inUi<{ id: string }[]>(`window.table.settings.listNotionDatabases()`)
+      await inUi(`window.table.settings.setNotionDatabase(${JSON.stringify(NOTION_DATABASE)})`)
+      record('ajustes: solo se elige una base de la lista de Notion', unlisted && databases.length === 1, { databases: databases.length })
+
+      const notionMesa = await inUi<Mesa>(`window.table.mesas.create('Mesa de Notion')`)
+      const [projectCard, otherCard] = await inUi<Card[]>(`Promise.all([
+        window.table.cards.add(${JSON.stringify(notionMesa.id)}, 'https://www.notion.so/equipo/Proyecto-${NOTION_PROJECT}', { x: 0, y: 0 }),
+        window.table.cards.add(${JSON.stringify(notionMesa.id)}, 'https://www.notion.so/equipo/Pagina-${NOTION_OTHER}', { x: 380, y: 0 }),
+      ])`)
+      const refresh = (card: Card): Promise<{ status: string; snapshot?: { fields: { name: string }[] }; cached?: { fetchedAt: string } | null }> =>
+        inUi(`window.table.notion.refreshProject(${JSON.stringify(notionMesa.id)}, ${JSON.stringify(card!.id)})`)
+      const ready = await refresh(projectCard!)
+      record(
+        'notion: la ficha trae solo los campos permitidos',
+        ready.status === 'ready' &&
+          ready.snapshot?.fields.map(field => field.name).join() === 'Status,Services,Start Date,Due Date,Remaining days' &&
+          !JSON.stringify(ready).includes('SECRETO'),
+        { status: ready.status },
+      )
+      record('notion: una página que no es ficha queda como tarjeta web', (await refresh(otherCard!)).status === 'not-project')
+
+      ui.reload()
+      await waitFor(() => inUi<boolean>(`[...document.querySelectorAll('.mesa-row-open')].some(b => b.textContent.includes('Mesa de Notion'))`), Boolean, 'mesa de Notion en el inicio')
+      await inUi(`[...document.querySelectorAll('.mesa-row-open')].find(b => b.textContent.includes('Mesa de Notion')).click()`)
+      const face = await waitFor(
+        () => inUi<string>(`document.querySelector('.project-face')?.textContent ?? ''`),
+        text => text.includes('In progress'),
+        'ficha en el lienzo',
+      )
+      record('notion: la tarjeta muestra la ficha en el lienzo', face.includes('Branding') && !face.includes('SECRETO'))
+      await shot('12-ficha-notion')
+
+      smokeHooks.notionApiBase = 'http://127.0.0.1:9'
+      const offline = await refresh(projectCard!)
+      record('notion: sin conexión devuelve la caché con su fecha', offline.status === 'error' && typeof offline.cached?.fetchedAt === 'string', {
+        status: offline.status,
+      })
+
+      await inUi(`window.table.settings.clearNotionToken()`)
+      record('ajustes: sin token la tarjeta vuelve a ser web', (await refresh(projectCard!)).status === 'not-configured')
+      await inUi(`window.table.mesas.remove(${JSON.stringify(notionMesa.id)})`)
+    } finally {
+      smokeHooks.notionApiBase = undefined
+      notionServer.server.close()
+    }
 
     await inUi(`window.table.surface.openMesa(null)`)
     await inUi(`window.table.mesas.remove(${JSON.stringify(mesa.id)})`)
