@@ -142,7 +142,9 @@ Mensajes de Chromium en consola sin efecto observado: `sandbox_extension_issue_f
 
 Pegar el frame es la primera edición real hecha desde Table. Falta comprobar que el cambio persiste al salir y volver a entrar, y deshacerlo si se hizo en el archivo original.
 
-Pendiente: persistencia de la edición, persistencia de la sesión tras reiniciar y Pinterest.
+**Cierre con Figma cargado:** el usuario cerró Table con el archivo abierto, tras salir y volver a entrar en la tarjeta. Figma no bloqueó el cierre (no hubo `will-prevent-unload`), el proceso terminó con código 0 y no quedaron procesos del ensayo. La partición `persist:table-t001` quedó en disco.
+
+Pendiente: persistencia de la sesión al reabrir, comprobar la edición tras el reinicio y Pinterest.
 
 ## Incremento C · Conservación, descarga y memoria
 
