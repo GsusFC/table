@@ -75,19 +75,21 @@ Usar el árbol de procesos completo: proceso principal, renderers, GPU, utilidad
 
 Antes de cada ensayo, completar los criterios aplicables al escenario que se va a medir. Los presupuestos de fases posteriores pueden seguir pendientes. Los valores se fijan para el equipo mínimo elegido y el trabajo real del piloto; no se deducen del nombre del lenguaje o framework.
 
+Los valores del escenario A los propuso el asistente y los aceptó el usuario el 2026-10-26. La base de comparación es la app de escritorio de Figma con el mismo archivo, porque es el flujo separado que Table sustituye para el diseño.
+
 | Criterio | Valor fijado | Unidad / método | Estado |
 | --- | --- | --- | --- |
-| RAM del equipo mínimo | — | GiB | Pendiente |
-| Presupuesto del shell en reposo | — | MiB, métrica declarada | Pendiente |
-| Presupuesto del escenario A | — | MiB estable y pico | Pendiente |
+| RAM del equipo mínimo | 16 | GiB; Apple M2 Pro, macOS 27.2. Equipo de referencia provisional: es el del usuario. | Fijado |
+| Presupuesto del shell en reposo | Sin umbral | Se registra como dato de referencia | Fijado |
+| Presupuesto del escenario A | Figma de escritorio con el mismo archivo + 15 % | Suma de `phys_footprint` (`footprint`) del árbol de procesos; estable y pico | Fijado |
 | Presupuesto del escenario B | — | MiB estable y pico | Pendiente |
 | Presupuesto del escenario C | — | MiB estable y pico | Pendiente |
-| Incremento máximo frente al flujo separado | — | MiB o porcentaje, con base declarada | Pendiente |
-| Ciclos de apertura y cierre | — | Número | Pendiente |
-| Ventana de observación tras cerrar contenido | — | Segundos | Pendiente |
-| Crecimiento residual permitido entre ciclos | — | MiB por ciclo o pendiente | Pendiente |
-| Tiempo máximo de apertura y recuperación | — | Milisegundos o segundos | Pendiente |
-| Criterio de presión de memoria y swap | — | Herramienta y umbral | Pendiente |
+| Incremento máximo frente al flujo separado | +15 % | Sobre Figma de escritorio con el mismo archivo y la misma secuencia | Fijado (A) |
+| Ciclos de apertura y cierre | 10 | Número | Fijado |
+| Ventana de observación tras cerrar contenido | 30 | Segundos | Fijado |
+| Crecimiento residual permitido entre ciclos | ≤ 20 MiB por ciclo, sin tendencia creciente | MiB por ciclo | Fijado |
+| Tiempo máximo de apertura y recuperación | 10 | Segundos hasta que Figma vuelve a estar cargado | Fijado |
+| Criterio de presión de memoria y swap | Presión «normal» y swap sin crecimiento durante el ensayo | `memory_pressure` y `sysctl vm.swapusage` | Fijado |
 
 No declarar validado un escenario sin completar sus criterios o con mediciones no comparables. Aprobar A no valida B ni C. Una pérdida de trabajo, una interfaz que deja de responder o procesos huérfanos sin justificación son fallos aunque el total de RAM entre en el presupuesto.
 
