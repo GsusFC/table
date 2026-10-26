@@ -283,6 +283,43 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager): 
     })
     smokeHooks.confirmDiscard = () => false
 
+    // Descarga automática: como mucho 2 webs cargadas; se descarga la menos usada,
+    // y una con cambios sin guardar se queda cargada sin preguntar.
+    const extra = await inUi<Card[]>(`Promise.all([1, 2, 3].map(n =>
+      window.table.cards.add(${JSON.stringify(mesa.id)}, ${JSON.stringify(fixtureUrl)} + '?p=' + n, { x: 1200, y: n * 300 })))`)
+    const enterAndWait = async (cardId: string): Promise<void> => {
+      await inUi(`window.table.surface.enter(${JSON.stringify(mesa.id)}, ${JSON.stringify(cardId)})`)
+      await waitFor(() => surface.getStates().find(state => state.cardId === cardId), state => state?.status === 'ready', 'web cargada')
+    }
+    for (const card of extra) {
+      await enterAndWait(card.id)
+    }
+    const loadedIds = (): string[] => surface.getStates().filter(state => state.status !== 'unloaded').map(state => state.cardId)
+    record(
+      'auto: con 3 webs abiertas se descarga la menos usada',
+      loadedIds().length === 2 && !loadedIds().includes(extra[0]!.id),
+      { loaded: loadedIds().length },
+    )
+    await enterAndWait(guardedCard.id)
+    activate(await waitFor(() => findContents(guardedUrl), Boolean, 'página con cambios').then(contents => contents!))
+    await delay(300)
+    prompts = 0
+    smokeHooks.confirmDiscard = () => {
+      prompts += 1
+      return true
+    }
+    await enterAndWait(extra[0]!.id)
+    await enterAndWait(extra[1]!.id)
+    record(
+      'auto: una web con cambios sin guardar se queda cargada sin preguntar',
+      loadedIds().includes(guardedCard.id) && prompts === 0,
+      { prompts, loaded: loadedIds().length },
+    )
+    smokeHooks.confirmDiscard = () => true
+    await inUi(`window.table.surface.exit()`)
+    await inUi(`window.table.surface.unload(${JSON.stringify(guardedCard.id)})`)
+    smokeHooks.confirmDiscard = () => false
+
     await inUi(`window.table.surface.openMesa(null)`)
     await inUi(`window.table.mesas.remove(${JSON.stringify(mesa.id)})`)
     const listing = await inUi<{ mesas: { name: string }[] }>('window.table.mesas.list()')

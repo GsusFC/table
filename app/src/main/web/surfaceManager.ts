@@ -12,7 +12,14 @@ const CAPTURE_JPEG_QUALITY = 72
 /** Chromium cancela la carga anterior al navegar: no es un fallo. */
 const ERR_ABORTED = -3
 
-type CloseReason = 'quit' | 'unload'
+/** `auto`: descarga automática por límite de webs cargadas; nunca descarta cambios. */
+type CloseReason = 'quit' | 'unload' | 'auto'
+
+/**
+ * Webs cargadas a la vez (activa incluida). Al entrar en otra, se descarga la
+ * menos usada recientemente; si avisa de cambios sin guardar, se queda cargada.
+ */
+const MAX_LOADED_WEBS = 2
 
 /** Web cargada de una tarjeta: su vista, la mesa a la que pertenece y su estado. */
 interface LoadedCard {
@@ -28,6 +35,8 @@ interface LoadedCard {
   state: SurfaceCardState
   /** Inicio de la carga inicial, hasta el primer `did-stop-loading`. */
   loadStartedAt: number | null
+  /** Último momento en que se entró o salió de esta web; para elegir cuál descargar. */
+  lastUsedAt: number
 }
 
 function toRectangle(bounds: PanelBounds): Rectangle {
@@ -78,6 +87,10 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
    * (el smoke), sustituye al diálogo.
    */
   function confirmDiscard(origin: string, reason: CloseReason): boolean {
+    // Una descarga automática nunca descarta trabajo ni interrumpe con un diálogo.
+    if (reason === 'auto') {
+      return false
+    }
     if (callbacks.confirmDiscard) {
       return callbacks.confirmDiscard(origin, reason)
     }
@@ -158,6 +171,7 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
         error: null,
       },
       loadStartedAt: null,
+      lastUsedAt: performance.now(),
     }
     attachListeners(card)
     cards.set(cardId, card)
@@ -344,6 +358,7 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
       return
     }
     active = null
+    card.lastUsedAt = performance.now()
     if (!card.view.webContents.isDestroyed()) {
       card.view.setVisible(false)
     }
@@ -425,6 +440,7 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
       startLoad(card, url)
     }
     active = card
+    card.lastUsedAt = performance.now()
     card.view.setBounds(bounds)
     card.view.setVisible(true)
     card.view.webContents.focus()
@@ -432,6 +448,20 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
       update(card, { entered: true })
     }
     log('surface-enter', { origin: originOf(card.state.currentUrl ?? url) })
+    await enforceLoadedLimit()
+  }
+
+  /** Descarga las webs menos usadas hasta quedar en MAX_LOADED_WEBS, sin tocar la activa. */
+  async function enforceLoadedLimit(): Promise<void> {
+    const candidates = [...cards.values()].filter(card => card !== active).sort((a, b) => a.lastUsedAt - b.lastUsedAt)
+    for (const card of candidates) {
+      if (cards.size <= MAX_LOADED_WEBS) {
+        return
+      }
+      const origin = cardOrigin(card)
+      const result = await unloadCard(card, 'auto')
+      log(result === 'unloaded' ? 'surface-auto-unloaded' : 'surface-auto-kept', { origin })
+    }
   }
 
   const manager: SurfaceManager = {

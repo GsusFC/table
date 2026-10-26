@@ -100,4 +100,6 @@ Instantánea con `footprint` mientras el usuario usaba Table con 3 tarjetas abie
 | Interfaz, proceso principal y resto | ~360 MB |
 | **Total** | **2 984 MB** |
 
-Lectura: cada web cargada (activa o conservada) suma su renderer y aumenta el proceso GPU. Con tres webs conservadas, Table ya supera a Figma de escritorio solo (2 582 MiB estable en T-001). Descargar las tarjetas que no se usan es lo que mantiene el consumo bajo; queda por decidir si Table debe ayudar a hacerlo (aviso o límite de webs conservadas), siempre sin descargar sola una web con cambios.
+Lectura: cada web cargada (activa o conservada) suma su renderer y aumenta el proceso GPU. Con tres webs conservadas, Table ya supera a Figma de escritorio solo (2 582 MiB estable en T-001).
+
+Respuesta, aceptada por el usuario: **descarga automática** con un máximo de 2 webs cargadas (la abierta incluida). Al entrar en otra se descarga la menos usada; si avisa de cambios sin guardar, se queda cargada sin preguntar. Smoke: 22/22, con dos comprobaciones nuevas (descarga de la menos usada y web con cambios conservada sin diálogo).
