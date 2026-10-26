@@ -138,9 +138,11 @@ Las consultas son comprobaciones silenciosas, no peticiones al usuario. `clipboa
 
 Mensajes de Chromium en consola sin efecto observado: `sandbox_extension_issue_file … Operation not permitted`, `task_policy_set … invalid argument` y `error messaging the mach port for IMKCFRunLoopWakeUpReliable` (método de entrada de macOS).
 
-**Copiar y pegar texto:** funciona dentro de Figma y también con texto copiado en otra aplicación, según el usuario. El registro no muestra ninguna solicitud de permiso nueva: el pegado de Figma no necesitó `clipboard-read`. Falta comprobar copiar y pegar capas de Figma.
+**Copiar y pegar:** funciona, según el usuario, con texto dentro de Figma, texto copiado en otra aplicación y un frame copiado y pegado dentro del archivo. El registro no muestra ninguna solicitud de permiso nueva: Figma no necesitó `clipboard-read`.
 
-Pendiente: edición reversible, persistencia de la sesión tras reiniciar y Pinterest.
+Pegar el frame es la primera edición real hecha desde Table. Falta comprobar que el cambio persiste al salir y volver a entrar, y deshacerlo si se hizo en el archivo original.
+
+Pendiente: persistencia de la edición, persistencia de la sesión tras reiniciar y Pinterest.
 
 ## Incremento C · Conservación, descarga y memoria
 
