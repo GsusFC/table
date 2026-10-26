@@ -28,6 +28,8 @@ const TOTAL_TIMEOUT_MS = 120_000
 /** Decisión ante `beforeunload` que el smoke controla; la app la usa solo con TABLE_SMOKE=1. */
 export const smokeHooks = {
   confirmDiscard: (_origin: string, _reason: 'quit' | 'unload'): boolean => false,
+  /** Si algo no se pudo guardar al cerrar; el smoke cierra igualmente. */
+  confirmCloseWithUnsaved: (): boolean => true,
 }
 
 /** Chromium solo respeta `beforeunload` si la página recibió interacción del usuario. */

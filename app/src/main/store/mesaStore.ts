@@ -40,7 +40,28 @@ function checkDate(value: unknown): string {
   return value
 }
 
-/** Exige que el validador acepte el valor sin modificarlo; su error se unifica. */
+/** Igualdad estructural sin depender del orden de las claves. */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (typeof a !== 'object' || a === null || typeof b !== 'object' || b === null) {
+    return Object.is(a, b)
+  }
+  if (Array.isArray(a) !== Array.isArray(b)) {
+    return false
+  }
+  const aKeys = Object.keys(a)
+  const bKeys = Object.keys(b)
+  return (
+    aKeys.length === bKeys.length &&
+    aKeys.every(
+      key => Object.hasOwn(b, key) && sameValue((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]),
+    )
+  )
+}
+
+/**
+ * Exige que el validador acepte el valor sin modificarlo (mismas claves y
+ * valores, en cualquier orden); su error se unifica.
+ */
 function checkSame<T>(value: unknown, parse: (v: unknown) => T): T {
   let parsed: T
   try {
@@ -48,7 +69,7 @@ function checkSame<T>(value: unknown, parse: (v: unknown) => T): T {
   } catch (error) {
     throw new Error(INVALID, { cause: error })
   }
-  if (JSON.stringify(parsed) !== JSON.stringify(value)) {
+  if (!sameValue(parsed, value)) {
     throw new Error(INVALID)
   }
   return parsed
@@ -215,12 +236,12 @@ export function createMesaStore(baseDir: string): MesaStore {
         entries = await readdir(mesasDir)
       } catch (error) {
         if (isErrnoCode(error, 'ENOENT')) {
-          return { mesas: [], unreadable: 0 }
+          return { mesas: [], unreadable: [] }
         }
         throw error
       }
       const summaries: MesaSummary[] = []
-      let unreadable = 0
+      const unreadable: string[] = []
       for (const entry of entries) {
         if (!entry.endsWith(MESA_EXTENSION)) {
           continue
@@ -237,8 +258,8 @@ export function createMesaStore(baseDir: string): MesaStore {
             cardCount: mesa.cards.length,
           })
         } catch (error) {
-          unreadable += 1
-          log('store.mesa-skipped', { reason: error instanceof Error ? error.message : String(error) })
+          unreadable.push(id)
+          log('store.mesa-skipped', { file: entry, reason: error instanceof Error ? error.message : String(error) })
         }
       }
       summaries.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))

@@ -41,7 +41,7 @@ describe('mesas', () => {
   })
 
   it('lista sin carpeta previa devuelve vacío', async () => {
-    expect(await store.list()).toEqual({ mesas: [], unreadable: 0 })
+    expect(await store.list()).toEqual({ mesas: [], unreadable: [] })
   })
 
   it('lista por recencia, la modificada primero', async () => {
@@ -88,7 +88,7 @@ describe('mesas', () => {
     await expect(store.get(mesa.id)).rejects.toThrow('La mesa no existe')
     expect(existsSync(join(baseDir, 'captures', mesa.id))).toBe(false)
     expect(store.capturePath(mesa.id, added.id)).toBeNull()
-    expect(await store.list()).toEqual({ mesas: [], unreadable: 0 })
+    expect(await store.list()).toEqual({ mesas: [], unreadable: [] })
   })
 
   it('get, rename y remove de una mesa inexistente lanzan', async () => {
@@ -112,7 +112,7 @@ describe('archivos ilegibles', () => {
     const content = JSON.stringify({ schemaVersion: 99, id, name: 'Futura', createdAt: 'x', updatedAt: 'x', viewport: {}, cards: [] })
     await writeFile(path, content)
 
-    expect(await store.list()).toEqual({ mesas: [expect.objectContaining({ id: good.id })], unreadable: 1 })
+    expect(await store.list()).toEqual({ mesas: [expect.objectContaining({ id: good.id })], unreadable: [id] })
     await expect(store.get(id)).rejects.toThrow(/versión de esquema/)
     await expect(store.rename(id, 'Pisada')).rejects.toThrow(/versión de esquema/)
     await expect(store.addCard(id, card)).rejects.toThrow(/versión de esquema/)
@@ -124,7 +124,7 @@ describe('archivos ilegibles', () => {
     const id = randomUUID()
     await mkdir(join(baseDir, 'mesas'), { recursive: true })
     await writeFile(join(baseDir, 'mesas', `${id}.json`), '{roto')
-    expect(await store.list()).toEqual({ mesas: [], unreadable: 1 })
+    expect(await store.list()).toEqual({ mesas: [], unreadable: [id] })
     await expect(store.get(id)).rejects.toThrow(/JSON/)
   })
 
@@ -141,7 +141,7 @@ describe('archivos ilegibles', () => {
   }
 
   async function expectUnreadable(file: { id: string; path: string; content: string }): Promise<void> {
-    expect(await store.list()).toEqual({ mesas: [], unreadable: 1 })
+    expect(await store.list()).toEqual({ mesas: [], unreadable: [file.id] })
     await expect(store.get(file.id)).rejects.toThrow('no es válido')
     await expect(store.rename(file.id, 'Pisada')).rejects.toThrow()
     await expect(store.remove(file.id)).rejects.toThrow()
@@ -168,14 +168,25 @@ describe('archivos ilegibles', () => {
     await expectUnreadable(await writeTampered((_c, m) => (m.viewport = { x: 0, y: 0 })))
   })
 
-  it('list cuenta ilegibles junto a mesas válidas', async () => {
+  it('el orden de las claves no hace ilegible una mesa válida', async () => {
+    const mesa = await store.create('Orden')
+    const path = join(baseDir, 'mesas', `${mesa.id}.json`)
+    const stored = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>
+    stored['viewport'] = { zoom: 1, y: 0, x: 0 }
+    await writeFile(path, JSON.stringify(stored))
+    expect((await store.get(mesa.id)).viewport).toEqual({ x: 0, y: 0, zoom: 1 })
+  })
+
+  it('list identifica los ilegibles junto a mesas válidas', async () => {
     const good = await store.create('Buena')
     await mkdir(join(baseDir, 'mesas'), { recursive: true })
-    await writeFile(join(baseDir, 'mesas', `${randomUUID()}.json`), '{roto')
-    await writeFile(join(baseDir, 'mesas', `${randomUUID()}.json`), JSON.stringify({ schemaVersion: SCHEMA_VERSION }))
+    const broken = randomUUID()
+    const partial = randomUUID()
+    await writeFile(join(baseDir, 'mesas', `${broken}.json`), '{roto')
+    await writeFile(join(baseDir, 'mesas', `${partial}.json`), JSON.stringify({ schemaVersion: SCHEMA_VERSION }))
     const listing = await store.list()
     expect(listing.mesas.map(m => m.id)).toEqual([good.id])
-    expect(listing.unreadable).toBe(2)
+    expect([...listing.unreadable].sort()).toEqual([broken, partial].sort())
   })
 })
 

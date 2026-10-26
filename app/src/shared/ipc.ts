@@ -68,11 +68,19 @@ export interface TableApi {
     onState(listener: (state: SurfaceCardState) => void): () => void
   }
   onCardChanged(listener: (mesaId: MesaId, card: Card) => void): () => void
-  onPersistenceError(listener: (message: string) => void): () => void
+  onPersistenceError(listener: (error: PersistenceError) => void): () => void
   /**
    * Antes de cerrar la ventana, el proceso principal pide guardar lo pendiente
-   * (p. ej. la vista del lienzo con retardo). Los manejadores se esperan con un
-   * tiempo límite.
+   * (p. ej. la vista del lienzo con retardo). Un manejador que rechaza indica
+   * que algo no se pudo guardar; entonces Table pregunta antes de cerrar.
    */
   onFlushRequest(handler: () => Promise<void>): () => void
+}
+
+/** Guardado fallido en el proceso principal (captura o título de una tarjeta). */
+export interface PersistenceError {
+  readonly message: string
+  readonly mesaId: MesaId
+  readonly cardId: CardId
+  readonly operation: 'capture' | 'title'
 }

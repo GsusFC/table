@@ -33,6 +33,8 @@ export interface SurfaceManager {
   unload(cardId: CardId): Promise<UnloadResult>
   setPanelBounds(bounds: PanelBounds): void
   getStates(): SurfaceCardState[]
+  /** Mesa abierta según el último `openMesa` que terminó sin `kept`. */
+  getOpenMesa(): MesaId | null
   /**
    * Cierre de la ventana: descarga todo, popups incluidos, respetando
    * `beforeunload`. `false` si el usuario cancela.

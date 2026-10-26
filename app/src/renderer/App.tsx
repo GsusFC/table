@@ -79,7 +79,6 @@ function withoutMesa(history: NavHistory, mesaId: MesaId): NavHistory {
 }
 
 let noticeCounter = 0
-let persistenceErrorCounter = 0
 
 /** Guardado fallido sin resolver: mesa a la que afecta (null si no se sabe) y operación. */
 type FailureKey = string
@@ -106,9 +105,13 @@ interface TrackedOperations {
 export function App() {
   const [history, setHistory] = useState<NavHistory>({ entries: [HOME], index: 0 })
   const route = history.entries[history.index] ?? HOME
+  const routeRef = useRef(route)
+  useEffect(() => {
+    routeRef.current = route
+  })
   const [mesa, setMesa] = useState<Mesa | null>(null)
   const [mesas, setMesas] = useState<readonly MesaSummary[] | null>(null)
-  const [unreadable, setUnreadable] = useState(0)
+  const [unreadable, setUnreadable] = useState<readonly string[]>([])
   const [railOpen, setRailOpen] = useState(true)
   const [states, setStates] = useState<ReadonlyMap<CardId, SurfaceCardState>>(() => new Map())
   const [notice, setNotice] = useState<Notice | null>(null)
@@ -161,7 +164,16 @@ export function App() {
     }
   }, [notifyError])
 
+  /** Quita los fallos que cumplen `matches`. */
+  const clearFailures = useCallback((matches: (key: FailureKey, mesaId: MesaId | null) => boolean) => {
+    setFailures(previous => {
+      const next = new Map([...previous].filter(([key, mesaId]) => !matches(key, mesaId)))
+      return next.size === previous.size ? previous : next
+    })
+  }, [])
+
   // Título y captura nuevos de una tarjeta, guardados por el proceso principal.
+  // Un guardado correcto resuelve los fallos anteriores de esa misma tarjeta.
   useEffect(
     () =>
       api.onCardChanged((mesaId, card) => {
@@ -170,8 +182,11 @@ export function App() {
             ? { ...current, cards: current.cards.map(existing => (existing.id === card.id ? card : existing)) }
             : current,
         )
+        const capture = failureKey(mesaId, `card:${card.id}:capture`)
+        const title = failureKey(mesaId, `card:${card.id}:title`)
+        clearFailures(key => key === capture || key === title)
       }),
-    [],
+    [clearFailures],
   )
 
   const applyListing = useCallback((listing: MesaListing) => {
@@ -186,25 +201,17 @@ export function App() {
     })
   }, [applyListing, notifyError])
 
-  // Errores de guardado del proceso principal (capturas, títulos): aviso y fallo visible.
+  // Errores de guardado del proceso principal (capturas, títulos): aviso y fallo
+  // visible en su mesa, con la operación que falló.
   useEffect(
     () =>
-      api.onPersistenceError(message => {
-        persistenceErrorCounter += 1
-        const key = failureKey(null, `main:${persistenceErrorCounter}`)
-        setFailures(previous => new Map(previous).set(key, null))
-        notify(message)
+      api.onPersistenceError(error => {
+        const key = failureKey(error.mesaId, `card:${error.cardId}:${error.operation}`)
+        setFailures(previous => new Map(previous).set(key, error.mesaId))
+        notify(error.message)
       }),
     [notify],
   )
-
-  /** Quita los fallos que cumplen `matches`. */
-  const clearFailures = useCallback((matches: (key: FailureKey, mesaId: MesaId | null) => boolean) => {
-    setFailures(previous => {
-      const next = new Map([...previous].filter(([key, mesaId]) => !matches(key, mesaId)))
-      return next.size === previous.size ? previous : next
-    })
-  }, [])
 
   const enteredState = useMemo(() => {
     for (const state of states.values()) {
@@ -304,15 +311,25 @@ export function App() {
     return result
   }, [])
 
-  // Antes de cerrar: adelantar los guardados con retardo y esperar las escrituras en curso.
+  // Antes de cerrar: adelantar los guardados con retardo, esperar las escrituras
+  // en curso y avisar (rechazando) si alguna falló o queda un fallo sin resolver.
+  const failuresRef = useRef(failures)
+  useEffect(() => {
+    failuresRef.current = failures
+  })
   useEffect(
     () =>
       api.onFlushRequest(async () => {
         for (const flush of flushers.current) {
           flush()
         }
+        let failed = false
         while (inFlight.current.size > 0) {
-          await Promise.allSettled([...inFlight.current])
+          const results = await Promise.allSettled([...inFlight.current])
+          failed ||= results.some(result => result.status === 'rejected')
+        }
+        if (failed || failuresRef.current.size > 0) {
+          throw new Error('Hay cambios sin guardar')
         }
       }),
     [],
@@ -330,6 +347,8 @@ export function App() {
   const show = useCallback(
     async (target: Route, apply: (history: NavHistory) => NavHistory): Promise<void> => {
       const token = ++navigation.current
+      const previous = routeRef.current
+      let surfaceSwitched = false
       try {
         if (enteredRef.current) {
           await api.surface.exit()
@@ -342,6 +361,7 @@ export function App() {
           notify('Una web avisó de cambios sin guardar y sigue abierta; no se ha cambiado de mesa', 'info')
           return
         }
+        surfaceSwitched = true
         if (target.kind === 'mesa') {
           const loaded = await api.mesas.get(target.mesaId)
           if (token !== navigation.current) {
@@ -360,6 +380,10 @@ export function App() {
           applyListing(listing)
         }
       } catch (error) {
+        // La superficie ya cambió de mesa pero la pantalla no: se vuelve a la que se ve.
+        if (surfaceSwitched) {
+          await api.surface.openMesa(previous.kind === 'mesa' ? previous.mesaId : null).catch(() => undefined)
+        }
         if (token === navigation.current) {
           notifyError(error)
         }

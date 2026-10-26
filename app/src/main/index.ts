@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  dialog,
   ipcMain,
   Menu,
   net,
@@ -13,7 +14,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { CAPTURE_PROTOCOL, IPC } from '../shared/ipc'
+import { CAPTURE_PROTOCOL, IPC, type PersistenceError } from '../shared/ipc'
 import type { MesaId } from '../shared/model'
 import { recognizeService } from '../shared/services'
 import {
@@ -113,11 +114,15 @@ function sendToRenderer(channel: string, ...args: unknown[]): void {
   }
 }
 
+/** Guardados del proceso principal que fallaron desde que empezó el cierre. */
+let failuresSinceCloseStarted = 0
+
 /** Sigue una escritura del proceso principal y avisa a la interfaz si falla. */
-function persist<T>(operation: Promise<T>, failureMessage: string, onSaved: (value: T) => void): void {
-  const tracked = operation.then(onSaved, (error: unknown) => {
-    log('persistence-failed', { message: error instanceof Error ? error.message : String(error) })
-    sendToRenderer(IPC.persistenceError, failureMessage)
+function persist<T>(operation: Promise<T>, error: PersistenceError, onSaved: (value: T) => void): void {
+  const tracked = operation.then(onSaved, (cause: unknown) => {
+    failuresSinceCloseStarted += 1
+    log('persistence-failed', { operation: error.operation, message: cause instanceof Error ? cause.message : String(cause) })
+    sendToRenderer(IPC.persistenceError, error)
   })
   pendingPersistence.add(tracked)
   void tracked.finally(() => pendingPersistence.delete(tracked))
@@ -125,31 +130,55 @@ function persist<T>(operation: Promise<T>, failureMessage: string, onSaved: (val
 
 let flushCounter = 0
 
+type FlushResult = 'ok' | 'failed' | 'timeout'
+
 /** Pide a la interfaz que guarde lo pendiente; no espera más de FLUSH_TIMEOUT_MS. */
-function requestRendererFlush(window: BrowserWindow): Promise<void> {
+function requestRendererFlush(window: BrowserWindow): Promise<FlushResult> {
   if (window.isDestroyed() || window.webContents.isLoading()) {
-    return Promise.resolve()
+    return Promise.resolve('ok')
   }
   flushCounter += 1
   const requestId = flushCounter
-  const { promise, resolve } = Promise.withResolvers<void>()
-  const finish = (): void => {
+  const { promise, resolve } = Promise.withResolvers<FlushResult>()
+  const finish = (result: FlushResult): void => {
     clearTimeout(timer)
     ipcMain.removeListener(IPC.appFlushDone, onDone)
-    resolve()
+    resolve(result)
   }
-  const onDone = (event: IpcMainEvent, id: unknown): void => {
+  const onDone = (event: IpcMainEvent, id: unknown, ok: unknown): void => {
     if (isTrustedSender(event) && id === requestId) {
-      finish()
+      finish(ok === true ? 'ok' : 'failed')
     }
   }
   const timer = setTimeout(() => {
     log('renderer-flush-timeout')
-    finish()
+    finish('timeout')
   }, FLUSH_TIMEOUT_MS)
   ipcMain.on(IPC.appFlushDone, onDone)
   window.webContents.send(IPC.appFlushRequest, requestId)
   return promise
+}
+
+/** Si algo no se pudo guardar, el usuario decide si cerrar. `true` = cerrar. */
+function confirmCloseWithUnsaved(window: BrowserWindow, flush: FlushResult): boolean {
+  if (flush === 'ok' && failuresSinceCloseStarted === 0) {
+    return true
+  }
+  if (smokeMode) {
+    return smokeHooks.confirmCloseWithUnsaved()
+  }
+  const choice = dialog.showMessageBoxSync(window, {
+    type: 'warning',
+    buttons: ['Volver a Table', 'Cerrar igualmente'],
+    defaultId: 0,
+    cancelId: 0,
+    message: 'No se han podido guardar todos los cambios.',
+    detail:
+      flush === 'timeout'
+        ? 'La interfaz no confirmó el guardado a tiempo. Si cierras, pueden perderse los últimos cambios.'
+        : 'Algún guardado falló. Si cierras, pueden perderse esos cambios.',
+  })
+  return choice === 1
 }
 
 function registerIpc(): void {
@@ -159,11 +188,21 @@ function registerIpc(): void {
   handle(IPC.mesasRename, (id, name) => requireStore().rename(parseId(id), parseMesaName(name)))
   handle(IPC.mesasRemove, async id => {
     const mesaId = parseId(id)
-    // Se borra desde el inicio: ninguna web de esa mesa debe quedar cargada.
-    if ((await requireSurface().openMesa(null)) === 'kept') {
+    const surfaceManager = requireSurface()
+    const previouslyOpen = surfaceManager.getOpenMesa()
+    // Ninguna web de la mesa debe quedar cargada al borrarla.
+    if ((await surfaceManager.openMesa(null)) === 'kept') {
       throw new Error('Una web de la mesa avisó de cambios sin guardar; no se ha borrado')
     }
-    await requireStore().remove(mesaId)
+    try {
+      await requireStore().remove(mesaId)
+    } catch (error) {
+      // La interfaz sigue mostrando la mesa: la superficie vuelve a tenerla abierta.
+      if (previouslyOpen) {
+        await surfaceManager.openMesa(previouslyOpen)
+      }
+      throw error
+    }
   })
   handle(IPC.mesasSetViewport, (id, viewport) => requireStore().setViewport(parseId(id), parseViewport(viewport)))
 
@@ -283,13 +322,17 @@ function createWindow(): BrowserWindow {
   const manager = createSurfaceManager(window, {
     onState: state => sendToRenderer(IPC.surfaceState, state),
     onCapture: (mesaId: MesaId, cardId, jpeg) => {
-      persist(requireStore().saveCapture(mesaId, cardId, jpeg), 'No se pudo guardar la captura', card =>
-        sendToRenderer(IPC.cardChanged, mesaId, card),
+      persist(
+        requireStore().saveCapture(mesaId, cardId, jpeg),
+        { message: 'No se pudo guardar la captura', mesaId, cardId, operation: 'capture' },
+        card => sendToRenderer(IPC.cardChanged, mesaId, card),
       )
     },
     onTitle: (mesaId: MesaId, cardId, title) => {
-      persist(requireStore().setCardTitle(mesaId, cardId, title), 'No se pudo guardar el título', card =>
-        sendToRenderer(IPC.cardChanged, mesaId, card),
+      persist(
+        requireStore().setCardTitle(mesaId, cardId, title),
+        { message: 'No se pudo guardar el título', mesaId, cardId, operation: 'title' },
+        card => sendToRenderer(IPC.cardChanged, mesaId, card),
       )
     },
     ...(smokeMode ? { confirmDiscard: (origin: string, reason: 'quit' | 'unload') => smokeHooks.confirmDiscard(origin, reason) } : {}),
@@ -311,10 +354,16 @@ function createWindow(): BrowserWindow {
     closeInProgress = true
     void (async () => {
       try {
-        await requestRendererFlush(window)
+        failuresSinceCloseStarted = 0
+        const flush = await requestRendererFlush(window)
+        await Promise.allSettled([...pendingPersistence])
+        if (!confirmCloseWithUnsaved(window, flush)) {
+          return
+        }
         if (!(await manager.closeAll())) {
           return
         }
+        // Las capturas tomadas al salir de la última web también se esperan.
         await Promise.allSettled([...pendingPersistence])
         await requireStore().flush()
         closing = true

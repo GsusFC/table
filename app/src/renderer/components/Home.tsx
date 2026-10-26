@@ -7,8 +7,8 @@ import { NameEditor } from './NameEditor'
 interface HomeProps {
   /** null mientras se carga la lista. */
   readonly mesas: readonly MesaSummary[] | null
-  /** Archivos de mesa que no se pudieron leer (dañados o de otra versión). */
-  readonly unreadable: number
+  /** IDs de archivos de mesa que no se pudieron leer (dañados o de otra versión). */
+  readonly unreadable: readonly string[]
   readonly onOpen: (id: MesaId) => void
   readonly onNewMesa: () => void
   readonly onRename: (id: MesaId, name: string) => Promise<void>
@@ -36,13 +36,25 @@ export function Home({ mesas, unreadable, onOpen, onNewMesa, onRename, onDelete 
           )}
         </header>
 
-        {unreadable > 0 && (
-          <p className="home-unreadable" role="status">
-            <TriangleAlert aria-hidden size={14} strokeWidth={1.75} />
-            {unreadable === 1
-              ? '1 mesa no se puede abrir: archivo dañado o de otra versión. No se ha modificado.'
-              : `${unreadable} mesas no se pueden abrir: archivo dañado o de otra versión. No se han modificado.`}
-          </p>
+        {unreadable.length > 0 && (
+          <div className="home-unreadable" role="status">
+            <p>
+              <TriangleAlert aria-hidden size={14} strokeWidth={1.75} />
+              {unreadable.length === 1
+                ? '1 mesa no se puede abrir: archivo dañado o de otra versión. No se ha modificado.'
+                : `${unreadable.length} mesas no se pueden abrir: archivos dañados o de otra versión. No se han modificado.`}
+            </p>
+            <details>
+              <summary>Archivos afectados</summary>
+              <ul>
+                {unreadable.map(id => (
+                  <li key={id}>
+                    <code>mesas/{id}.json</code>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          </div>
         )}
 
         {sorted === null && (

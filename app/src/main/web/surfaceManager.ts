@@ -467,6 +467,10 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
       }
     },
 
+    getOpenMesa() {
+      return openMesaId
+    },
+
     getStates() {
       return [...cards.values()].map(card => card.state)
     },
