@@ -98,7 +98,7 @@ No declarar validado un escenario sin completar sus criterios o con mediciones n
 | Ejecución | Escenario | Equipo / versiones | Reposo | Pico | Tras descarga | Presión / swap | Apertura / recuperación | Resultado |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | T-001, 2026-10-26 | A | M2 Pro 16 GiB, macOS 27.2; Electron 44.9.3; Figma de escritorio 126.10.11 como base | Shell 112–115 MiB; Figma activa 1 585 MiB (base 2 582) | 2 172–2 524 MiB (base 3 998) | ~233 MiB; 3,8 MiB/ciclo en 10 ciclos | Normal / swap sin crecimiento | 2,0–4,0 s hasta `did-stop-loading` | Cumple con límites ([informe](research/001-desktop-spike-results.md)) |
-| — | B | — | — | — | — | — | — | No ejecutado |
+| T-002, 2026-10-26 | B (parcial: sin ficha de Notion por API ni miniaturas) | M2 Pro 16 GiB, macOS 27.2; Electron 44.9.3; app `app/` | Shell 127 MiB; estable con límite de 2 webs: 1 014–1 303 MiB con 1 a 6 tarjetas (sin límite: 3 471 MiB con 6) | 1 844–2 794 MiB con límite (sin límite: 4 168 MiB con 6) | Descarga automática de la menos usada | Normal / swap sin crecimiento | — | Dato para fijar B; no valida B ([informe](research/002-mesa-y-enlaces-results.md#memoria-con-1-3-y-6-tarjetas-2026-10-26)) |
 | — | C | — | — | — | — | — | — | No ejecutado |
 
 Separar en el informe los datos medidos, su interpretación y la decisión propuesta. Guardar en el repositorio solo métricas y evidencias saneadas: nunca capturas de clientes, URLs privadas, cookies, tokens, prompts completos ni dumps de memoria.

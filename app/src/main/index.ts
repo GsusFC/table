@@ -27,6 +27,7 @@ import {
   parseViewport,
 } from '../shared/validate'
 import { log } from './log'
+import { runMeasure } from './measure'
 import { runSmoke, smokeHooks } from './smoke'
 import { createMesaStore } from './store/mesaStore'
 import type { MesaStore } from './store/types'
@@ -417,5 +418,10 @@ void app.whenReady().then(async () => {
   log('app-ready', { electron: process.versions.electron, chrome: process.versions.chrome })
   if (smokeMode && surface) {
     await runSmoke(window, surface)
+    return
+  }
+  const measureFile = process.env['TABLE_MEASURE']
+  if (measureFile && surface && store) {
+    await runMeasure(window, surface, store, measureFile)
   }
 })

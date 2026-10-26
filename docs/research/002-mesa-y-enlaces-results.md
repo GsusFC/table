@@ -1,6 +1,6 @@
 # Resultados de T-002 · Mesa libre y enlaces
 
-Fecha: 2026-10-26. Estado: **implementada, revisada por Codex en dos rondas y comprobada de forma automática (smoke 19/19); pendiente de prueba manual con el usuario, login de Notion y medición de memoria.**
+Fecha: 2026-10-26. Estado: **completada.** Implementada, revisada por Codex en dos rondas, smoke 22/22, prueba manual del usuario y memoria medida con 1, 3 y 6 tarjetas.
 
 Ficha de la tarea: [T-002](../tasks/002-mesa-y-enlaces.md).
 
@@ -92,7 +92,28 @@ Build compilada, página sintética local y URLs inventadas de Figma, Pinterest 
 
 - ~~Repetir el smoke con la pantalla desbloqueada~~ Hecho: **19/19** con la pantalla desbloqueada (22/22 tras añadir ordenar y la descarga automática); la captura se guarda al salir y se ve en la tarjeta.
 - ~~Confirmar a mano~~ Confirmado por el usuario: entrar y trabajar con la web abierta, «Añadir URL» con `+` y pegando, y la barra superior con la web abierta.
-- Memoria con 1, 3 y 6 tarjetas en condiciones controladas.
+- ~~Memoria con 1, 3 y 6 tarjetas~~ Medida (abajo).
+
+## Memoria con 1, 3 y 6 tarjetas (2026-10-26)
+
+Condiciones: equipo de referencia (D-011), solo Finder y el terminal abiertos, presión **normal** en todas las muestras, swap estable o bajando. Build compilada, sesiones ya iniciadas. Modo `TABLE_MEASURE` (`app/src/main/measure.ts`): por pasada, mesa temporal con N tarjetas; se entra en cada una (carga y 15 s), se sale, y la última queda abierta; 30 s de asentamiento y mediana de 30 s. Métrica: suma de `phys_footprint` del árbol de procesos (`spikes/desktop-001/scripts/sample-memory.mjs`). Tarjetas, en este orden: archivo de Figma del piloto, ficha de Notion del piloto, inicio de Pinterest, inicio de Figma, base de proyectos de Notion, ideas de Pinterest (URLs solo en `.local/`).
+
+| Tarjetas | Sin límite: estable | Sin límite: pico | Con límite de 2: estable | Con límite de 2: pico | Webs cargadas al final (con límite) |
+| --- | --- | --- | --- | --- | --- |
+| Ninguna (shell) | — | — | 127 MiB | 156 MiB | 0 |
+| 1 | 1 288 MiB | no capturado* | 1 303 MiB | 1 844 MiB | 1 |
+| 3 | 2 282 MiB | 2 948 MiB | 1 194 MiB | 2 782 MiB | 2 |
+| 6 | 3 471 MiB | 4 168 MiB | **1 014 MiB** | **2 794 MiB** | 2 |
+
+\* El muestreo de la primera pasada sin límite empezó tarde.
+
+Lectura:
+- Sin límite, cada web añadida suma entre 400 y 700 MiB en estable.
+- Con el límite de 2, el estable deja de crecer con el número de tarjetas (−48 % con 3 y −71 % con 6) y el pico se queda por debajo de 2,8 GiB.
+- El estable con límite depende de qué webs quedan cargadas: con Figma abierto (1 tarjeta) es mayor que con Pinterest y Notion (3 y 6).
+- Con 1 tarjeta (Figma), Table queda en 1,3 GiB frente a 2,6 GiB de Figma de escritorio (T-001).
+
+Propuesta para fijar el escenario B en [validación de memoria](../memory-validation.md), pendiente de aceptación: con el límite de 2 webs, estable ≤ 2 GiB y pico ≤ 3,5 GiB con cualquier número de tarjetas en el equipo de referencia, presión normal. El escenario B completo (ficha de Notion por API y miniaturas de Figma) aún no existe; se medirá cuando estén.
 
 ### Dato informal: 3 tarjetas cargadas en uso real
 

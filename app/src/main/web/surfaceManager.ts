@@ -18,8 +18,16 @@ type CloseReason = 'quit' | 'unload' | 'auto'
 /**
  * Webs cargadas a la vez (activa incluida). Al entrar en otra, se descarga la
  * menos usada recientemente; si avisa de cambios sin guardar, se queda cargada.
+ * Solo para mediciones: `TABLE_MAX_LOADED_WEBS=0` desactiva el límite.
  */
-const MAX_LOADED_WEBS = 2
+const MAX_LOADED_WEBS = ((): number => {
+  const raw = process.env['TABLE_MAX_LOADED_WEBS']
+  const parsed = raw === undefined ? Number.NaN : Number(raw)
+  if (parsed === 0) {
+    return Number.POSITIVE_INFINITY
+  }
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 2
+})()
 
 /** Web cargada de una tarjeta: su vista, la mesa a la que pertenece y su estado. */
 interface LoadedCard {

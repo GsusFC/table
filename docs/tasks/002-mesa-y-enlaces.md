@@ -1,6 +1,6 @@
 # Tarea 002 · Mesa libre y enlaces con «Añadir URL»
 
-Estado: implementada y revisada (Codex, dos rondas); pendiente de prueba manual, login de Notion y memoria. Resultados en [002-mesa-y-enlaces-results.md](../research/002-mesa-y-enlaces-results.md). Fase: 1. Fecha: 26 de octubre de 2026.
+Estado: completada el 2026-10-26. Resultados en [002-mesa-y-enlaces-results.md](../research/002-mesa-y-enlaces-results.md). Fase: 1.
 
 Primera tarea de producto. Construye la base de la aplicación sobre [D-010](../decisions.md) y aplica D-012, D-013 y D-015.
 
@@ -47,7 +47,7 @@ Con la opción B (D-016) la web no sigue el pan y zoom del lienzo: al entrar ocu
 - [x] Con una web abierta, la barra superior sigue usable y ningún menú ni diálogo queda debajo de la web.
 - [x] Cerrar y reabrir Table conserva mesas, tarjetas, posiciones y capturas; las webs abren descargadas.
 - [x] Descargar y cerrar respetan `beforeunload` como en T-001.
-- [ ] Memoria registrada con 1, 3 y 6 tarjetas (una activa y el resto descargadas), como dato para fijar los umbrales del escenario B; no se declara validado B.
+- [x] Memoria registrada con 1, 3 y 6 tarjetas (una activa y el resto descargadas), como dato para fijar los umbrales del escenario B; no se declara validado B.
 - [x] Ningún dato de cliente en el repositorio: pruebas con URLs sintéticas o configuradas en local.
 
 ## Entregables
