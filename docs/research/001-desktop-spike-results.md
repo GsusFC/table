@@ -115,9 +115,30 @@ Cambios respecto al incremento A, motivados por la [evaluación de OpenCove](ope
 - Permisos preguntados al usuario en vez de denegados, para descubrir qué pide Figma sin concederlo a ciegas.
 - No se modifica el user agent: si Google rechaza el login por detectar un navegador integrado, se registra como bloqueo; suplantar a Chrome no es una vía admitida por el proveedor.
 
-Observado al cargar el archivo sin sesión: Figma carga y consulta el permiso `background-sync` (denegado por defecto).
+### Login en Figma (2026-10-26)
 
-Pendiente: login, edición reversible, persistencia tras reiniciar y Pinterest.
+**Funciona.** El usuario confirma que trabaja en el archivo del piloto dentro de la tarjeta. Por los orígenes registrados, el login fue con Google `[INFERENCIA]`. Secuencia (solo orígenes):
+
+1. Figma abre un popup (`popup-opened`, `https://www.figma.com`) que pasa por `accounts.google.com`. Se cierra al terminar, aproximadamente un minuto después.
+2. Un segundo popup de Figma se abre y se cierra; después la tarjeta carga `verify.figma.com` y vuelve a `www.figma.com` con sesión.
+3. Google no bloqueó el login por ser un navegador integrado, con el user agent de Electron sin modificar.
+
+Con el bloqueo de popups del incremento A este login no habría sido posible: el popup es imprescindible.
+
+Permisos observados:
+
+| Tipo | Origen | Permiso | Resultado |
+| --- | --- | --- | --- |
+| Solicitud | `www.figma.com` | `persistent-storage` | Concedido por el usuario |
+| Solicitud | `www.google.com` (dentro de un popup de encuesta de `research.rallyuxr.com`) | `storage-access` | Concedido por el usuario |
+| Consulta | `www.figma.com` | `clipboard-read`, `notifications`, `media`, `loopback-network`, `window-management`, `background-sync` | Denegado (sin solicitud explícita) |
+| Consulta | `verify.figma.com` | `sensors`, `notifications`, `media`, `storage-access`, `persistent-storage`, `background-fetch`, `payment-handler`, `background-sync` | Denegado |
+
+Las consultas son comprobaciones silenciosas, no peticiones al usuario. `clipboard-read` denegado puede afectar al pegado desde otras aplicaciones: hay que comprobarlo.
+
+Mensajes de Chromium en consola sin efecto observado: `sandbox_extension_issue_file … Operation not permitted`, `task_policy_set … invalid argument` y `error messaging the mach port for IMKCFRunLoopWakeUpReliable` (método de entrada de macOS).
+
+Pendiente: edición reversible, persistencia de la sesión tras reiniciar, copiar y pegar, y Pinterest.
 
 ## Incremento C · Conservación, descarga y memoria
 
