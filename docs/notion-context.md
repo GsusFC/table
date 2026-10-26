@@ -1,6 +1,6 @@
 # Notion como contexto del proyecto
 
-Estado: contrato propuesto sobre un principio aceptado. No se ha consultado el workspace privado para validar el esquema.
+Estado: contrato propuesto sobre un principio aceptado. Esquema comprobado contra la API el 2026-10-26 a partir de la ficha del proyecto piloto; la base todavía no está compartida con la integración.
 
 ## Fuente de verdad
 
@@ -8,23 +8,37 @@ La ficha y las páginas del proyecto en Notion contienen el contexto duradero: b
 
 El contexto de una tarea suma una selección explícita del lienzo. Mover el zoom o el encuadre no debería cambiar silenciosamente lo que se entrega al agente.
 
-## Esquema conocido por el documento guía
+## Esquema comprobado
 
-Los nombres siguientes proceden del usuario; no se han comprobado contra la API. El mapeo configurable es una propuesta pendiente. Los IDs deben resolverse y validarse contra el tipo real de cada propiedad.
+Fuente: API de Notion (`Notion-Version: 2022-06-28`), integración interna de solo lectura conectada a la **ficha del proyecto piloto**. Leer la base devuelve `object_not_found`: la integración no está conectada a ella. Por eso no se han podido leer las opciones de `Status` ni recorrer otros proyectos. Los IDs de propiedad se resolvieron y se guardan fuera del repositorio (`.local/notion-schema.json`); el repositorio solo lleva nombres y tipos.
 
-| Campo descrito | Uso previsto | Exposición al agente |
-| --- | --- | --- |
-| `Title` | Nombre del proyecto. | Permitido en el contexto acordado. |
-| `Status` | Filtro y situación del proyecto. | Permitido. |
-| `Services` | Tipo de encargo. | Permitido. |
-| `Start Date`, `Due Date` | Plazos. | Permitido si es pertinente para la tarea. |
-| `Leaders`, `Account` | Responsables y cliente. | Solo datos necesarios para la tarea. |
-| `WORK Figma File` | Archivo único del proyecto. | Referencia autorizada. |
-| `Pinterest Link` | Tablero de referencias. | Referencia autorizada. |
-| `Pinterest` | Posible propiedad duplicada. | No elegir automáticamente entre ambas. |
-| `Budget` | Información económica interna. | Excluido. |
+| Propiedad | Tipo real | Uso previsto | Exposición al agente | En el piloto |
+| --- | --- | --- | --- | --- |
+| `Title` | `title` | Nombre del proyecto. | Permitido en el contexto acordado. | Con valor |
+| `Status` | `status` | Filtro y situación del proyecto. | Permitido. | Con valor |
+| `Services` | `multi_select` | Tipo de encargo. | Permitido. | Vacío |
+| `Start Date`, `Due Date` | `date` | Plazos. | Permitido si es pertinente para la tarea. | Vacíos |
+| `Remaining days` | `formula` | Cuenta atrás derivada. | Permitido. | Con valor |
+| `Leaders` | `people` | Responsables. | Solo datos necesarios para la tarea. Leer nombres requiere la capacidad de usuarios, no concedida. | Vacío |
+| `Account` | `relation` | Cliente, en otra base. | Solo datos necesarios para la tarea; la base relacionada no está compartida. | Vacío |
+| `WORK Figma File` | `url` | Archivo único del proyecto. | Referencia autorizada. | **Vacío** |
+| `Pinterest Link` | `url` | Tablero de referencias. | Referencia autorizada. | **Vacío** |
+| `Pinterest` | `url` | Duplicado del anterior, mismo tipo. | No elegir automáticamente entre ambas. | **Vacío** |
+| `Preview` | `files` | Imagen del proyecto; candidata a miniatura de la tarjeta. | Por decidir. | Con valor |
+| `Budget` | `rich_text` | Información económica interna, como texto libre (no número). | **Excluido.** | Vacío |
+| `Opportunity` | `relation` | Oportunidad comercial, en otra base. | Excluido por defecto hasta aclarar su contenido. | Vacío |
+| `Lead` | `url` | Sin uso documentado. | Excluido por defecto hasta aclarar. | Vacío |
+| `Notion Link` | `url` | Sin uso documentado. | Excluido por defecto hasta aclarar. | Vacío |
 
-Estados descritos: `Not started`, `Blocked`, `In progress`, `Done`, `Archive`. El filtro de proyectos activos es configurable; no se fija su semántica sin validar la base.
+Diferencias con el documento guía: `Account` es una relación con otra base, no un texto; `Budget` es texto libre, así que un filtro no puede depender de su formato; hay cinco propiedades no descritas (`Remaining days`, `Preview`, `Opportunity`, `Lead`, `Notion Link`).
+
+**El piloto no tiene enlazado ni el archivo de Figma ni Pinterest.** El archivo usado en T-001 se configuró a mano. Fase 1 debe tratar la ficha sin enlaces como caso normal: pedir el enlace o permitir asociarlo, sin inventarlo.
+
+`Pinterest` frente a `Pinterest Link`: ambos son `url` y ambos están vacíos en el piloto, así que este proyecto no permite decidir. Con la base compartida se puede contar en cuántos proyectos tiene valor cada uno, sin leer los valores.
+
+El cuerpo de la ficha contiene contenido propio (19 bloques de primer nivel: párrafos, columnas, una cita y un aviso destacado). La exclusión de información económica debe cubrir también el cuerpo, como indica la sección de exclusión.
+
+Estados descritos por el usuario: `Not started`, `Blocked`, `In progress`, `Done`, `Archive`. No se han podido verificar sin acceso a la base. El filtro de proyectos activos es configurable; no se fija su semántica sin validar la base.
 
 El portal descrito contiene Project Tracker, En marcha, Entregables, Resumen/Live Process y una cuenta atrás. Esas etiquetas no se usan como IDs ni se presupone que correspondan a un mismo tipo de bloque.
 

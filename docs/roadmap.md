@@ -11,7 +11,7 @@ Los hitos preservan el orden acordado. Los hallazgos de una prueba pueden cambia
 - [x] Registrar fuentes revisadas y distinguirlas de pruebas ejecutadas.
 - [ ] Revisar esta base documental con el usuario y cerrar las decisiones pendientes que condicionen la primera tarea.
 - [ ] Identificar equipo de prueba, RAM, usuarios iniciales y proyecto piloto. Equipo y RAM fijados ([D-011](decisions.md)); proyecto piloto con archivo de Figma configurado localmente; faltan los usuarios iniciales.
-- [ ] Validar campos, permisos y enlaces de Notion; resolver los dos campos de Pinterest.
+- [ ] Validar campos, permisos y enlaces de Notion; resolver los dos campos de Pinterest. Esquema comprobado desde la ficha del piloto ([contexto de Notion](notion-context.md#esquema-comprobado)); falta compartir la base con la integración.
 - [x] Ejecutar [T-001: prueba de escritorio](tasks/001-desktop-spike.md). Apto para continuar, con límites ([resultados](research/001-desktop-spike-results.md)).
 - [ ] Comparar una base propia con la reutilización que realmente ahorre trabajo. Mesa no ofrece implementación en el repo público revisado; OpenCove [evaluado](research/opencove-evaluation.md) con recomendación de usarlo como referencia, pendiente de decisión; ccanvas sin auditar.
 - [x] Registrar la decisión técnica y el protocolo de memoria aplicable: [D-010](decisions.md) y umbrales del escenario A en [validación de memoria](memory-validation.md). B y C sin umbrales.

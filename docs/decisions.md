@@ -50,8 +50,8 @@ La exclusión de `Budget` del contexto de agentes es un requisito del documento 
 
 ## Preguntas abiertas
 
-- Identificadores de la base/data source de Notion y de las propiedades reales.
-- Enlaces ausentes en el proyecto piloto y campo correcto entre `Pinterest` y `Pinterest Link`.
+- Acceso de la integración a la base de proyectos: los IDs de propiedad están resueltos (guardados fuera del repositorio), pero la base no está compartida, así que no se pueden listar proyectos ni leer las opciones de `Status`.
+- Campo correcto entre `Pinterest` y `Pinterest Link` (ambos `url`, ambos vacíos en el piloto) y uso de `Opportunity`, `Lead` y `Notion Link`. El piloto no tiene enlazados Figma ni Pinterest. Ver [contexto de Notion](notion-context.md#esquema-comprobado).
 - Planes, permisos y límites disponibles de Notion/Figma en el estudio.
 - Carga habitual del equipo de referencia con todas las herramientas abiertas (equipo fijado en D-011). Otros equipos del estudio, si los hay.
 - Usuarios iniciales, uso individual o compartido y política de copia/exportación.
