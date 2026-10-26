@@ -1,9 +1,12 @@
 import {
+  clipboard,
   dialog,
+  Menu,
   session,
   WebContentsView,
   type BrowserWindow,
   type BrowserWindowConstructorOptions,
+  type MenuItemConstructorOptions,
   type Rectangle,
   type WebContents,
 } from 'electron'
@@ -92,6 +95,44 @@ function popupWindowOptions(parent: BrowserWindow): BrowserWindowConstructorOpti
     autoHideMenuBar: true,
     webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
   }
+}
+
+/**
+ * Electron no trae menú contextual. Sin él no se puede «Copiar imagen» de
+ * Pinterest ni de otras referencias web. Solo copia al portapapeles: las
+ * descargas siguen bloqueadas.
+ */
+function attachContextMenu(contents: WebContents): void {
+  contents.on('context-menu', (_event, params) => {
+    const items: MenuItemConstructorOptions[] = []
+    if (params.mediaType === 'image' && params.hasImageContents) {
+      items.push({
+        label: 'Copiar imagen',
+        click: () => {
+          contents.copyImageAt(params.x, params.y)
+          log('image-copied', { origin: originOf(params.srcURL) })
+        },
+      })
+    }
+    if (params.mediaType === 'image' && isHttpUrl(params.srcURL)) {
+      items.push({ label: 'Copiar dirección de la imagen', click: () => clipboard.writeText(params.srcURL) })
+    }
+    if (isHttpUrl(params.linkURL)) {
+      items.push({ label: 'Copiar enlace', click: () => clipboard.writeText(params.linkURL) })
+    }
+    if (params.isEditable) {
+      items.push(
+        { label: 'Cortar', enabled: params.editFlags.canCut, click: () => contents.cut() },
+        { label: 'Copiar', enabled: params.editFlags.canCopy, click: () => contents.copy() },
+        { label: 'Pegar', enabled: params.editFlags.canPaste, click: () => contents.paste() },
+      )
+    } else if (params.selectionText.trim().length > 0) {
+      items.push({ label: 'Copiar', click: () => contents.copy() })
+    }
+    if (items.length > 0) {
+      Menu.buildFromTemplate(items).popup()
+    }
+  })
 }
 
 export class WebSurface {
@@ -238,6 +279,7 @@ export class WebSurface {
     })
     contents.on('did-create-window', popup => {
       this.guardNavigation(popup.webContents)
+      attachContextMenu(popup.webContents)
       popup.once('closed', () => log('popup-closed'))
     })
 
@@ -284,6 +326,7 @@ export class WebSurface {
 
   private guard(contents: WebContents): void {
     this.guardNavigation(contents)
+    attachContextMenu(contents)
 
     contents.on('before-input-event', (event, input) => {
       if (isExitShortcut(input, process.platform)) {

@@ -157,7 +157,9 @@ Abierto desde la barra de dirección en la misma partición (`https://es.pintere
 - No se abrió ningún popup: el paso por `accounts.google.com` ocurrió dentro de la página. `[INFERENCIA]` Login con Google integrado en la página o por redirección.
 - Cierre limpio (código 0).
 
-Pendiente: confirmación del usuario sobre el login y la navegación, y persistencia de la sesión al reabrir.
+**Resultado (confirmado por el usuario):** el login y la navegación por Pinterest funcionan. Al reabrir Table directamente en `es.pinterest.com`, el registro no muestra paso por `accounts.google.com`: la sesión se conservó.
+
+**Hallazgo: copiar imágenes.** El usuario no encontró cómo copiar una imagen. Electron no incluye menú contextual, así que no existía «Copiar imagen». Se añadió un menú contextual mínimo en la web y sus popups: copiar imagen (`copyImageAt`), copiar la dirección de la imagen, copiar enlace y cortar/copiar/pegar en campos editables. No incluye «Guardar imagen»: las descargas siguen bloqueadas. Pendiente de prueba: copiar una imagen de Pinterest y pegarla en Figma.
 
 ## Incremento C · Conservación, descarga y memoria
 
