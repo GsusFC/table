@@ -7,7 +7,7 @@ Lee `AGENTS.md` antes de actuar: contiene las instrucciones comunes del proyecto
 - El repositorio contiene la app en `app/` (T-002) y el ensayo de T-001 en `spikes/desktop-001/`.
 - Fase 1 en curso. T-002 completada: `docs/tasks/002-mesa-y-enlaces.md` y resultados en `docs/research/002-mesa-y-enlaces-results.md`. Decisiones D-010 a D-016 en `docs/decisions.md`; diseño en `docs/design.md`.
 - T-001 está completada: apto para continuar, con límites. Figma y Pinterest funcionan integrados y la memoria del escenario A cumple los umbrales. Estado en `docs/tasks/001-desktop-spike.md` y resultados en `docs/research/001-desktop-spike-results.md`.
-- Base del prototipo aceptada (D-010): Electron + React + TypeScript con `WebContentsView`. Lienzo, terminal y almacenamiento siguen siendo propuestas. El ensayo usa versiones fijadas; sus comandos están en el informe de resultados.
+- Base del prototipo aceptada: Electron + React + TypeScript con `WebContentsView` (D-010), lienzo con React Flow y un JSON por mesa (D-017). La terminal (Fase 2) sigue siendo propuesta (P-004).
 
 ## En cada sesión
 

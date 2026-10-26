@@ -82,7 +82,7 @@ Los valores del escenario A los propuso el asistente y los aceptó el usuario el
 | RAM del equipo mínimo | 16 | GiB; Apple M2 Pro, macOS 27.2 ([D-011](decisions.md), confirmado por el usuario). | Fijado |
 | Presupuesto del shell en reposo | Sin umbral | Se registra como dato de referencia | Fijado |
 | Presupuesto del escenario A | Figma de escritorio con el mismo archivo + 15 % | Suma de `phys_footprint` (`footprint`) del árbol de procesos; estable y pico | Fijado |
-| Presupuesto del escenario B | — | MiB estable y pico | Pendiente |
+| Presupuesto del escenario B | Estable ≤ 2 048 MiB y pico ≤ 3 584 MiB, con el límite de 2 webs cargadas y cualquier número de tarjetas | Suma de `phys_footprint` del árbol de procesos; estable (mediana de 30 s) y pico | Fijado (D-017) |
 | Presupuesto del escenario C | — | MiB estable y pico | Pendiente |
 | Incremento máximo frente al flujo separado | +15 % | Sobre Figma de escritorio con el mismo archivo y la misma secuencia | Fijado (A) |
 | Ciclos de apertura y cierre | 10 | Número | Fijado |

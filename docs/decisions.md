@@ -22,6 +22,7 @@ Fecha inicial: 2026-10-26. Este registro distingue lo acordado de las recomendac
 | D-014 | Usuarios iniciales: el equipo de FLOC*. | Indicación del usuario del 2026-10-26. Concreta D-001. Modo de uso fijado en D-015. |
 | D-015 | Prototipo con mesas individuales: cada persona guarda sus mesas en su equipo. Mesas compartidas y multiusuario quedan como objetivo deseado para después, sin fecha. | Decisión del usuario del 2026-10-26: «sería la leche que fueran compartidas y multiusuario, pero por ahora que funcione». El contenido compartido sigue en Notion, Figma y Pinterest. El modelo de datos local no debe impedir sincronizar más adelante (IDs estables, versión de esquema), sin construir sincronización ahora. Sustituye a P-010. |
 | D-016 | Interfaz: al entrar en una web, esta ocupa el panel principal como en un navegador (opción B); inicio con lista de mesas y «Nueva mesa»; «Añadir URL» con campo en el punto del clic, botón `+` o pegando sobre el lienzo; tarjeta descargada con captura. Estructura de referencia: app de escritorio de Codex (carril lateral, barra superior, lienzo en panel). | Decisión del usuario del 2026-10-26. Detalle en [diseño](design.md). La opción B elimina el riesgo de que una web nativa siga el pan y zoom del lienzo. El aspecto de la tarjeta descargada se revisará en uso. Identidad visual y nombre siguen abiertos. |
+| D-017 | Lienzo con React Flow y guardado local en un JSON por mesa (escritura atómica, cola por mesa, validación al leer) para el prototipo. Umbrales del escenario B: con el límite de 2 webs cargadas, estable ≤ 2 GiB y pico ≤ 3,5 GiB con cualquier número de tarjetas en el equipo de referencia y presión normal. | Aceptado por el usuario el 2026-10-26 («genial») tras la propuesta del asistente con la evidencia de [T-002](research/002-mesa-y-enlaces-results.md). Sustituye a P-002 y P-005. SQLite queda como alternativa si el modelo crece (búsquedas, historial). |
 
 La exclusión de `Budget` del contexto de agentes es un requisito del documento guía, desarrollado en [contexto de Notion](notion-context.md). Su cumplimiento requiere controlar las vías reales de acceso, no solo el prompt inicial.
 
@@ -30,10 +31,10 @@ La exclusión de `Budget` del contexto de agentes es un requisito del documento 
 | ID | Propuesta | Qué falta para decidir |
 | --- | --- | --- |
 | P-001 | Base propia con Electron + React + TypeScript. | Aceptada como D-010 el 2026-10-26. |
-| P-002 | React Flow para el lienzo. | Validar interacción con tarjetas, foco y cantidad representativa de nodos. |
+| P-002 | React Flow para el lienzo. | Aceptada como D-017 el 2026-10-26. |
 | P-003 | WebContentsView para la web activa, si se elige Electron. | Aceptada como D-010 el 2026-10-26. El aviso real de Figma con cambios sin sincronizar no se ha observado; el usuario indica que en el estudio no se edita Figma sin conexión. Riesgo residual: desconexión accidental durante la edición, cubierto por el mismo mecanismo probado con una página sintética. |
 | P-004 | xterm.js + node-pty para la terminal, si se elige Electron. | Compatibilidad con arneses, señales, redimensionado y empaquetado. |
-| P-005 | SQLite para los datos propios de la mesa. | Modelo mínimo y necesidad de copias, exportación y migraciones. JSON sigue siendo alternativa inicial. |
+| P-005 | SQLite para los datos propios de la mesa. | Sustituida por D-017 (JSON por mesa) el 2026-10-26; SQLite queda como alternativa. |
 | P-006 | Campos de Notion configurables, resueltos por ID y tipo. | Validar esquema real y el alcance del asistente de configuración. |
 | P-007 | Notion por API para la ficha y conexión filtrada para agentes. | Comprobar permisos, lista de campos y vías alternativas de acceso. |
 | P-008 | Un editor web de trabajo y referencias descargadas cuando sea seguro. | Medir coste y pérdida de continuidad; no confundir foco con contenido residente. |
