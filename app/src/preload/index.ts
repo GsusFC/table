@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC, type PersistenceError, type TableApi } from '../shared/ipc'
 import type { Card, MesaId } from '../shared/model'
 import type { SurfaceCardState } from '../shared/surface'
+import type { SessionId, SessionInfo } from '../shared/terminal'
 
 const flushHandlers = new Set<() => Promise<void>>()
 
@@ -90,6 +91,31 @@ const api: TableApi = {
     listFrames: (mesaId, cardId) => ipcRenderer.invoke(IPC.figmaListFrames, mesaId, cardId),
     fetchThumbnails: (mesaId, cardIds) => ipcRenderer.invoke(IPC.figmaFetchThumbnails, mesaId, cardIds),
     thumbnail: (mesaId, cardId) => ipcRenderer.invoke(IPC.figmaThumbnail, mesaId, cardId),
+  },
+  terminal: {
+    profiles: () => ipcRenderer.invoke(IPC.terminalProfiles),
+    saveCustomProfile: input => ipcRenderer.invoke(IPC.terminalSaveCustomProfile, input),
+    removeCustomProfile: profileId => ipcRenderer.invoke(IPC.terminalRemoveCustomProfile, profileId),
+    sessions: mesaId => ipcRenderer.invoke(IPC.terminalSessions, mesaId),
+    start: (mesaId, profileId, size) => ipcRenderer.invoke(IPC.terminalStart, mesaId, profileId, size),
+    replay: sessionId => ipcRenderer.invoke(IPC.terminalReplay, sessionId),
+    close: sessionId => ipcRenderer.invoke(IPC.terminalClose, sessionId),
+    write: (sessionId, data) => ipcRenderer.send(IPC.terminalWrite, sessionId, data),
+    resize: (sessionId, size) => ipcRenderer.send(IPC.terminalResize, sessionId, size),
+    onData: listener => {
+      const handler = (_event: IpcRendererEvent, sessionId: SessionId, data: string): void => listener(sessionId, data)
+      ipcRenderer.on(IPC.terminalData, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC.terminalData, handler)
+      }
+    },
+    onSession: listener => {
+      const handler = (_event: IpcRendererEvent, session: SessionInfo): void => listener(session)
+      ipcRenderer.on(IPC.terminalSession, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC.terminalSession, handler)
+      }
+    },
   },
 }
 

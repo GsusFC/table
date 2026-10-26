@@ -15,6 +15,7 @@ import type {
 } from './model'
 import type { FigmaFileFrames, FigmaSettingsView, FrameThumbnail } from './figma'
 import type { NotionSettingsView, ProjectSearchResult, ProjectSnapshot, ProjectState } from './notion'
+import type { HarnessProfile, SessionId, SessionInfo, TerminalSize } from './terminal'
 import type { PanelBounds, SurfaceCardState, UnloadResult } from './surface'
 
 export const IPC = {
@@ -61,6 +62,19 @@ export const IPC = {
   figmaListFrames: 'figma:list-frames',
   figmaFetchThumbnails: 'figma:fetch-thumbnails',
   figmaThumbnail: 'figma:thumbnail',
+  terminalProfiles: 'terminal:profiles',
+  terminalSaveCustomProfile: 'terminal:save-custom-profile',
+  terminalRemoveCustomProfile: 'terminal:remove-custom-profile',
+  terminalSessions: 'terminal:sessions',
+  terminalStart: 'terminal:start',
+  terminalReplay: 'terminal:replay',
+  terminalClose: 'terminal:close',
+  /** renderer → main, sin respuesta (alta frecuencia) */
+  terminalWrite: 'terminal:write',
+  terminalResize: 'terminal:resize',
+  /** main → renderer */
+  terminalData: 'terminal:data',
+  terminalSession: 'terminal:session',
 } as const
 
 /**
@@ -151,6 +165,30 @@ export interface TableApi {
     fetchThumbnails(mesaId: MesaId, cardIds: readonly CardId[]): Promise<void>
     /** Miniatura guardada de una tarjeta de frame, o null. */
     thumbnail(mesaId: MesaId, cardId: CardId): Promise<FrameThumbnail | null>
+  }
+  /**
+   * Sesiones de terminal con un arnés (T-007). Solo transportan teclas y
+   * salida; Table no interpreta lo que hace el arnés ni responde por él.
+   */
+  readonly terminal: {
+    /** Catálogo (con los instalados marcados como disponibles) y perfiles propios. */
+    profiles(): Promise<HarnessProfile[]>
+    /** Añade un perfil propio; devuelve la lista completa. */
+    saveCustomProfile(input: { name: string; command: string }): Promise<HarnessProfile[]>
+    removeCustomProfile(profileId: string): Promise<HarnessProfile[]>
+    /** Sesiones de una mesa (en marcha y terminadas que aún no se han cerrado). */
+    sessions(mesaId: MesaId): Promise<SessionInfo[]>
+    /** Arranca el perfil en la carpeta de trabajo de la mesa. */
+    start(mesaId: MesaId, profileId: string, size: TerminalSize): Promise<SessionInfo>
+    /** Salida guardada de la sesión (hasta SESSION_REPLAY_BYTES), para volver a pintarla. */
+    replay(sessionId: SessionId): Promise<string>
+    /** Termina el proceso (y sus hijos) y olvida la sesión. La interfaz confirma antes. */
+    close(sessionId: SessionId): Promise<void>
+    write(sessionId: SessionId, data: string): void
+    resize(sessionId: SessionId, size: TerminalSize): void
+    onData(listener: (sessionId: SessionId, data: string) => void): () => void
+    /** Cambios de estado de una sesión (arranque, salida). */
+    onSession(listener: (session: SessionInfo) => void): () => void
   }
 }
 
