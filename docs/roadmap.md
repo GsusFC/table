@@ -22,11 +22,11 @@ Salida: evidencia de que la edición integrada y su ciclo de vida funcionan, dec
 
 - [x] Crear mesas libremente, con nombre, y añadir enlaces al crearlas o después ([D-013](decisions.md)). T-002.
 - [x] «Añadir URL» con clic derecho; reconocer Figma, Notion, Pinterest y otras webs, y crear la tarjeta web ([D-012](decisions.md)). T-002.
-- [ ] Configuración global: credenciales de Notion y preferencias comunes, fuera de la mesa y de Git.
-- [ ] Mostrar la ficha autorizada de Notion de la mesa por API.
-- [ ] Mostrar una selección de frames del archivo de Figma enlazado.
+- [x] Configuración global: credenciales de Notion y preferencias comunes, fuera de la mesa y de Git. T-003 (Notion por OAuth) y T-005 (token de Figma).
+- [x] Mostrar la ficha autorizada de Notion de la mesa por API. T-003, con «Vincular proyecto».
+- [x] Mostrar una selección de frames del archivo de Figma enlazado. T-005, con un solo editor por archivo.
 - [x] Editar en el navegador integrado según el resultado de T-001; referencias con URL y captura con fecha. T-002 (Figma, Notion y Pinterest).
-- [ ] Crear notas, conexiones y posiciones persistentes.
+- [x] Crear notas, conexiones y posiciones persistentes. T-004.
 - [ ] Reabrir la mesa sin perder trabajo y distinguir caché de información actual.
 - [ ] Validar memoria del flujo sin agentes, cierre y recuperación.
 

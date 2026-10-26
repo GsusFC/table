@@ -1,6 +1,6 @@
 # Tarea 005 · Páginas y frames de Figma
 
-Estado: en curso desde el 2026-10-26. Fase: 1.
+Estado: completada el 2026-10-26, salvo la prueba sin conexión, que pasa a [T-006](006-validacion-fase-1.md). Fase: 1.
 
 ## Resultado esperado
 
@@ -22,9 +22,9 @@ Desde una tarjeta de un archivo de Figma se eligen frames y aparecen en la mesa 
 
 - [x] Elegir frames de un archivo y crear sus tarjetas con miniatura. *Smoke con una API de Figma falsa.*
 - [x] Entrar en un frame abre el editor en ese nodo sin cargar un segundo editor del mismo archivo. *Smoke con páginas locales que simulan dos URL del mismo archivo; falta con Figma real.*
-- [ ] Sin conexión o al llegar al límite, se muestra la miniatura guardada con su fecha y el motivo. *La miniatura guardada se mantiene si falla la petición y el error se avisa; falta comprobarlo con Figma real.*
+- [ ] Sin conexión o al llegar al límite, se muestra la miniatura guardada con su fecha y el motivo. *Por código: la miniatura solo se sustituye si la nueva llega bien, y el fallo se avisa. Se prueba en T-006.*
 - [x] Ningún token ni miniatura de cliente en Git ni en logs.
-- [ ] Probado con un archivo real del usuario.
+- [x] Probado con un archivo real del usuario. *Token, «Añadir frames» con miniaturas y entrar en un frame con el editor del archivo: «fue perfecto».*
 
 ## Comprobaciones (2026-10-26)
 

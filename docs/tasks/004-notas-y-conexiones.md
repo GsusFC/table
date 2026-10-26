@@ -1,6 +1,6 @@
 # Tarea 004 · Notas y conexiones
 
-Estado: en curso desde el 2026-10-26. Fase: 1.
+Estado: completada el 2026-10-26; lo que falta probar a mano pasa a [T-006](006-validacion-fase-1.md). Fase: 1.
 
 ## Resultado esperado
 
@@ -31,4 +31,4 @@ En una mesa se pueden escribir notas internas y conectar tarjetas y notas entre 
 
 - Tests: notas (crear, editar, borrar), conexiones (los tres tipos, autoconexión, duplicado en ambos sentidos, IDs ajenos o inexistentes, borrado en cascada de tarjeta y nota en la misma escritura), migración de una mesa sintética de la versión 1 y archivos de la versión 2 dañados, que no se tocan. Geometría de las conexiones y cuadrícula/imán con notas.
 - Smoke: clic derecho → «Añadir nota», escribir con `⌘A`/`⌫` sin afectar al lienzo, `Esc` guarda, arrastrar nota→tarjeta y tarjeta→tarjeta, rechazo de duplicado y autoconexión, `⌘A` + alinear y ordenar con la nota, clic en una línea + `⌫`, recarga con texto y conexión conservados, borrar la nota con su conexión.
-- Pendiente: prueba manual del usuario (aspecto de notas, asas y líneas; arrastrar conexiones con el ratón real).
+- Prueba del usuario: conectó tarjetas con el ratón real (encontró que solo funcionaba soltando en el centro; corregido, ahora vale cualquier punto y las asas) y su nota se conservó al cerrar y reabrir Table. Pasan a T-006: redimensionar una nota con el ratón, el imán arrastrando una nota y `⇧`+clic con notas.

@@ -1,6 +1,6 @@
 # Tarea 003 · Ajustes y ficha de Notion
 
-Estado: en curso desde el 2026-10-26. Fase: 1.
+Estado: completada el 2026-10-26. Fase: 1.
 
 Aplica [D-012](../decisions.md) («el servicio reconocido añade capacidades») y el contrato de [contexto de Notion](../notion-context.md).
 
@@ -40,7 +40,7 @@ La primera versión usaba el token de una integración interna pegado en Ajustes
 - [x] Un fixture con `Budget`, `Lead`, `Notion Link`, `Preview`, la fórmula y un cuerpo con importes no saca nada de eso de la ficha (test y smoke).
 - [x] Sin conexión o con error, la tarjeta muestra la caché con su fecha y el motivo, sin declarar que está actualizada.
 - [x] Ni logs ni errores imprimen credenciales ni contenido de la ficha.
-- [ ] Probado con la ficha real del piloto desde la app, con la cuenta del usuario.
+- [x] Probado con la ficha real del piloto desde la app, con la cuenta del usuario. *El usuario conectó Notion, vinculó el proyecto y vio la ficha: «funciona».*
 
 ## Comprobaciones (2026-10-26)
 
