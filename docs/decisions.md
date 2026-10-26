@@ -8,7 +8,7 @@ Fecha inicial: 2026-10-26. Este registro distingue lo acordado de las recomendac
 | --- | --- | --- |
 | D-001 | Herramienta interna de FLOC* primero. | Documento guía del usuario: validar con uso real antes de pensar en producto. |
 | D-002 | Notion es la fuente de verdad del contexto del proyecto. | Documento guía y confirmación posterior del usuario: «El contexto puede ser Notion». |
-| D-003 | Un archivo de Figma por proyecto. | Forma de trabajo descrita por el usuario. Origen del enlace modificado por D-012 (2026-10-26): ya no se lee de `WORK Figma File`, lo añade el usuario en Table. |
+| D-003 | Lo habitual es un archivo de Figma por proyecto, con muchas páginas. Table no limita el número de archivos por mesa. | Forma de trabajo descrita por el usuario. Origen del enlace modificado por D-012: ya no se lee de `WORK Figma File`, lo añade el usuario en Table. Precisado el 2026-10-26: pueden añadirse varios archivos, pero el caso normal es uno con muchas páginas. |
 | D-004 | Orden: proyecto en un sitio → agentes → publicar. | Fases decididas en el documento guía. |
 | D-005 | La terminal es una pieza permanente, abierta a arneses alternativos. | Aclaración del usuario: poder ejecutar otros arneses además de Codex y Claude Code. Sustituye la recomendación de evolucionar obligatoriamente hacia UI propias por proveedor. |
 | D-006 | Cada usuario utiliza su autenticación con cada arnés/proveedor. | Aclaración del usuario. No implica que una suscripción autorice cualquier cliente ni que Table gestione sus tokens. |
@@ -55,7 +55,7 @@ La exclusión de `Budget` del contexto de agentes es un requisito del documento 
 ## Preguntas abiertas
 
 - Acceso de la integración de Notion a cada ficha enlazada (D-013): conectarla una vez a la base de proyectos evita conectar ficha a ficha. No está hecho.
-- Si D-003 limita Table a una tarjeta de Figma por mesa o es solo la costumbre del estudio.
+- Cómo se representan las páginas y frames de un archivo de Figma en el lienzo. Propuesta: un único editor web cargado por archivo y tarjetas ligeras de página o frame (miniatura por API) que llevan ese editor al nodo, en vez de un editor por página. Cada editor de Figma cargado ocupó ~1,6 GiB en T-001.
 - Uso de `Opportunity`, `Lead` y `Notion Link`, para decidir si el contexto entregado a los agentes los incluye. Ver [contexto de Notion](notion-context.md#esquema-comprobado).
 - Notion como tarjeta web editable dentro de Table: login y edición no probados en T-001.
 - Planes, permisos y límites disponibles de Notion/Figma en el estudio.

@@ -45,7 +45,7 @@ Este flujo describe el producto objetivo. No está implementado.
 | --- | --- |
 | Web | Cualquier URL añadida por el usuario: Figma, Notion, Pinterest u otra web. Mismo ciclo de vida para todas (activa, conservada, descargada) y captura con fecha. El servicio reconocido añade capacidades: contexto de Notion por API, miniaturas y nodos de Figma por API. |
 | Proyecto | Datos autorizados de la ficha de Notion enlazada, con su origen. |
-| Frame | Miniatura, enlace y referencia estable a un nodo de Figma. |
+| Frame | Página o frame de un archivo de Figma: miniatura por API y referencia estable al nodo. Propuesta: abre el editor del archivo en ese nodo en lugar de cargar otro editor, porque cada editor de Figma cargado ocupó ~1,6 GiB en T-001. |
 | Referencia | Captura, URL, fecha y anotación. |
 | Nota | Texto interno del proceso. |
 | Sesión | Terminal del arnés, identidad visible y estado de ejecución. |
