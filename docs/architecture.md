@@ -1,6 +1,6 @@
 # Arquitectura propuesta
 
-Estado: propuesta, no implementada. Las elecciones están pendientes en [decisiones](decisions.md).
+Estado: contenedor y web integrada aceptados para el prototipo de Fase 1 ([D-010](decisions.md)); el resto sigue siendo propuesta. Solo existe el ensayo de T-001, no la aplicación.
 
 ## Reparto de responsabilidades
 
@@ -17,10 +17,10 @@ Table puede guardar una caché fechada de contenido remoto, pero no debe present
 
 | Pieza | Candidata | Estado |
 | --- | --- | --- |
-| Contenedor | Electron | Propuesto; depende de las pruebas de navegador y memoria. |
-| Interfaz | React + TypeScript | Propuesto. |
+| Contenedor | Electron | Aceptado para el prototipo (D-010); validado en T-001. |
+| Interfaz | React + TypeScript | Aceptado para el prototipo (D-010). |
 | Lienzo | React Flow | Propuesto; no confundir con motor de edición de Figma. |
-| Web integrada | WebContentsView | Candidato preferido dentro de Electron. |
+| Web integrada | WebContentsView | Aceptado para el prototipo (D-010); login, sesión, edición y descarga segura validados en T-001. |
 | Terminal | xterm.js + node-pty | Propuesto; PTY real. |
 | Datos locales | SQLite | Propuesto; JSON todavía posible para una prueba acotada. |
 | Contexto | API de Notion + herramientas filtradas + exportación temporal | Contrato por validar. |

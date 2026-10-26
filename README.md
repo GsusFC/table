@@ -44,7 +44,7 @@ Para compartir el contexto con Claude Code:
 
 ## Estado técnico
 
-Electron + React + TypeScript es la propuesta principal para el prototipo. React Flow, WebContentsView, xterm.js, node-pty y SQLite son piezas candidatas. Rust/Tauri se han evaluado conceptualmente. Electron y WebContentsView superaron el ensayo T-001 (escenario A de memoria); **la arquitectura aún no está aprobada**.
+Base del prototipo aceptada ([D-010](docs/decisions.md)): Electron + React + TypeScript con WebContentsView, tras el ensayo T-001. React Flow, xterm.js, node-pty y SQLite siguen siendo piezas candidatas. Rust/Tauri no se eligió para el prototipo. **El stack definitivo del producto sigue abierto.**
 
 ## Información del repositorio
 

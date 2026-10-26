@@ -14,7 +14,8 @@ Fecha inicial: 2026-10-26. Este registro distingue lo acordado de las recomendac
 | D-006 | Cada usuario utiliza su autenticación con cada arnés/proveedor. | Aclaración del usuario. No implica que una suscripción autorice cualquier cliente ni que Table gestione sus tokens. |
 | D-007 | Claude Code y Codex colaborarán en el desarrollo de Table. | Documento guía y aclaración del usuario del 2026-10-26: Claude Code también ayudará en el desarrollo y recibirá esta documentación. Ambos pueden construir y revisar; no hay roles fijos. |
 | D-008 | Documentación del producto en `GsusFC/table`. | Destino indicado por el usuario; repositorio vacío al comenzar. |
-| D-009 | El consumo de memoria es una preocupación prioritaria. | El usuario señala el conjunto Figma + Notion + Pinterest + terminal + dos agentes. No se ha fijado todavía un límite numérico. |
+| D-009 | El consumo de memoria es una preocupación prioritaria. | El usuario señala el conjunto Figma + Notion + Pinterest + terminal + dos agentes. Umbrales del escenario A aceptados el 2026-10-26 en [validación de memoria](memory-validation.md); B y C sin fijar. |
+| D-010 | Electron + React + TypeScript, con `WebContentsView` para la web integrada, como base del prototipo de Fase 1. Revisable si el escenario B de memoria no cumple sus umbrales. | Decisión expresa del usuario del 2026-10-26, tras recomendación del asistente, basada en [T-001](research/001-desktop-spike-results.md): login, sesión, edición y portapapeles reales en Figma y Pinterest; memoria 39 % por debajo de Figma de escritorio; descarga sin crecimiento residual. No decide lienzo, terminal ni almacenamiento (P-002, P-004, P-005), ni el stack definitivo del producto. Sustituye a P-001 y P-003. |
 
 La exclusión de `Budget` del contexto de agentes es un requisito del documento guía, desarrollado en [contexto de Notion](notion-context.md). Su cumplimiento requiere controlar las vías reales de acceso, no solo el prompt inicial.
 
@@ -22,9 +23,9 @@ La exclusión de `Budget` del contexto de agentes es un requisito del documento 
 
 | ID | Propuesta | Qué falta para decidir |
 | --- | --- | --- |
-| P-001 | Base propia con Electron + React + TypeScript. | T-001 concluye «apto para continuar» en el escenario A ([resultados](research/001-desktop-spike-results.md)). Falta la decisión del usuario. |
+| P-001 | Base propia con Electron + React + TypeScript. | Aceptada como D-010 el 2026-10-26. |
 | P-002 | React Flow para el lienzo. | Validar interacción con tarjetas, foco y cantidad representativa de nodos. |
-| P-003 | WebContentsView para la web activa, si se elige Electron. | Comprobados en T-001: login, sesión persistente, edición, foco, geometría y cierre con `beforeunload` sintético. Falta observar el aviso real de Figma con cambios sin sincronizar y la decisión del usuario. |
+| P-003 | WebContentsView para la web activa, si se elige Electron. | Aceptada como D-010 el 2026-10-26. Pendiente de observar: aviso real de Figma con cambios sin sincronizar. |
 | P-004 | xterm.js + node-pty para la terminal, si se elige Electron. | Compatibilidad con arneses, señales, redimensionado y empaquetado. |
 | P-005 | SQLite para los datos propios de la mesa. | Modelo mínimo y necesidad de copias, exportación y migraciones. JSON sigue siendo alternativa inicial. |
 | P-006 | Campos de Notion configurables, resueltos por ID y tipo. | Validar esquema real y el alcance del asistente de configuración. |
@@ -40,9 +41,9 @@ La exclusión de `Budget` del contexto de agentes es un requisito del documento 
 | Alternativa | Situación |
 | --- | --- |
 | Mesa como base de código | El repo público revisado solo tenía README y licencia; último commit 2026-03-30. No hay implementación pública acreditada que reutilizar. Esto no prueba abandono del producto privado. |
-| OpenCove como base | Revisado estáticamente y arrancado en modo desarrollo el 2026-10-26 (commit `e10604b9`). Recomendación pendiente de decisión: usarlo como referencia, no como base. Ver [evaluación](research/opencove-evaluation.md). |
+| OpenCove como base | Revisado estáticamente y arrancado en modo desarrollo el 2026-10-26 (commit `e10604b9`). Recomendación del asistente: usarlo como referencia, no como base; T-001 se construyó así. Ver [evaluación](research/opencove-evaluation.md). |
 | ccanvas como base | Referencia candidata con Tauri/Rust; no adoptada ni auditada. |
-| Rust/Tauri | Evaluación conceptual. Puede aportar un motor local eficiente, pero la estrategia de navegador y la complejidad deben validarse. |
+| Rust/Tauri | No elegido para el prototipo (D-010). Tauri 2 usa WebKit en macOS y sus vistas web hijas son inestables; reevaluar solo si el escenario B o C de memoria no cumple con Electron. |
 | Electron con un componente Rust | Posibilidad futura si un perfil de rendimiento identifica una necesidad concreta. |
 | UI propia de Claude y Codex como destino obligatorio | Reemplazada por D-005. Adaptadores opcionales siguen siendo posibles. |
 

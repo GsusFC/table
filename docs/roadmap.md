@@ -1,6 +1,6 @@
 # Fases y estado
 
-Fecha: 2026-10-26. **Estado actual: Fase 0. T-001 completada: apto para continuar, con límites. Pendiente la decisión técnica del usuario. No hay implementación de producto.**
+Fecha: 2026-10-26. **Estado actual: Fase 0. T-001 completada y D-010 aceptada: Electron + React + TypeScript con WebContentsView para el prototipo. No hay implementación de producto.**
 
 Los hitos preservan el orden acordado. Los hallazgos de una prueba pueden cambiar una propuesta técnica sin ampliar la fase entera.
 
@@ -14,7 +14,7 @@ Los hitos preservan el orden acordado. Los hallazgos de una prueba pueden cambia
 - [ ] Validar campos, permisos y enlaces de Notion; resolver los dos campos de Pinterest.
 - [x] Ejecutar [T-001: prueba de escritorio](tasks/001-desktop-spike.md). Apto para continuar, con límites ([resultados](research/001-desktop-spike-results.md)).
 - [ ] Comparar una base propia con la reutilización que realmente ahorre trabajo. Mesa no ofrece implementación en el repo público revisado; OpenCove [evaluado](research/opencove-evaluation.md) con recomendación de usarlo como referencia, pendiente de decisión; ccanvas sin auditar.
-- [ ] Registrar la decisión técnica y el protocolo de memoria aplicable.
+- [x] Registrar la decisión técnica y el protocolo de memoria aplicable: [D-010](decisions.md) y umbrales del escenario A en [validación de memoria](memory-validation.md). B y C sin umbrales.
 
 Salida: evidencia de que la edición integrada y su ciclo de vida funcionan, decisiones documentadas y una tarea de producto delimitada. Un fallo de login o de estado pendiente puede cambiar el alcance; no se declara la fase libre de bloqueos por anticipado.
 
@@ -64,4 +64,4 @@ Salida: publicación deliberada y trazable de un resultado revisado. Workers y e
 
 ## Próxima tarea
 
-[T-001](tasks/001-desktop-spike.md) está completada. La siguiente tarea de producto depende de la decisión sobre P-001 y P-003 y de los puntos abiertos de esta fase. No ejecutar toda la hoja de ruta de forma automática. Cada sesión debe terminar con un resultado verificable y el estado real de su tarea.
+[T-001](tasks/001-desktop-spike.md) está completada y [D-010](decisions.md) fija la base del prototipo. Antes de la primera tarea de Fase 1 quedan los puntos abiertos de esta fase: equipo y usuarios de prueba, campos de Notion y comparación con reutilización (ccanvas sin auditar). No ejecutar toda la hoja de ruta de forma automática. Cada sesión debe terminar con un resultado verificable y el estado real de su tarea.
