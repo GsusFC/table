@@ -87,4 +87,17 @@ Build compilada, página sintética local y URLs inventadas de Figma, Pinterest 
 - Repetir el smoke con la pantalla desbloqueada (captura y su visualización en la tarjeta).
 - Prueba manual con el usuario: aspecto, interacción, tarjeta descargada «en acción» (D-016).
 - Notion como tarjeta web: login y edición.
-- Memoria con 1, 3 y 6 tarjetas.
+- Memoria con 1, 3 y 6 tarjetas en condiciones controladas.
+
+### Dato informal: 3 tarjetas cargadas en uso real
+
+Instantánea con `footprint` mientras el usuario usaba Table con 3 tarjetas abiertas (2026-10-26). **No es una medición del escenario B:** presión de memoria en aviso, swap con ~18 GiB usados y otras apps abiertas (Chrome, Notion, Figma de escritorio, Discord, ChatGPT).
+
+| Proceso | `phys_footprint` |
+| --- | --- |
+| GPU | 1 128 MB |
+| Renderers de las webs (3 mayores) | 879 + 441 + 177 MB |
+| Interfaz, proceso principal y resto | ~360 MB |
+| **Total** | **2 984 MB** |
+
+Lectura: cada web cargada (activa o conservada) suma su renderer y aumenta el proceso GPU. Con tres webs conservadas, Table ya supera a Figma de escritorio solo (2 582 MiB estable en T-001). Descargar las tarjetas que no se usan es lo que mantiene el consumo bajo; queda por decidir si Table debe ayudar a hacerlo (aviso o límite de webs conservadas), siempre sin descargar sola una web con cambios.
