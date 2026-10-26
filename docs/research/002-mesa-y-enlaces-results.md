@@ -1,6 +1,6 @@
 # Resultados de T-002 · Mesa libre y enlaces
 
-Fecha: 2026-10-26. Estado: **implementada y comprobada de forma automática; pendiente de revisión independiente, prueba manual con el usuario, login de Notion y medición de memoria.**
+Fecha: 2026-10-26. Estado: **implementada, revisada por Codex en dos rondas y comprobada de forma automática; pendiente de prueba manual con el usuario, login de Notion, captura con la pantalla desbloqueada y medición de memoria.**
 
 Ficha de la tarea: [T-002](../tasks/002-mesa-y-enlaces.md).
 
@@ -15,7 +15,24 @@ Contratos escritos primero (`app/src/shared/`, interfaces de `app/src/main/store
 | Superficie web | `app/src/main/web/` | Tipos; sin ejecutar |
 | Interfaz | `app/src/renderer/` | Tipos y build; sin ejecutar |
 
-La integración y el smoke de punta a punta los hizo el integrador. La revisión independiente se encarga a Codex.
+La integración y el smoke de punta a punta los hizo el integrador (Claude Code).
+
+## Revisión independiente (Codex)
+
+Codex (`codex exec`, solo lectura) revisó el commit `eadaa81` sin haber escrito el código. Sin bloqueantes; 6 hallazgos importantes y 2 menores. Se corrigieron en `5721321`, `6b523d2` y `0561a3b`; una segunda revisión de Codex confirmó cada corrección y señaló tres puntos más, también corregidos.
+
+| Hallazgo | Corrección |
+| --- | --- |
+| Los popups se destruían sin `beforeunload` | Se cierran con el mismo flujo que la web; si uno se mantiene, la tarjeta no se descarga. |
+| El cierre no esperaba a los guardados | Cierre coordinado: la interfaz guarda lo pendiente, se esperan capturas, títulos y colas; si algo falló o la interfaz no confirma a tiempo, Table pregunta antes de cerrar. |
+| Archivos con URL o geometría inválidas pasaban la lectura | Validación completa al leer (sin depender del orden de claves) y `http(s)` exigido de nuevo antes de cargar. |
+| Una entrada retrasada podía abrir una web de otra mesa | La superficie registra la mesa abierta y rechaza entradas de otra; si falla abrir o borrar una mesa, se restaura la anterior. |
+| Dos instancias podían pisarse cambios | Bloqueo de instancia única. |
+| «Guardado» podía ocultar fallos | Fallos por operación y por tarjeta; solo se resuelven al guardar bien esa misma operación. |
+| Mesas ilegibles desaparecían sin aviso | Aviso en Inicio con los archivos afectados, que no se tocan. |
+| Foco en controles aún ocultos | Foco tras posicionar el menú y el campo «Añadir URL». |
+
+Revisiones guardadas fuera del repositorio en `.local/codex-review-t002-result.md` y `.local/codex-rereview-t002-result.md`.
 
 ## Comandos
 
@@ -59,13 +76,15 @@ Build compilada, página sintética local y URLs inventadas de Figma, Pinterest 
 | Al abrir una mesa no se carga ninguna web | Correcto |
 | Borrar la mesa | Correcto |
 | Procesos tras cerrar | 0 |
+| `beforeunload` en la web: mantener / descartar | Correcto / Correcto |
+| `beforeunload` en un popup: mantener deja la tarjeta cargada; descartar cierra popup y tarjeta | Correcto / Correcto |
+| Cerrar la ventana antes del retardo guarda la vista del lienzo | Correcto |
 
-12/13; el fallo es del entorno.
+17/18 tras las correcciones; el único fallo es la captura con la pantalla bloqueada. Tests unitarios: 99 (guardado 25, servicios 74, incluido añadir un servicio de prueba al catálogo sin tocar nada más).
 
 ## Pendiente
 
 - Repetir el smoke con la pantalla desbloqueada (captura y su visualización en la tarjeta).
-- Revisión independiente de Codex y corrección de sus hallazgos.
 - Prueba manual con el usuario: aspecto, interacción, tarjeta descargada «en acción» (D-016).
 - Notion como tarjeta web: login y edición.
 - Memoria con 1, 3 y 6 tarjetas.
