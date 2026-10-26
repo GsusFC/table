@@ -144,7 +144,9 @@ Pegar el frame es la primera edición real hecha desde Table. Falta comprobar qu
 
 **Cierre con Figma cargado:** el usuario cerró Table con el archivo abierto, tras salir y volver a entrar en la tarjeta. Figma no bloqueó el cierre (no hubo `will-prevent-unload`), el proceso terminó con código 0 y no quedaron procesos del ensayo. La partición `persist:table-t001` quedó en disco.
 
-Pendiente: persistencia de la sesión al reabrir, comprobar la edición tras el reinicio y Pinterest.
+**Reapertura:** Table se volvió a abrir con la misma partición. El registro no muestra popups de login, `accounts.google.com` ni `verify.figma.com`, a diferencia de la primera sesión. Figma volvió a pedir `persistent-storage`, que el usuario concedió: las decisiones de permisos solo se recuerdan mientras Table está abierto. Después el usuario entró en la tarjeta, salió y cerró Table limpiamente (código 0). `[INFERENCIA]` La sesión de Figma se conservó tras el reinicio; falta la confirmación del usuario.
+
+Pendiente: confirmar la sesión y la edición tras el reinicio, y Pinterest.
 
 ## Incremento C · Conservación, descarga y memoria
 
