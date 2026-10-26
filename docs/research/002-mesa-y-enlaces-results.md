@@ -82,11 +82,16 @@ Build compilada, página sintética local y URLs inventadas de Figma, Pinterest 
 
 17/18 tras las correcciones; el único fallo es la captura con la pantalla bloqueada. Tests unitarios: 99 (guardado 25, servicios 74, incluido añadir un servicio de prueba al catálogo sin tocar nada más).
 
+## Prueba con el usuario (2026-10-26)
+
+- **Aspecto:** le gusta. Pidió seleccionar varias tarjetas y ordenarlas, rejilla e imán: implementado (selección con recuadro, `⌘A`, «Ordenar en cuadrícula», alinear, imán con guías y rejilla de 24 px; ver [diseño](../design.md)).
+- **Notion como tarjeta web:** login y edición funcionan dentro de Table.
+- **Memoria con varias webs:** pidió ayuda para no acumular webs cargadas; implementada la descarga automática (abajo).
+
 ## Pendiente
 
-- ~~Repetir el smoke con la pantalla desbloqueada~~ Hecho: **19/19** con la pantalla desbloqueada; la captura se guarda al salir y se ve en la tarjeta.
-- Prueba manual con el usuario: aspecto, interacción, tarjeta descargada «en acción» (D-016).
-- Notion como tarjeta web: login y edición.
+- ~~Repetir el smoke con la pantalla desbloqueada~~ Hecho: **19/19** con la pantalla desbloqueada (22/22 tras añadir ordenar y la descarga automática); la captura se guarda al salir y se ve en la tarjeta.
+- Confirmar a mano: editar Figma desde una tarjeta, «Añadir URL» con `+` y pegando, y que la barra superior sigue usable con una web abierta.
 - Memoria con 1, 3 y 6 tarjetas en condiciones controladas.
 
 ### Dato informal: 3 tarjetas cargadas en uso real
