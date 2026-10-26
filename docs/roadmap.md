@@ -34,7 +34,7 @@ Salida: una sesión de trabajo real que pueda retomarse, con resultados de uso y
 
 ## Fase 2 · Terminal universal y contexto compartido
 
-- [ ] Integrar PTY y perfiles de arnés configurables.
+- [x] Integrar PTY y perfiles de arnés configurables. T-007 (falta la prueba con los arneses reales).
 - [ ] Probar al menos dos arneses disponibles con la autenticación oficial de cada usuario; uno alternativo a Codex/Claude Code si está disponible y autorizado.
 - [ ] Consultar contexto filtrado de Notion y entregar la selección explícita del lienzo.
 - [ ] Ofrecer exportación temporal para arneses sin MCP.
@@ -65,4 +65,4 @@ Salida: publicación deliberada y trazable de un resultado revisado. Workers y e
 
 ## Próxima tarea
 
-[T-002](tasks/002-mesa-y-enlaces.md) está completada. Siguen en Fase 1: configuración global, ficha de Notion por API, frames de Figma, notas y conexiones, y la validación de memoria del escenario B (umbrales propuestos en los [resultados de T-002](research/002-mesa-y-enlaces-results.md#memoria-con-1-3-y-6-tarjetas-2026-10-26), pendientes de aceptación). No ejecutar toda la hoja de ruta de forma automática. Cada sesión debe terminar con un resultado verificable y el estado real de su tarea.
+[T-007](tasks/007-terminal-universal.md) está implementada: falta que el usuario pruebe los arneses reales. Siguiente propuesta: entregar al agente el contexto de la mesa (ficha filtrada de Notion y selección explícita de tarjetas, con enlaces de Figma) y registrar sus resultados como tarjetas. No ejecutar toda la hoja de ruta de forma automática. Cada sesión debe terminar con un resultado verificable y el estado real de su tarea.
