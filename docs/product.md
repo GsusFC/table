@@ -29,9 +29,9 @@ El nombre de trabajo es Table; la propuesta original se denominaba Lienzo FLOC*.
 
 ## Experiencia prevista
 
-1. Seleccionar un proyecto activo de la base de Notion.
-2. Abrir la mesa con su ficha, enlaces y una selección de frames.
-3. Añadir referencias, notas y conexiones.
+1. Crear o abrir la mesa de un proyecto activo. Pendiente: si se elige desde la base de Notion o se crea libremente.
+2. Añadir los enlaces a medida que se tienen: clic derecho → «Añadir URL». Table reconoce el servicio (Figma, Notion, Pinterest u otra web) y crea la tarjeta ([D-012](decisions.md)).
+3. Añadir notas y conexiones.
 4. Abrir una sesión con el arnés elegido y entregarle el contexto pertinente.
 5. Pedir una comparación o propuesta a partir de frames y referencias seleccionados.
 6. Revisar resultados; editar en Figma y conservar las decisiones aceptadas.
@@ -43,8 +43,9 @@ Este flujo describe el producto objetivo. No está implementado.
 
 | Tipo | Contenido previsto |
 | --- | --- |
-| Proyecto | Datos autorizados de Notion y enlaces al origen. |
-| Frame | Miniatura, enlace y referencia estable al nodo de Figma. |
+| Web | Cualquier URL añadida por el usuario: Figma, Notion, Pinterest u otra web. Mismo ciclo de vida para todas (activa, conservada, descargada) y captura con fecha. El servicio reconocido añade capacidades: contexto de Notion por API, miniaturas y nodos de Figma por API. |
+| Proyecto | Datos autorizados de la ficha de Notion enlazada, con su origen. |
+| Frame | Miniatura, enlace y referencia estable a un nodo de Figma. |
 | Referencia | Captura, URL, fecha y anotación. |
 | Nota | Texto interno del proceso. |
 | Sesión | Terminal del arnés, identidad visible y estado de ejecución. |

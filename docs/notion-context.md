@@ -32,9 +32,9 @@ Fuente: API de Notion (`Notion-Version: 2022-06-28`), integración interna de so
 
 Diferencias con el documento guía: `Account` es una relación con otra base, no un texto; `Budget` es texto libre, así que un filtro no puede depender de su formato; hay cinco propiedades no descritas (`Remaining days`, `Preview`, `Opportunity`, `Lead`, `Notion Link`).
 
-**El piloto no tiene enlazado ni el archivo de Figma ni Pinterest.** El archivo usado en T-001 se configuró a mano. Fase 1 debe tratar la ficha sin enlaces como caso normal: pedir el enlace o permitir asociarlo, sin inventarlo.
+**El piloto no tiene enlazado ni el archivo de Figma ni Pinterest.** El archivo usado en T-001 se configuró a mano.
 
-`Pinterest` frente a `Pinterest Link`: ambos son `url` y ambos están vacíos en el piloto, así que este proyecto no permite decidir. Con la base compartida se puede contar en cuántos proyectos tiene valor cada uno, sin leer los valores.
+Por [D-012](decisions.md), los enlaces no se leen de estos campos: el usuario los añade en Table y Table reconoce el servicio. Los campos `url` de la base (`WORK Figma File`, `Pinterest`, `Pinterest Link`, `Lead`, `Notion Link`) quedan fuera del flujo de enlaces, y la duda entre `Pinterest` y `Pinterest Link` deja de bloquear.
 
 El cuerpo de la ficha contiene contenido propio (19 bloques de primer nivel: párrafos, columnas, una cita y un aviso destacado). La exclusión de información económica debe cubrir también el cuerpo, como indica la sección de exclusión.
 

@@ -11,7 +11,7 @@ Los hitos preservan el orden acordado. Los hallazgos de una prueba pueden cambia
 - [x] Registrar fuentes revisadas y distinguirlas de pruebas ejecutadas.
 - [ ] Revisar esta base documental con el usuario y cerrar las decisiones pendientes que condicionen la primera tarea.
 - [ ] Identificar equipo de prueba, RAM, usuarios iniciales y proyecto piloto. Equipo y RAM fijados ([D-011](decisions.md)); proyecto piloto con archivo de Figma configurado localmente; faltan los usuarios iniciales.
-- [ ] Validar campos, permisos y enlaces de Notion; resolver los dos campos de Pinterest. Esquema comprobado desde la ficha del piloto ([contexto de Notion](notion-context.md#esquema-comprobado)); falta compartir la base con la integración.
+- [ ] Validar campos, permisos y enlaces de Notion. Esquema comprobado desde la ficha del piloto ([contexto de Notion](notion-context.md#esquema-comprobado)); la duda entre los dos campos de Pinterest queda cerrada por [D-012](decisions.md). Falta conectar la integración a la base de proyectos si las mesas se crean desde ella.
 - [x] Ejecutar [T-001: prueba de escritorio](tasks/001-desktop-spike.md). Apto para continuar, con límites ([resultados](research/001-desktop-spike-results.md)).
 - [ ] Comparar una base propia con la reutilización que realmente ahorre trabajo. Mesa no ofrece implementación en el repo público revisado; OpenCove [evaluado](research/opencove-evaluation.md) con recomendación de usarlo como referencia, pendiente de decisión; ccanvas sin auditar.
 - [x] Registrar la decisión técnica y el protocolo de memoria aplicable: [D-010](decisions.md) y umbrales del escenario A en [validación de memoria](memory-validation.md). B y C sin umbrales.
@@ -20,11 +20,12 @@ Salida: evidencia de que la edición integrada y su ciclo de vida funcionan, dec
 
 ## Fase 1 · El proyecto en un sitio
 
-- [ ] Mostrar proyectos leídos de la base configurada de Notion, con filtros de estado.
-- [ ] Crear la mesa y mostrar la ficha autorizada del proyecto piloto.
-- [ ] Mostrar una selección de frames de su único archivo Figma.
-- [ ] Editar en el navegador integrado según el resultado de T-001.
-- [ ] Abrir Pinterest y webs; guardar referencias con URL, captura y fecha.
+- [ ] Crear la mesa de un proyecto; decidir si desde la base de Notion o libremente.
+- [ ] «Añadir URL» con clic derecho; reconocer Figma, Notion, Pinterest y otras webs, y crear la tarjeta web ([D-012](decisions.md)).
+- [ ] Configuración global: credenciales de Notion y preferencias comunes, fuera de la mesa y de Git.
+- [ ] Mostrar la ficha autorizada de Notion de la mesa por API.
+- [ ] Mostrar una selección de frames del archivo de Figma enlazado.
+- [ ] Editar en el navegador integrado según el resultado de T-001; guardar referencias con URL, captura y fecha.
 - [ ] Crear notas, conexiones y posiciones persistentes.
 - [ ] Reabrir la mesa sin perder trabajo y distinguir caché de información actual.
 - [ ] Validar memoria del flujo sin agentes, cierre y recuperación.

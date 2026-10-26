@@ -8,7 +8,7 @@ Fecha inicial: 2026-10-26. Este registro distingue lo acordado de las recomendac
 | --- | --- | --- |
 | D-001 | Herramienta interna de FLOC* primero. | Documento guía del usuario: validar con uso real antes de pensar en producto. |
 | D-002 | Notion es la fuente de verdad del contexto del proyecto. | Documento guía y confirmación posterior del usuario: «El contexto puede ser Notion». |
-| D-003 | Un archivo de Figma por proyecto. | Forma de trabajo descrita por el usuario; enlace desde `WORK Figma File`. |
+| D-003 | Un archivo de Figma por proyecto. | Forma de trabajo descrita por el usuario. Origen del enlace modificado por D-012 (2026-10-26): ya no se lee de `WORK Figma File`, lo añade el usuario en Table. |
 | D-004 | Orden: proyecto en un sitio → agentes → publicar. | Fases decididas en el documento guía. |
 | D-005 | La terminal es una pieza permanente, abierta a arneses alternativos. | Aclaración del usuario: poder ejecutar otros arneses además de Codex y Claude Code. Sustituye la recomendación de evolucionar obligatoriamente hacia UI propias por proveedor. |
 | D-006 | Cada usuario utiliza su autenticación con cada arnés/proveedor. | Aclaración del usuario. No implica que una suscripción autorice cualquier cliente ni que Table gestione sus tokens. |
@@ -17,6 +17,7 @@ Fecha inicial: 2026-10-26. Este registro distingue lo acordado de las recomendac
 | D-009 | El consumo de memoria es una preocupación prioritaria. | El usuario señala el conjunto Figma + Notion + Pinterest + terminal + dos agentes. Umbrales del escenario A aceptados el 2026-10-26 en [validación de memoria](memory-validation.md); B y C sin fijar. |
 | D-010 | Electron + React + TypeScript, con `WebContentsView` para la web integrada, como base del prototipo de Fase 1. Revisable si el escenario B de memoria no cumple sus umbrales. | Decisión expresa del usuario del 2026-10-26, tras recomendación del asistente, basada en [T-001](research/001-desktop-spike-results.md): login, sesión, edición y portapapeles reales en Figma y Pinterest; memoria 39 % por debajo de Figma de escritorio; descarga sin crecimiento residual. No decide lienzo, terminal ni almacenamiento (P-002, P-004, P-005), ni el stack definitivo del producto. Sustituye a P-001 y P-003. |
 | D-011 | Equipo de referencia para las mediciones: Apple M2 Pro, 16 GiB, macOS 27.2 (el Mac del usuario). | Confirmado por el usuario el 2026-10-26. Las mediciones de T-001 se hicieron en él con las demás aplicaciones cerradas. La carga habitual con todas las herramientas abiertas no está medida. |
+| D-012 | Los enlaces de una mesa los añade el usuario en Table (clic derecho → «Añadir URL»), a medida que los tiene. Table reconoce el servicio por la URL (Figma, Notion, Pinterest u otra web) y todos se abren como tarjeta web con el mismo ciclo de vida; el reconocimiento solo añade capacidades propias de cada servicio. Credenciales y preferencias comunes van en una configuración global. | Decisión del usuario del 2026-10-26: leer los enlaces de campos de Notion no es usable (campos duplicados como `Pinterest`/`Pinterest Link`, fichas sin enlaces). Consecuencias: los campos URL de la base de Notion dejan de ser la fuente de los enlaces y se cierra la duda entre los dos campos de Pinterest. Notion sigue siendo la fuente del contexto (D-002). |
 
 La exclusión de `Budget` del contexto de agentes es un requisito del documento guía, desarrollado en [contexto de Notion](notion-context.md). Su cumplimiento requiere controlar las vías reales de acceso, no solo el prompt inicial.
 
@@ -50,8 +51,10 @@ La exclusión de `Budget` del contexto de agentes es un requisito del documento 
 
 ## Preguntas abiertas
 
-- Acceso de la integración a la base de proyectos: los IDs de propiedad están resueltos (guardados fuera del repositorio), pero la base no está compartida, así que no se pueden listar proyectos ni leer las opciones de `Status`.
-- Campo correcto entre `Pinterest` y `Pinterest Link` (ambos `url`, ambos vacíos en el piloto) y uso de `Opportunity`, `Lead` y `Notion Link`. El piloto no tiene enlazados Figma ni Pinterest. Ver [contexto de Notion](notion-context.md#esquema-comprobado).
+- Cómo se crea una mesa: eligiendo un proyecto de la base de Notion, o libremente y añadiendo después la ficha de Notion como un enlace más (D-012). En el segundo caso, la integración necesita acceso a cada ficha; conectarla una vez a la base de proyectos lo resuelve. Esa conexión aún no se ha hecho.
+- Si D-003 limita Table a una tarjeta de Figma por mesa o es solo la costumbre del estudio.
+- Uso de `Opportunity`, `Lead` y `Notion Link`, para decidir si el contexto entregado a los agentes los incluye. Ver [contexto de Notion](notion-context.md#esquema-comprobado).
+- Notion como tarjeta web editable dentro de Table: login y edición no probados en T-001.
 - Planes, permisos y límites disponibles de Notion/Figma en el estudio.
 - Carga habitual del equipo de referencia con todas las herramientas abiertas (equipo fijado en D-011). Otros equipos del estudio, si los hay.
 - Usuarios iniciales, uso individual o compartido y política de copia/exportación.
