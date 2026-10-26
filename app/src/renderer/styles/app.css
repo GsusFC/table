@@ -1481,3 +1481,10 @@ kbd {
 .canvas .react-flow__handle.connection-drop.connectingto.valid {
   box-shadow: 0 0 0 2px var(--color-accent);
 }
+
+/* Destino de la conexión bajo el puntero, en cualquier punto del elemento o sus asas. */
+.canvas .react-flow__node.connection-target .card,
+.canvas .react-flow__node.connection-target .note {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent);
+}

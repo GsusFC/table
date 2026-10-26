@@ -193,9 +193,10 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
   }
   /**
    * Arrastra una conexión con eventos del ratón: desde el asa `side` del
-   * elemento `fromId` hasta el centro del elemento `toId`.
+   * elemento `fromId` hasta el elemento `toId`, en su centro o justo fuera de
+   * su borde izquierdo (donde está su asa).
    */
-  const dragConnection = (fromId: string, side: 'left' | 'right', toId: string): Promise<unknown> =>
+  const dragConnection = (fromId: string, side: 'left' | 'right', toId: string, drop: 'center' | 'left-handle' = 'center'): Promise<unknown> =>
     inUi(`(async () => {
       const frame = () => new Promise(resolve => requestAnimationFrame(() => resolve()))
       const center = element => {
@@ -204,7 +205,10 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
       }
       const handle = document.querySelector(${JSON.stringify(`.react-flow__node[data-id="${fromId}"] .connection-handle[data-handlepos="${side}"]`)})
       const from = center(handle)
-      const to = center(document.querySelector(${JSON.stringify(`.react-flow__node[data-id="${toId}"]`)}))
+      const targetRect = document.querySelector(${JSON.stringify(`.react-flow__node[data-id="${toId}"]`)}).getBoundingClientRect()
+      const to = ${JSON.stringify(drop)} === 'center'
+        ? { x: targetRect.left + targetRect.width / 2, y: targetRect.top + targetRect.height / 2 }
+        : { x: targetRect.left - 4, y: targetRect.top + targetRect.height / 2 }
       handle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: from.x, clientY: from.y, button: 0 }))
       for (const t of [0.3, 0.7, 1, 1]) {
         document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: from.x + (to.x - from.x) * t, clientY: from.y + (to.y - from.y) * t, buttons: 1 }))
@@ -414,13 +418,14 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
     ).catch(() => null)
     record('ordenar: la cuadrícula incluye la nota, sin solapes', regridded !== null)
 
-    // Conexión tarjeta↔tarjeta arrastrada; clic en la línea y ⌫ la borra sin tocar las tarjetas.
+    // Conexión tarjeta↔tarjeta soltada sobre el asa de la otra (fuera del centro, en su borde);
+    // clic en la línea y ⌫ la borra sin tocar las tarjetas.
     await clearSelection()
     const figmaCard = added[1]!
-    await dragConnection(fixtureCard.id, 'right', figmaCard.id)
+    await dragConnection(fixtureCard.id, 'right', figmaCard.id, 'left-handle')
     const twoEdges = await waitFor(getMesa, current => current.edges.length === 2, 'conexión entre tarjetas').catch(() => null)
     const cardEdge = twoEdges?.edges.find(item => item.source === fixtureCard.id && item.target === figmaCard.id)
-    record('conexiones: arrastrar entre dos tarjetas las conecta', !!cardEdge)
+    record('conexiones: soltar sobre el asa de otra tarjeta las conecta', !!cardEdge)
     if (cardEdge) {
       await waitFor(edgeCount, count => count === 2, 'dos líneas')
       await inUi(`document.querySelector(${JSON.stringify(`.react-flow__edge[data-id="${cardEdge.id}"]`)}).dispatchEvent(new MouseEvent('click', { bubbles: true }))`)

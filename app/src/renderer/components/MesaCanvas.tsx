@@ -109,6 +109,9 @@ const ConnectableCardNode = memo(function ConnectableCardNode(props: NodeProps<C
   )
 })
 
+/** Margen alrededor de un elemento, en px del lienzo, que también acepta soltar una conexión (sus asas sobresalen). */
+const CONNECT_DROP_MARGIN = 16
+
 const NODE_TYPES: NodeTypes = { card: ConnectableCardNode, note: NoteNode }
 const EDGE_TYPES: EdgeTypes = { connection: ConnectionEdge }
 const VIEWPORT_SAVE_DELAY_MS = 400
@@ -578,6 +581,84 @@ function CanvasInner({
     [isValidConnection, onAddEdge, notify],
   )
 
+  /*
+   * Soltar una conexión en cualquier punto de otro elemento, incluidas sus asas y
+   * un pequeño margen alrededor. React Flow solo la acepta si el puntero cae
+   * justo sobre una zona de destino; esto cubre el resto y marca el destino.
+   */
+  const connectFrom = useRef<string | null>(null)
+  const connectTarget = useRef<string | null>(null)
+  const targetAt = useCallback(
+    (clientX: number, clientY: number, fromId: string): string | null => {
+      const point = flow.screenToFlowPosition({ x: clientX, y: clientY })
+      let best: { id: string; area: number } | null = null
+      for (const node of flow.getNodes()) {
+        const width = node.measured?.width ?? node.width ?? 0
+        const height = node.measured?.height ?? node.height ?? 0
+        const { x, y } = node.position
+        const inside =
+          point.x >= x - CONNECT_DROP_MARGIN &&
+          point.x <= x + width + CONNECT_DROP_MARGIN &&
+          point.y >= y - CONNECT_DROP_MARGIN &&
+          point.y <= y + height + CONNECT_DROP_MARGIN
+        // Si hay solapes, gana el elemento más pequeño: el que se ve encima del otro casi siempre.
+        if (node.id !== fromId && inside && (!best || width * height < best.area)) {
+          best = { id: node.id, area: width * height }
+        }
+      }
+      return best && isValidConnection({ source: fromId, target: best.id, sourceHandle: null, targetHandle: null }) ? best.id : null
+    },
+    [flow, isValidConnection],
+  )
+  const markConnectTarget = useCallback((id: string | null) => {
+    if (connectTarget.current === id) {
+      return
+    }
+    const previous = connectTarget.current
+    connectTarget.current = id
+    setNodes(current =>
+      current.map(node =>
+        node.id === id
+          ? { ...node, className: 'connection-target' }
+          : node.id === previous
+            ? { ...node, className: undefined }
+            : node,
+      ),
+    )
+  }, [])
+  const trackConnectTarget = useCallback(
+    (event: PointerEvent) => {
+      const from = connectFrom.current
+      markConnectTarget(from ? targetAt(event.clientX, event.clientY, from) : null)
+    },
+    [targetAt, markConnectTarget],
+  )
+  const onConnectStart = useCallback(
+    (_event: unknown, params: { nodeId: string | null }) => {
+      connectFrom.current = params.nodeId
+      window.addEventListener('pointermove', trackConnectTarget)
+    },
+    [trackConnectTarget],
+  )
+  const onConnectEnd = useCallback(
+    (event: MouseEvent | TouchEvent, state: { isValid: boolean | null }) => {
+      window.removeEventListener('pointermove', trackConnectTarget)
+      const from = connectFrom.current
+      connectFrom.current = null
+      markConnectTarget(null)
+      // Si React Flow ya la aceptó, `onConnect` la ha creado.
+      if (state.isValid || !from) {
+        return
+      }
+      const point = 'changedTouches' in event ? event.changedTouches[0] : event
+      const target = point ? targetAt(point.clientX, point.clientY, from) : null
+      if (target) {
+        onConnect({ source: from, target, sourceHandle: null, targetHandle: null })
+      }
+    },
+    [trackConnectTarget, markConnectTarget, targetAt, onConnect],
+  )
+
   const removeNote = useCallback(
     (noteId: NoteId) => {
       pendingTexts.current.delete(noteId)
@@ -774,6 +855,8 @@ function CanvasInner({
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+          onConnectStart={onConnectStart}
+          onConnectEnd={onConnectEnd}
           isValidConnection={isValidConnection}
           onNodeDragStop={onNodeDragStop}
           onNodeDoubleClick={(_event, node) => {
