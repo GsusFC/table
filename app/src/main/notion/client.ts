@@ -1,5 +1,6 @@
 import { net } from 'electron'
 import { normalizeNotionId, type NotionDatabase } from '../../shared/notion'
+import { isProjectDatabase } from './project'
 
 const NOTION_VERSION = '2022-06-28'
 const TIMEOUT_MS = 10_000
@@ -19,8 +20,13 @@ export class NotionError extends Error {
 }
 
 export interface NotionClient {
-  getPage(pageId: string): Promise<unknown>
+  /**
+   * Bases de proyectos compartidas con la integración. Compartir una base
+   * comparte también las bases dentro de sus páginas; solo se devuelven las
+   * que tienen el esquema de proyectos.
+   */
   listDatabases(): Promise<NotionDatabase[]>
+  getPage(pageId: string): Promise<unknown>
 }
 
 /** `apiBase` solo cambia en el smoke, que usa un servidor local con fichas sintéticas. */
@@ -92,9 +98,9 @@ export function createNotionClient(token: string, apiBase = 'https://api.notion.
 }
 
 function readDatabase(value: unknown): NotionDatabase | null {
-  const record = value as { id?: unknown; title?: unknown } | null
+  const record = value as { id?: unknown; title?: unknown; properties?: unknown } | null
   const id = typeof record?.id === 'string' ? normalizeNotionId(record.id) : null
-  if (!id) {
+  if (!id || !isProjectDatabase(record?.properties)) {
     return null
   }
   const title = Array.isArray(record?.title)

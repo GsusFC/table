@@ -145,7 +145,10 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
             </div>
             {databases !== null &&
               (databases.length === 0 ? (
-                <p className="field-error">La integración no tiene ninguna base compartida. Compártela desde Notion.</p>
+                <p className="field-error">
+                  Ninguna base compartida con la integración tiene los campos de proyecto (Status, Services, Start Date, Due
+                  Date, Remaining days). Comparte la base de proyectos desde Notion.
+                </p>
               ) : (
                 <div className="settings-row">
                   <select

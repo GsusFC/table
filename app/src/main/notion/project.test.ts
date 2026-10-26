@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { notionPageIdFromUrl } from '../../shared/notion'
-import { extractProject, sanitizeSnapshot } from './project'
+import { extractProject, isProjectDatabase, sanitizeSnapshot } from './project'
 
 const DATABASE_ID = '11111111-2222-4333-8444-555555555555'
 const PAGE_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
@@ -110,5 +110,27 @@ describe('sanitizeSnapshot', () => {
     const snapshot = extractProject(fixturePage(), DATABASE_ID, FETCHED_AT)!
     expect(sanitizeSnapshot(snapshot, 'otra')).toBeNull()
     expect(sanitizeSnapshot({ ...snapshot, fetchedAt: undefined }, snapshot.pageId)).toBeNull()
+  })
+})
+
+describe('isProjectDatabase', () => {
+  const schema = {
+    Title: { type: 'title' },
+    Status: { type: 'status' },
+    Services: { type: 'multi_select' },
+    'Start Date': { type: 'date' },
+    'Due Date': { type: 'date' },
+    'Remaining days': { type: 'formula' },
+  }
+
+  it('reconoce el esquema de proyectos aunque tenga más propiedades', () => {
+    expect(isProjectDatabase({ ...schema, Budget: { type: 'rich_text' } })).toBe(true)
+  })
+
+  it('descarta bases sin algún campo o con otro tipo', () => {
+    expect(isProjectDatabase({ Name: { type: 'title' } })).toBe(false)
+    expect(isProjectDatabase({ ...schema, Status: { type: 'select' } })).toBe(false)
+    expect(isProjectDatabase({ ...schema, Title: undefined, Name: { type: 'title' } })).toBe(false)
+    expect(isProjectDatabase(null)).toBe(false)
   })
 })

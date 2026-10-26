@@ -45,6 +45,18 @@ export function extractProject(page: unknown, databaseId: string, fetchedAt: str
 }
 
 /**
+ * Verdadero si el esquema de una base (propiedades de la API) tiene el título
+ * y todos los campos permitidos con su tipo: es una base de proyectos.
+ */
+export function isProjectDatabase(properties: unknown): boolean {
+  const record = asRecord(properties)
+  if (!record || asRecord(record[PROJECT_TITLE_FIELD])?.['type'] !== 'title') {
+    return false
+  }
+  return PROJECT_FIELDS.every(field => asRecord(record[field.name])?.['type'] === field.type)
+}
+
+/**
  * Reconstruye una ficha guardada en caché con la misma lista cerrada: un archivo
  * alterado no puede colar propiedades ni campos fuera de PROJECT_FIELDS.
  */

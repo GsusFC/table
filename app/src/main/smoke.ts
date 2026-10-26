@@ -95,7 +95,22 @@ async function startNotionServer(): Promise<{ server: Server; url: string }> {
     if (request.headers.authorization !== `Bearer ${NOTION_TOKEN}`) {
       reply(401, { object: 'error' })
     } else if (request.method === 'POST' && request.url === '/v1/search') {
-      reply(200, { results: [{ object: 'database', id: NOTION_DATABASE, title: [{ plain_text: 'Proyectos de prueba' }] }], has_more: false })
+      const projectSchema = {
+        Title: { type: 'title' },
+        Status: { type: 'status' },
+        Services: { type: 'multi_select' },
+        'Start Date': { type: 'date' },
+        'Due Date': { type: 'date' },
+        'Remaining days': { type: 'formula' },
+      }
+      reply(200, {
+        results: [
+          { object: 'database', id: NOTION_DATABASE, title: [{ plain_text: 'Proyectos de prueba' }], properties: projectSchema },
+          // Base dentro de una ficha: compartida con la integración, pero no es de proyectos.
+          { object: 'database', id: NOTION_OTHER, title: [{ plain_text: 'Contenidos de una ficha' }], properties: { Name: { type: 'title' } } },
+        ],
+        has_more: false,
+      })
     } else if (request.url === `/v1/pages/${NOTION_PROJECT}`) {
       reply(200, {
         object: 'page',
@@ -569,7 +584,11 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager): 
       )
       const databases = await inUi<{ id: string }[]>(`window.table.settings.listNotionDatabases()`)
       await inUi(`window.table.settings.setNotionDatabase(${JSON.stringify(NOTION_DATABASE)})`)
-      record('ajustes: solo se elige una base de la lista de Notion', unlisted && databases.length === 1, { databases: databases.length })
+      record(
+        'ajustes: solo se listan y eligen bases con esquema de proyectos',
+        unlisted && databases.length === 1 && databases[0]!.id === NOTION_DATABASE,
+        { databases: databases.length },
+      )
 
       const notionMesa = await inUi<Mesa>(`window.table.mesas.create('Mesa de Notion')`)
       const [projectCard, otherCard] = await inUi<Card[]>(`Promise.all([
