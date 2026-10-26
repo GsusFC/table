@@ -103,21 +103,25 @@ export const SERVICES: readonly ServiceDefinition[] = [
   },
 ]
 
-/** Primer servicio que reconoce la URL, o WEB_SERVICE. La URL ya es http(s) válida. */
-export function recognizeService(url: string): ServiceDefinition {
+/**
+ * Primer servicio que reconoce la URL, o WEB_SERVICE. La URL ya es http(s)
+ * válida. `catalog` solo se sustituye en tests para comprobar que un servicio
+ * nuevo no requiere cambiar nada más.
+ */
+export function recognizeService(url: string, catalog: readonly ServiceDefinition[] = SERVICES): ServiceDefinition {
   let parsed: URL
   try {
     parsed = new URL(url)
   } catch {
     return WEB_SERVICE
   }
-  return SERVICES.find((service) => service.matches(parsed)) ?? WEB_SERVICE
+  return catalog.find((service) => service.matches(parsed)) ?? WEB_SERVICE
 }
 
 /** Por id; WEB_SERVICE si el id no existe (p. ej. un servicio retirado). */
-export function serviceById(id: string): ServiceDefinition {
+export function serviceById(id: string, catalog: readonly ServiceDefinition[] = SERVICES): ServiceDefinition {
   if (id === WEB_SERVICE.id) return WEB_SERVICE
-  return SERVICES.find((service) => service.id === id) ?? WEB_SERVICE
+  return catalog.find((service) => service.id === id) ?? WEB_SERVICE
 }
 
 /**

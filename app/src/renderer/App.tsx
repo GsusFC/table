@@ -7,6 +7,7 @@ import {
   type CardPatch,
   type Mesa,
   type MesaId,
+  type MesaListing,
   type MesaSummary,
   type Point,
 } from '../shared/model'
@@ -78,19 +79,52 @@ function withoutMesa(history: NavHistory, mesaId: MesaId): NavHistory {
 }
 
 let noticeCounter = 0
+let persistenceErrorCounter = 0
+
+/** Guardado fallido sin resolver: mesa a la que afecta (null si no se sabe) y operación. */
+type FailureKey = string
+const failureKey = (mesaId: MesaId | null, operation: string): FailureKey => `${mesaId ?? '*'}|${operation}`
+
+/** Operaciones de guardado de una tarjeta según los campos que cambian. */
+function geometryOperations(cardId: CardId, patch: CardPatch): string[] {
+  const operations: string[] = []
+  if (patch.position) {
+    operations.push(`card:${cardId}:position`)
+  }
+  if (patch.size) {
+    operations.push(`card:${cardId}:size`)
+  }
+  return operations
+}
+
+/** Qué hacer con los fallos de una escritura: mesa y operaciones que registra o resuelve. */
+interface TrackedOperations {
+  readonly mesaId: MesaId
+  readonly operations: readonly string[]
+}
 
 export function App() {
   const [history, setHistory] = useState<NavHistory>({ entries: [HOME], index: 0 })
   const route = history.entries[history.index] ?? HOME
   const [mesa, setMesa] = useState<Mesa | null>(null)
-  const [mesas, setMesas] = useState<MesaSummary[] | null>(null)
+  const [mesas, setMesas] = useState<readonly MesaSummary[] | null>(null)
+  const [unreadable, setUnreadable] = useState(0)
   const [railOpen, setRailOpen] = useState(true)
   const [states, setStates] = useState<ReadonlyMap<CardId, SurfaceCardState>>(() => new Map())
   const [notice, setNotice] = useState<Notice | null>(null)
   const [dialog, setDialog] = useState<DialogState | null>(null)
   const [addUrlRequest, setAddUrlRequest] = useState(0)
   const [pendingSaves, setPendingSaves] = useState(0)
-  const [saveFailed, setSaveFailed] = useState(false)
+  /**
+   * Guardados fallidos por operación, con la mesa a la que afectan (null: error
+   * del proceso principal sin mesa conocida). Una operación solo se resuelve
+   * cuando esa misma operación se guarda bien o se recarga la mesa desde disco.
+   */
+  const [failures, setFailures] = useState<ReadonlyMap<FailureKey, MesaId | null>>(() => new Map())
+  /** Escrituras en curso, para esperarlas antes de cerrar. */
+  const inFlight = useRef(new Set<Promise<unknown>>())
+  /** Guardados con retardo del lienzo que hay que adelantar antes de cerrar. */
+  const flushers = useRef(new Set<() => void>())
   const panelRef = useRef<HTMLElement>(null)
 
   const notify = useCallback((text: string, tone: Notice['tone'] = 'error') => {
@@ -140,12 +174,37 @@ export function App() {
     [],
   )
 
+  const applyListing = useCallback((listing: MesaListing) => {
+    setMesas(listing.mesas)
+    setUnreadable(listing.unreadable)
+  }, [])
+
   useEffect(() => {
-    api.mesas.list().then(setMesas, (error: unknown) => {
+    api.mesas.list().then(applyListing, (error: unknown) => {
       setMesas([])
       notifyError(error)
     })
-  }, [notifyError])
+  }, [applyListing, notifyError])
+
+  // Errores de guardado del proceso principal (capturas, títulos): aviso y fallo visible.
+  useEffect(
+    () =>
+      api.onPersistenceError(message => {
+        persistenceErrorCounter += 1
+        const key = failureKey(null, `main:${persistenceErrorCounter}`)
+        setFailures(previous => new Map(previous).set(key, null))
+        notify(message)
+      }),
+    [notify],
+  )
+
+  /** Quita los fallos que cumplen `matches`. */
+  const clearFailures = useCallback((matches: (key: FailureKey, mesaId: MesaId | null) => boolean) => {
+    setFailures(previous => {
+      const next = new Map([...previous].filter(([key, mesaId]) => !matches(key, mesaId)))
+      return next.size === previous.size ? previous : next
+    })
+  }, [])
 
   const enteredState = useMemo(() => {
     for (const state of states.values()) {
@@ -200,21 +259,70 @@ export function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [entered, exitWeb])
 
-  /** Envuelve una escritura para el indicador de guardado. */
-  const track = useCallback(<T,>(promise: Promise<T>): Promise<T> => {
+  /**
+   * Envuelve una escritura para el indicador de guardado y la espera de cierre.
+   * Con `tracked`, un fallo queda registrado por operación y solo se borra
+   * cuando la misma operación se guarda bien.
+   */
+  const track = useCallback(<T,>(promise: Promise<T>, tracked?: TrackedOperations): Promise<T> => {
     setPendingSaves(count => count + 1)
-    return promise
+    const settle = (failed: boolean): void => {
+      if (!tracked || tracked.operations.length === 0) {
+        return
+      }
+      const keys = tracked.operations.map(operation => failureKey(tracked.mesaId, operation))
+      setFailures(previous => {
+        const next = new Map(previous)
+        for (const key of keys) {
+          if (failed) {
+            next.set(key, tracked.mesaId)
+          } else {
+            next.delete(key)
+          }
+        }
+        return next
+      })
+    }
+    const result = promise
       .then(
         value => {
-          setSaveFailed(false)
+          settle(false)
           return value
         },
         (error: unknown) => {
-          setSaveFailed(true)
+          settle(true)
           throw error
         },
       )
       .finally(() => setPendingSaves(count => count - 1))
+    const pending = inFlight.current
+    pending.add(result)
+    const forget = (): void => {
+      pending.delete(result)
+    }
+    result.then(forget, forget)
+    return result
+  }, [])
+
+  // Antes de cerrar: adelantar los guardados con retardo y esperar las escrituras en curso.
+  useEffect(
+    () =>
+      api.onFlushRequest(async () => {
+        for (const flush of flushers.current) {
+          flush()
+        }
+        while (inFlight.current.size > 0) {
+          await Promise.allSettled([...inFlight.current])
+        }
+      }),
+    [],
+  )
+
+  const registerFlush = useCallback((flush: () => void) => {
+    flushers.current.add(flush)
+    return () => {
+      flushers.current.delete(flush)
+    }
   }, [])
 
   // Navegación: cambia la mesa visible en la superficie y solo entonces la pantalla.
@@ -240,15 +348,16 @@ export function App() {
             return
           }
           setMesa(loaded)
-          setSaveFailed(false)
+          // Lo que se ve ahora es lo que hay en disco: los fallos anteriores quedan revertidos.
+          clearFailures((_key, failedMesaId) => failedMesaId === loaded.id || failedMesaId === null)
           setHistory(apply)
           return
         }
         setMesa(null)
         setHistory(apply)
-        const list = await api.mesas.list()
+        const listing = await api.mesas.list()
         if (token === navigation.current) {
-          setMesas(list)
+          applyListing(listing)
         }
       } catch (error) {
         if (token === navigation.current) {
@@ -256,7 +365,7 @@ export function App() {
         }
       }
     },
-    [notify, notifyError],
+    [notify, notifyError, clearFailures, applyListing],
   )
 
   const navigate = (target: Route): void => {
@@ -297,7 +406,7 @@ export function App() {
   }
 
   const renameMesa = async (id: MesaId, name: string): Promise<void> => {
-    const renamed = await track(api.mesas.rename(id, name))
+    const renamed = await track(api.mesas.rename(id, name), { mesaId: id, operations: ['rename'] })
     setMesa(current =>
       current && current.id === id ? { ...current, name: renamed.name, updatedAt: renamed.updatedAt } : current,
     )
@@ -314,7 +423,8 @@ export function App() {
     setHistory(current => withoutMesa(current, id))
     setMesa(current => (current?.id === id ? null : current))
     setMesas(list => list?.filter(summary => summary.id !== id) ?? null)
-    api.mesas.list().then(setMesas, notifyError)
+    clearFailures((_key, failedMesaId) => failedMesaId === id)
+    api.mesas.list().then(applyListing, notifyError)
   }
 
   // Operaciones sobre la mesa abierta. El lienzo se monta con `key={mesa.id}`.
@@ -340,7 +450,7 @@ export function App() {
       if (!mesaId) {
         return
       }
-      track(api.cards.update(mesaId, cardId, patch)).then(
+      track(api.cards.update(mesaId, cardId, patch), { mesaId, operations: geometryOperations(cardId, patch) }).then(
         card => replaceCard(mesaId, cards => cards.map(existing => (existing.id === card.id ? card : existing))),
         notifyError,
       )
@@ -356,18 +466,22 @@ export function App() {
       const result = await track(api.cards.remove(mesaId, cardId))
       if (result === 'unloaded') {
         replaceCard(mesaId, cards => cards.filter(existing => existing.id !== cardId))
+        // La tarjeta ya no existe: sus guardados fallidos dejan de importar.
+        const prefix = failureKey(mesaId, `card:${cardId}:`)
+        clearFailures(key => key.startsWith(prefix))
       }
       return result
     },
-    [mesaId, track, replaceCard],
+    [mesaId, track, replaceCard, clearFailures],
   )
 
   const saveViewport = useCallback(
     (viewport: Viewport) => {
       if (mesaId) {
-        track(api.mesas.setViewport(mesaId, { x: viewport.x, y: viewport.y, zoom: viewport.zoom })).catch(
-          notifyError,
-        )
+        track(api.mesas.setViewport(mesaId, { x: viewport.x, y: viewport.y, zoom: viewport.zoom }), {
+          mesaId,
+          operations: ['viewport'],
+        }).catch(notifyError)
       }
     },
     [mesaId, track, notifyError],
@@ -396,8 +510,11 @@ export function App() {
     }
   }, [enteredState, mesa])
 
-  const saveStatus: SaveStatus = pendingSaves > 0 ? 'saving' : saveFailed ? 'failed' : 'saved'
   const showingMesa = route.kind === 'mesa' && mesa?.id === route.mesaId ? mesa : null
+  const saveFailed =
+    showingMesa !== null &&
+    [...failures.values()].some(failedMesaId => failedMesaId === null || failedMesaId === showingMesa.id)
+  const saveStatus: SaveStatus = pendingSaves > 0 ? 'saving' : saveFailed ? 'failed' : 'saved'
 
   return (
     <div className={railOpen ? 'shell' : 'shell shell-no-rail'}>
@@ -432,6 +549,7 @@ export function App() {
         {route.kind === 'home' && (
           <Home
             mesas={mesas}
+            unreadable={unreadable}
             onOpen={id => navigate({ kind: 'mesa', mesaId: id })}
             onNewMesa={openNewMesa}
             onRename={renameMesa}
@@ -453,6 +571,7 @@ export function App() {
               onSaveViewport={saveViewport}
               onEnter={enterCard}
               notify={notify}
+              registerFlush={registerFlush}
             />
           </div>
         )}

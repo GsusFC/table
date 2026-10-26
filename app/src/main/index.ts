@@ -26,7 +26,7 @@ import {
   parseViewport,
 } from '../shared/validate'
 import { log } from './log'
-import { runSmoke } from './smoke'
+import { runSmoke, smokeHooks } from './smoke'
 import { createMesaStore } from './store/mesaStore'
 import type { MesaStore } from './store/types'
 import { createSurfaceManager } from './web/surfaceManager'
@@ -44,9 +44,19 @@ if (smokeMode) {
 
 protocol.registerSchemesAsPrivileged([{ scheme: CAPTURE_PROTOCOL, privileges: { standard: true, secure: true } }])
 
+// Una sola instancia: dos procesos sobre el mismo almacén podrían pisarse cambios.
+const hasInstanceLock = app.requestSingleInstanceLock()
+if (!hasInstanceLock) {
+  app.quit()
+}
+
+const FLUSH_TIMEOUT_MS = 2_000
+
 let mainWindow: BrowserWindow | null = null
 let surface: SurfaceManager | null = null
 let store: MesaStore | null = null
+/** Escrituras iniciadas por el proceso principal (capturas, títulos); se esperan al cerrar. */
+const pendingPersistence = new Set<Promise<unknown>>()
 
 function isAppUrl(url: string): boolean {
   try {
@@ -103,6 +113,45 @@ function sendToRenderer(channel: string, ...args: unknown[]): void {
   }
 }
 
+/** Sigue una escritura del proceso principal y avisa a la interfaz si falla. */
+function persist<T>(operation: Promise<T>, failureMessage: string, onSaved: (value: T) => void): void {
+  const tracked = operation.then(onSaved, (error: unknown) => {
+    log('persistence-failed', { message: error instanceof Error ? error.message : String(error) })
+    sendToRenderer(IPC.persistenceError, failureMessage)
+  })
+  pendingPersistence.add(tracked)
+  void tracked.finally(() => pendingPersistence.delete(tracked))
+}
+
+let flushCounter = 0
+
+/** Pide a la interfaz que guarde lo pendiente; no espera más de FLUSH_TIMEOUT_MS. */
+function requestRendererFlush(window: BrowserWindow): Promise<void> {
+  if (window.isDestroyed() || window.webContents.isLoading()) {
+    return Promise.resolve()
+  }
+  flushCounter += 1
+  const requestId = flushCounter
+  const { promise, resolve } = Promise.withResolvers<void>()
+  const finish = (): void => {
+    clearTimeout(timer)
+    ipcMain.removeListener(IPC.appFlushDone, onDone)
+    resolve()
+  }
+  const onDone = (event: IpcMainEvent, id: unknown): void => {
+    if (isTrustedSender(event) && id === requestId) {
+      finish()
+    }
+  }
+  const timer = setTimeout(() => {
+    log('renderer-flush-timeout')
+    finish()
+  }, FLUSH_TIMEOUT_MS)
+  ipcMain.on(IPC.appFlushDone, onDone)
+  window.webContents.send(IPC.appFlushRequest, requestId)
+  return promise
+}
+
 function registerIpc(): void {
   handle(IPC.mesasList, () => requireStore().list())
   handle(IPC.mesasCreate, name => requireStore().create(parseMesaName(name)))
@@ -148,7 +197,8 @@ function registerIpc(): void {
     if (!card) {
       throw new Error('La tarjeta no existe')
     }
-    await requireSurface().enter(parsedMesa, parsedCard, card.url)
+    // El almacén ya valida al leer; se vuelve a exigir http(s) antes de cargar.
+    await requireSurface().enter(parsedMesa, parsedCard, parseHttpUrl(card.url))
   })
   handle(IPC.surfaceExit, () => requireSurface().exit())
   handle(IPC.surfaceUnload, cardId => requireSurface().unload(parseId(cardId)))
@@ -233,32 +283,48 @@ function createWindow(): BrowserWindow {
   const manager = createSurfaceManager(window, {
     onState: state => sendToRenderer(IPC.surfaceState, state),
     onCapture: (mesaId: MesaId, cardId, jpeg) => {
-      void requireStore()
-        .saveCapture(mesaId, cardId, jpeg)
-        .then(card => sendToRenderer(IPC.cardChanged, mesaId, card))
-        .catch(error => log('capture-save-failed', { message: error instanceof Error ? error.message : String(error) }))
+      persist(requireStore().saveCapture(mesaId, cardId, jpeg), 'No se pudo guardar la captura', card =>
+        sendToRenderer(IPC.cardChanged, mesaId, card),
+      )
     },
     onTitle: (mesaId: MesaId, cardId, title) => {
-      void requireStore()
-        .setCardTitle(mesaId, cardId, title)
-        .then(card => sendToRenderer(IPC.cardChanged, mesaId, card))
-        .catch(error => log('title-save-failed', { message: error instanceof Error ? error.message : String(error) }))
+      persist(requireStore().setCardTitle(mesaId, cardId, title), 'No se pudo guardar el título', card =>
+        sendToRenderer(IPC.cardChanged, mesaId, card),
+      )
     },
+    ...(smokeMode ? { confirmDiscard: (origin: string, reason: 'quit' | 'unload') => smokeHooks.confirmDiscard(origin, reason) } : {}),
   })
   surface = manager
 
+  // Cierre coordinado: guardar lo pendiente de la interfaz, descargar las webs
+  // respetando `beforeunload` y esperar a que terminen las escrituras.
   let closing = false
+  let closeInProgress = false
   window.on('close', event => {
     if (closing) {
       return
     }
     event.preventDefault()
-    void manager.closeAll().then(closed => {
-      if (closed && !window.isDestroyed()) {
+    if (closeInProgress) {
+      return
+    }
+    closeInProgress = true
+    void (async () => {
+      try {
+        await requestRendererFlush(window)
+        if (!(await manager.closeAll())) {
+          return
+        }
+        await Promise.allSettled([...pendingPersistence])
+        await requireStore().flush()
         closing = true
-        window.close()
+        if (!window.isDestroyed()) {
+          window.close()
+        }
+      } finally {
+        closeInProgress = false
       }
-    })
+    })()
   })
   window.on('closed', () => {
     mainWindow = null
@@ -280,7 +346,19 @@ app.on('web-contents-created', (_event, contents) => {
 
 app.on('window-all-closed', () => app.quit())
 
+app.on('second-instance', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore()
+    }
+    mainWindow.focus()
+  }
+})
+
 void app.whenReady().then(async () => {
+  if (!hasInstanceLock) {
+    return
+  }
   store = createMesaStore(app.getPath('userData'))
   Menu.setApplicationMenu(buildMenu())
   registerCaptureProtocol()

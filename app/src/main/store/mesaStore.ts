@@ -11,11 +11,12 @@ import {
   type CardPatch,
   type Mesa,
   type MesaId,
+  type MesaListing,
   type MesaSummary,
   type Point,
   type Viewport,
 } from '../../shared/model'
-import { parseId } from '../../shared/validate'
+import { parseHttpUrl, parseId, parseMesaName, parsePoint, parseSize, parseViewport } from '../../shared/validate'
 import { log } from '../log'
 import type { MesaStore } from './types'
 
@@ -29,13 +30,64 @@ function isErrnoCode(error: unknown, code: string): boolean {
   return typeof error === 'object' && error !== null && (error as NodeJS.ErrnoException).code === code
 }
 
+const INVALID = 'El archivo de la mesa no es válido'
+
+/** Lanza si `value` no es una fecha ISO en texto. */
+function checkDate(value: unknown): string {
+  if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) {
+    throw new Error(INVALID)
+  }
+  return value
+}
+
+/** Exige que el validador acepte el valor sin modificarlo; su error se unifica. */
+function checkSame<T>(value: unknown, parse: (v: unknown) => T): T {
+  let parsed: T
+  try {
+    parsed = parse(value)
+  } catch (error) {
+    throw new Error(INVALID, { cause: error })
+  }
+  if (JSON.stringify(parsed) !== JSON.stringify(value)) {
+    throw new Error(INVALID)
+  }
+  return parsed
+}
+
+function checkCard(value: unknown): Card {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(INVALID)
+  }
+  const c = value as { readonly [K in keyof Card]?: unknown }
+  if (typeof c.serviceId !== 'string' || c.serviceId.length === 0) {
+    throw new Error(INVALID)
+  }
+  if (c.title !== null && typeof c.title !== 'string') {
+    throw new Error(INVALID)
+  }
+  if (c.capturedAt !== null) {
+    checkDate(c.capturedAt)
+  }
+  return {
+    id: checkSame(c.id, parseId),
+    url: checkSame(c.url, parseHttpUrl),
+    serviceId: c.serviceId,
+    title: c.title as string | null,
+    position: checkSame(c.position, parsePoint),
+    size: checkSame(c.size, parseSize),
+    capturedAt: c.capturedAt as string | null,
+    createdAt: checkDate(c.createdAt),
+    updatedAt: checkDate(c.updatedAt),
+  }
+}
+
 /**
- * Comprobación mínima de forma: lo justo para no operar sobre un archivo
- * ajeno o de otra versión. El contenido lo escribió esta misma app.
+ * Validación completa de un archivo de mesa: versión, IDs (únicos), nombre,
+ * fechas, viewport y cada tarjeta. Cualquier fallo lanza; el archivo no se toca.
  */
 function checkMesa(value: unknown, id: MesaId): Mesa {
-  if (typeof value !== 'object' || value === null) {
-    throw new Error('El archivo de la mesa no es válido')
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(INVALID)
   }
   const fields = value as { readonly [K in keyof Mesa]?: unknown }
   if (fields.schemaVersion !== SCHEMA_VERSION) {
@@ -43,19 +95,27 @@ function checkMesa(value: unknown, id: MesaId): Mesa {
       `La mesa usa una versión de esquema no admitida (${String(fields.schemaVersion)}; se espera ${SCHEMA_VERSION})`,
     )
   }
-  if (
-    fields.id !== id ||
-    typeof fields.name !== 'string' ||
-    typeof fields.createdAt !== 'string' ||
-    typeof fields.updatedAt !== 'string' ||
-    typeof fields.viewport !== 'object' ||
-    fields.viewport === null ||
-    !Array.isArray(fields.cards) ||
-    !fields.cards.every(card => typeof card === 'object' && card !== null && typeof card.id === 'string')
-  ) {
-    throw new Error('El archivo de la mesa no es válido')
+  if (fields.id !== id || !Array.isArray(fields.cards)) {
+    throw new Error(INVALID)
   }
-  return value as Mesa
+  const mesaId = checkSame(fields.id, parseId)
+  const cards = fields.cards.map(checkCard)
+  const ids = new Set<string>([mesaId])
+  for (const card of cards) {
+    if (ids.has(card.id)) {
+      throw new Error(INVALID)
+    }
+    ids.add(card.id)
+  }
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    id: mesaId,
+    name: checkSame(fields.name, parseMesaName),
+    createdAt: checkDate(fields.createdAt),
+    updatedAt: checkDate(fields.updatedAt),
+    viewport: checkSame(fields.viewport, parseViewport),
+    cards,
+  }
 }
 
 export function createMesaStore(baseDir: string): MesaStore {
@@ -149,17 +209,18 @@ export function createMesaStore(baseDir: string): MesaStore {
   }
 
   return {
-    async list(): Promise<MesaSummary[]> {
+    async list(): Promise<MesaListing> {
       let entries: string[]
       try {
         entries = await readdir(mesasDir)
       } catch (error) {
         if (isErrnoCode(error, 'ENOENT')) {
-          return []
+          return { mesas: [], unreadable: 0 }
         }
         throw error
       }
       const summaries: MesaSummary[] = []
+      let unreadable = 0
       for (const entry of entries) {
         if (!entry.endsWith(MESA_EXTENSION)) {
           continue
@@ -176,10 +237,12 @@ export function createMesaStore(baseDir: string): MesaStore {
             cardCount: mesa.cards.length,
           })
         } catch (error) {
+          unreadable += 1
           log('store.mesa-skipped', { reason: error instanceof Error ? error.message : String(error) })
         }
       }
-      return summaries.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))
+      summaries.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))
+      return { mesas: summaries, unreadable }
     },
 
     async create(name: string): Promise<Mesa> {
@@ -255,11 +318,13 @@ export function createMesaStore(baseDir: string): MesaStore {
     async removeCard(mesaId: MesaId, cardId: CardId): Promise<void> {
       const mId = parseId(mesaId)
       const cId = parseId(cardId)
-      await mutate(mId, (mesa, at) => {
+      await withQueue(mId, async () => {
+        const mesa = await readMesa(mId)
         findCard(mesa, cId)
-        return { mesa: { ...mesa, updatedAt: at, cards: mesa.cards.filter(c => c.id !== cId) }, result: undefined }
+        const at = now()
+        await writeMesa({ ...mesa, updatedAt: at, cards: mesa.cards.filter(c => c.id !== cId) })
+        await rm(cardCapturePath(mId, cId), { force: true })
       })
-      await rm(cardCapturePath(mId, cId), { force: true })
     },
 
     async saveCapture(mesaId: MesaId, cardId: CardId, jpeg: Buffer): Promise<Card> {
@@ -286,6 +351,11 @@ export function createMesaStore(baseDir: string): MesaStore {
     capturePath(mesaId: MesaId, cardId: CardId): string | null {
       const path = cardCapturePath(parseId(mesaId), parseId(cardId))
       return existsSync(path) ? path : null
+    },
+
+    async flush(): Promise<void> {
+      // Las colas guardadas ya absorben los errores: esto nunca rechaza.
+      await Promise.all([...queues.values()])
     },
   }
 }

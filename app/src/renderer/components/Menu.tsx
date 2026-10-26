@@ -48,10 +48,18 @@ export function Menu({ anchor, align = 'start', label, items, onClose }: MenuPro
     setPosition({ left, top })
   }, [anchor.x, anchor.y, align])
 
+  // El primer elemento se enfoca cuando el menú ya está colocado y visible.
+  const focused = useRef(false)
+  useLayoutEffect(() => {
+    if (position && !focused.current) {
+      focused.current = true
+      ref.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
+    }
+  }, [position])
+
   useLayoutEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const element = ref.current
-    element?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
 
     const onPointerDown = (event: PointerEvent): void => {
       const target = event.target as Element

@@ -19,6 +19,7 @@ const EDGE = 12
 /** Campo flotante «Añadir URL». Enter crea, Esc o clic fuera cancela. */
 export function AddUrlField({ left, top, centered, onSubmit, onCancel }: AddUrlFieldProps) {
   const ref = useRef<HTMLFormElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
   const [value, setValue] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -39,6 +40,15 @@ export function AddUrlField({ left, top, centered, onSubmit, onCancel }: AddUrlF
       top: Math.max(EDGE, Math.min(startTop, container.clientHeight - height - EDGE)),
     })
   }, [left, top, centered, error])
+
+  // El campo se enfoca cuando ya está colocado y visible (no antes, oculto).
+  const focused = useRef(false)
+  useLayoutEffect(() => {
+    if (position && !focused.current) {
+      focused.current = true
+      inputRef.current?.focus()
+    }
+  }, [position])
 
   // Los listeners se instalan una vez y leen siempre el estado más reciente.
   const latest = useRef({ busy, onCancel })
@@ -96,6 +106,7 @@ export function AddUrlField({ left, top, centered, onSubmit, onCancel }: AddUrlF
       <div className="add-url-row">
         <Link aria-hidden size={15} strokeWidth={1.75} className="add-url-icon" />
         <input
+          ref={inputRef}
           className="add-url-input"
           value={value}
           onChange={event => {
@@ -107,7 +118,6 @@ export function AddUrlField({ left, top, centered, onSubmit, onCancel }: AddUrlF
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? 'add-url-error' : 'add-url-hint'}
           disabled={busy}
-          autoFocus
           spellCheck={false}
           autoComplete="off"
         />

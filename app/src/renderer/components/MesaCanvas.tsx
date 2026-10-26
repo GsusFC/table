@@ -49,6 +49,8 @@ interface MesaCanvasProps {
   readonly onSaveViewport: (viewport: Viewport) => void
   readonly onEnter: (cardId: CardId) => void
   readonly notify: Notify
+  /** Registra un guardado inmediato de lo pendiente (antes de cerrar); devuelve la baja. */
+  readonly registerFlush: (flush: () => void) => () => void
 }
 
 const NODE_TYPES: NodeTypes = { card: CardNode }
@@ -123,6 +125,7 @@ function CanvasInner({
   onSaveViewport,
   onEnter,
   notify,
+  registerFlush,
 }: MesaCanvasProps) {
   const flow = useReactFlow<CardNodeType>()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -156,7 +159,7 @@ function CanvasInner({
     }
   }, [enteredCardId])
 
-  // Vista guardada con retardo; lo pendiente se guarda al salir de la mesa.
+  // Vista guardada con retardo; lo pendiente se guarda al salir de la mesa o al cerrar Table.
   const pendingViewport = useRef<Viewport | null>(null)
   const viewportTimer = useRef<number | undefined>(undefined)
   const saveViewportRef = useRef(onSaveViewport)
@@ -172,6 +175,7 @@ function CanvasInner({
     }
   }, [])
   useEffect(() => flushViewport, [flushViewport])
+  useEffect(() => registerFlush(flushViewport), [registerFlush, flushViewport])
 
   const onMoveEnd = useCallback(
     (_event: unknown, viewport: Viewport) => {

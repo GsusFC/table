@@ -1,6 +1,7 @@
-import { dialog, WebContentsView, type BrowserWindow, type Rectangle } from 'electron'
+import { dialog, WebContentsView, type BrowserWindow, type Rectangle, type WebContents } from 'electron'
 import type { CardId, MesaId } from '../../shared/model'
 import type { PanelBounds, SurfaceCardState, UnloadResult } from '../../shared/surface'
+import { isHttpUrl } from '../../shared/validate'
 import { log, originOf } from '../log'
 import { attachContextMenu, configureSurfaceSession, guardNavigation, SURFACE_PARTITION } from './guards'
 import { isExitShortcut } from './shortcut'
@@ -18,7 +19,11 @@ interface LoadedCard {
   readonly mesaId: MesaId
   readonly cardId: CardId
   readonly view: WebContentsView
-  /** Popups abiertos desde esta web; se cierran al descargarla. */
+  /**
+   * Popups abiertos desde esta web (y desde sus popups); se cierran al
+   * descargarla respetando su `beforeunload`. Si la vista se recrea tras
+   * morir su proceso, el conjunto pasa a la nueva tarjeta.
+   */
   readonly popups: Set<BrowserWindow>
   state: SurfaceCardState
   /** Inicio de la carga inicial, hasta el primer `did-stop-loading`. */
@@ -68,11 +73,14 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
   }
 
   /**
-   * Pregunta si descartar el trabajo que la página dice tener pendiente.
-   * `true` = descartar.
+   * Pregunta si descartar el trabajo que una página o un popup dice tener
+   * pendiente. `true` = descartar. Si la aplicación aporta su propia decisión
+   * (el smoke), sustituye al diálogo.
    */
-  function confirmDiscard(card: LoadedCard, reason: CloseReason): boolean {
-    const origin = cardOrigin(card)
+  function confirmDiscard(origin: string, reason: CloseReason): boolean {
+    if (callbacks.confirmDiscard) {
+      return callbacks.confirmDiscard(origin, reason)
+    }
     const options: Electron.MessageBoxSyncOptions = {
       type: 'warning',
       buttons: reason === 'quit' ? ['Cancelar', 'Salir sin guardar'] : ['Mantener cargada', 'Descargar sin guardar'],
@@ -85,7 +93,44 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
     return response === 1
   }
 
-  function createCard(mesaId: MesaId, cardId: CardId): LoadedCard {
+  /**
+   * Flujo común de cierre respetando `beforeunload`, para la vista y para los
+   * popups. `close` inicia el cierre; `watchGone` avisa cuando el contenido
+   * desaparece y devuelve cómo dejar de escuchar. Si la página avisa de
+   * trabajo pendiente, decide el usuario; Table no descarta cambios por su
+   * cuenta. `true` si quedó cerrado.
+   */
+  function closeGuarded(
+    contents: WebContents,
+    reason: CloseReason,
+    close: () => void,
+    watchGone: (onGone: () => void) => () => void,
+  ): Promise<boolean> {
+    const { promise, resolve } = Promise.withResolvers<boolean>()
+    const onPreventUnload = (event: Electron.Event): void => {
+      const origin = originOf(contents.getURL())
+      const discard = confirmDiscard(origin, reason)
+      log('unload-prevented', { origin, reason, discard })
+      if (discard) {
+        event.preventDefault()
+        return
+      }
+      contents.removeListener('will-prevent-unload', onPreventUnload)
+      stopWatching()
+      resolve(false)
+    }
+    const stopWatching = watchGone(() => {
+      if (!contents.isDestroyed()) {
+        contents.removeListener('will-prevent-unload', onPreventUnload)
+      }
+      resolve(true)
+    })
+    contents.on('will-prevent-unload', onPreventUnload)
+    close()
+    return promise
+  }
+
+  function createCard(mesaId: MesaId, cardId: CardId, popups: Set<BrowserWindow> = new Set()): LoadedCard {
     const view = new WebContentsView({
       webPreferences: {
         partition: SURFACE_PARTITION,
@@ -102,7 +147,7 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
       mesaId,
       cardId,
       view,
-      popups: new Set(),
+      popups,
       state: {
         cardId,
         status: 'loading',
@@ -122,8 +167,10 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
   function attachListeners(card: LoadedCard): void {
     const contents = card.view.webContents
     guardNavigation(contents, window, popup => {
-      card.popups.add(popup)
-      popup.once('closed', () => card.popups.delete(popup))
+      // El conjunto (no la tarjeta) se captura: sobrevive a una vista recreada.
+      const popups = card.popups
+      popups.add(popup)
+      popup.once('closed', () => popups.delete(popup))
     })
     attachContextMenu(contents)
 
@@ -187,23 +234,18 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
     card.view.webContents.loadURL(url).catch(() => undefined)
   }
 
+  /** Retira la vista de la ventana y del registro. Los popups se tratan aparte. */
   function detach(card: LoadedCard): void {
     cards.delete(card.cardId)
     if (active === card) {
       active = null
     }
-    for (const popup of card.popups) {
-      if (!popup.isDestroyed()) {
-        popup.destroy()
-      }
-    }
-    card.popups.clear()
     if (!window.isDestroyed()) {
       window.contentView.removeChildView(card.view)
     }
   }
 
-  /** Cierre sin `beforeunload`: solo para webs cuyo proceso ya no existe. */
+  /** Cierre sin `beforeunload`: solo para vistas cuyo proceso ya no existe. */
   function forceClose(card: LoadedCard): void {
     const contents = card.view.webContents
     if (!contents.isDestroyed()) {
@@ -213,37 +255,64 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
   }
 
   /**
-   * Cierra la vista respetando `beforeunload`. Si la página avisa de trabajo
-   * pendiente, el usuario decide; Table no descarta cambios por su cuenta.
-   * `true` si la vista quedó cerrada.
+   * Cierra los popups de la tarjeta respetando su `beforeunload`, con el
+   * mismo flujo que la vista. Solo se destruyen sin preguntar los popups cuyo
+   * proceso ya no existe. Se detiene en el primero que el usuario mantiene:
+   * `false`. Los cerrados antes no tenían trabajo pendiente o el usuario
+   * aceptó descartarlo.
    */
-  function closeView(card: LoadedCard, reason: CloseReason): Promise<boolean> {
+  async function closePopups(card: LoadedCard, reason: CloseReason): Promise<boolean> {
+    for (const popup of [...card.popups]) {
+      if (popup.isDestroyed()) {
+        card.popups.delete(popup)
+        continue
+      }
+      const contents = popup.webContents
+      if (contents.isDestroyed() || contents.isCrashed()) {
+        popup.destroy()
+        card.popups.delete(popup)
+        continue
+      }
+      // `close()` de la ventana dispara `beforeunload` y emite
+      // `will-prevent-unload` en su `webContents`, igual que la vista.
+      const closed = await closeGuarded(
+        contents,
+        reason,
+        () => popup.close(),
+        onGone => {
+          popup.once('closed', onGone)
+          return () => popup.removeListener('closed', onGone)
+        },
+      )
+      if (!closed) {
+        log('popup-kept', { origin: originOf(contents.getURL()), reason })
+        return false
+      }
+      card.popups.delete(popup)
+    }
+    return true
+  }
+
+  /** Cierra la vista respetando `beforeunload`. `true` si quedó cerrada. */
+  async function closeView(card: LoadedCard, reason: CloseReason): Promise<boolean> {
     if (!isAlive(card)) {
       forceClose(card)
-      return Promise.resolve(true)
+      return true
     }
     const contents = card.view.webContents
-    const { promise, resolve } = Promise.withResolvers<boolean>()
-    const onPreventUnload = (event: Electron.Event): void => {
-      const discard = confirmDiscard(card, reason)
-      log('unload-prevented', { origin: cardOrigin(card), reason, discard })
-      if (discard) {
-        event.preventDefault()
-        return
-      }
-      contents.removeListener('will-prevent-unload', onPreventUnload)
-      contents.removeListener('destroyed', onDestroyed)
-      resolve(false)
-    }
-    const onDestroyed = (): void => {
-      contents.removeListener('will-prevent-unload', onPreventUnload)
+    const closed = await closeGuarded(
+      contents,
+      reason,
+      () => contents.close({ waitForBeforeUnload: true }),
+      onGone => {
+        contents.once('destroyed', onGone)
+        return () => contents.removeListener('destroyed', onGone)
+      },
+    )
+    if (closed) {
       detach(card)
-      resolve(true)
     }
-    contents.on('will-prevent-unload', onPreventUnload)
-    contents.once('destroyed', onDestroyed)
-    contents.close({ waitForBeforeUnload: true })
-    return promise
+    return closed
   }
 
   async function capture(card: LoadedCard): Promise<Buffer | null> {
@@ -288,12 +357,17 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
     log('surface-exit', { origin: cardOrigin(card), captured: jpeg !== null })
   }
 
+  /**
+   * Descarga la tarjeta: primero sus popups y después la vista, todo
+   * respetando `beforeunload`. Si el usuario mantiene un popup, la vista
+   * sigue cargada y la tarjeta no se toca: `kept`.
+   */
   async function unloadCard(card: LoadedCard, reason: CloseReason): Promise<UnloadResult> {
     if (active === card) {
       await exitActive()
     }
-    if (!(await closeView(card, reason))) {
-      log('surface-kept', { origin: cardOrigin(card) })
+    if (!(await closePopups(card, reason)) || !(await closeView(card, reason))) {
+      log('surface-kept', { origin: cardOrigin(card), reason })
       return 'kept'
     }
     const origin = cardOrigin(card)
@@ -313,21 +387,37 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
     return result
   }
 
+  /**
+   * Mesa abierta según la última `openMesa` completada sin `kept`. Las
+   * entradas se comprueban contra ella al ejecutarse, no al pedirse.
+   */
+  let openMesaId: MesaId | null = null
+
   async function enterCard(mesaId: MesaId, cardId: CardId, url: string): Promise<void> {
-    let card = cards.get(cardId)
-    if (active && active !== card) {
-      await exitActive()
+    if (mesaId !== openMesaId) {
+      throw new Error('No se puede entrar: la mesa de la tarjeta ya no está abierta')
     }
+    // `will-navigate` no cubre las cargas programáticas: se exige http(s) aquí.
+    if (!isHttpUrl(url)) {
+      throw new Error('No se puede entrar: la tarjeta no tiene una URL http(s)')
+    }
+    let card = cards.get(cardId)
     if (card && card.mesaId !== mesaId) {
       throw new Error('La tarjeta pertenece a otra mesa')
+    }
+    if (active && active !== card) {
+      await exitActive()
     }
     if (card && card.state.status === 'failed') {
       if (isAlive(card)) {
         // Fallo de carga con el proceso vivo: se reintenta en la misma vista.
         startLoad(card, url)
       } else {
+        // Proceso muerto: vista nueva; sus popups vivos pasan a ella.
+        const popups = card.popups
         forceClose(card)
-        card = undefined
+        card = createCard(mesaId, cardId, popups)
+        startLoad(card, url)
       }
     }
     if (!card) {
@@ -346,7 +436,13 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
 
   const manager: SurfaceManager = {
     openMesa(mesaId) {
-      return serial(() => unloadWhere(card => card.mesaId !== mesaId))
+      return serial(async () => {
+        const result = await unloadWhere(card => card.mesaId !== mesaId)
+        if (result === 'unloaded') {
+          openMesaId = mesaId
+        }
+        return result
+      })
     },
 
     enter(mesaId, cardId, url) {

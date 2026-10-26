@@ -1,5 +1,5 @@
-import { app, type BrowserWindow } from 'electron'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { app, webContents, type BrowserWindow, type WebContents } from 'electron'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
@@ -19,7 +19,29 @@ const FIXTURE_HTML = `<!doctype html><html lang="es"><head><meta charset="utf-8"
 <style>body{font:16px system-ui;margin:0;padding:32px;background:#fdf6e3}main{height:3000px}</style></head>
 <body><main><h1>Página sintética de prueba</h1><p>Contenido local para T-002.</p></main></body></html>`
 
-const TOTAL_TIMEOUT_MS = 90_000
+/** Página sintética que declara trabajo pendiente con `beforeunload`. */
+const GUARDED_HTML = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Con cambios</title></head>
+<body><input autofocus><script>addEventListener('beforeunload', e => { e.preventDefault(); e.returnValue = '' })</script></body></html>`
+
+const TOTAL_TIMEOUT_MS = 120_000
+
+/** Decisión ante `beforeunload` que el smoke controla; la app la usa solo con TABLE_SMOKE=1. */
+export const smokeHooks = {
+  confirmDiscard: (_origin: string, _reason: 'quit' | 'unload'): boolean => false,
+}
+
+/** Chromium solo respeta `beforeunload` si la página recibió interacción del usuario. */
+function activate(contents: WebContents): void {
+  contents.sendInputEvent({ type: 'mouseDown', x: 10, y: 10, button: 'left', clickCount: 1 })
+  contents.sendInputEvent({ type: 'mouseUp', x: 10, y: 10, button: 'left', clickCount: 1 })
+  contents.sendInputEvent({ type: 'keyDown', keyCode: 'a' })
+  contents.sendInputEvent({ type: 'char', keyCode: 'a' })
+  contents.sendInputEvent({ type: 'keyUp', keyCode: 'a' })
+}
+
+function findContents(url: string): WebContents | undefined {
+  return webContents.getAllWebContents().find(contents => !contents.isDestroyed() && contents.getURL() === url)
+}
 
 interface Check {
   readonly name: string
@@ -42,9 +64,9 @@ async function waitFor<T>(probe: () => Promise<T> | T, accept: (value: T) => boo
 }
 
 async function startFixtureServer(): Promise<{ server: Server; url: string }> {
-  const server = createServer((_request, response) => {
+  const server = createServer((request, response) => {
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-    response.end(FIXTURE_HTML)
+    response.end(request.url === '/guarded' ? GUARDED_HTML : FIXTURE_HTML)
   })
   const { promise, resolve } = Promise.withResolvers<void>()
   server.listen(0, '127.0.0.1', resolve)
@@ -81,6 +103,7 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager): 
   const nodeCount = (): Promise<number> => inUi(`document.querySelectorAll('.react-flow__node').length`)
   const { server, url: fixtureUrl } = await startFixtureServer()
 
+  let closingMesaId: string | null = null
   try {
     await waitFor(() => window.isVisible() && !ui.isLoading(), Boolean, 'interfaz lista')
     await waitFor(() => inUi<boolean>(`!!document.querySelector('.home')`), Boolean, 'inicio')
@@ -177,19 +200,96 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager): 
     record('persistencia: la mesa conserva sus 4 tarjetas', true)
     record('memoria: al abrir la mesa no se carga ninguna web', surface.getStates().every(state => state.status === 'unloaded'))
 
+    // beforeunload en la web de una tarjeta.
+    const guardedUrl = `${fixtureUrl}guarded`
+    const guardedCard = await inUi<Card>(`window.table.cards.add(${JSON.stringify(mesa.id)}, ${JSON.stringify(guardedUrl)}, { x: 0, y: 700 })`)
+    await inUi(`window.table.surface.enter(${JSON.stringify(mesa.id)}, ${JSON.stringify(guardedCard.id)})`)
+    await waitFor(() => surface.getStates().find(state => state.cardId === guardedCard.id), state => state?.status === 'ready', 'página con cambios cargada')
+    const guardedContents = await waitFor(() => findContents(guardedUrl), Boolean, 'webContents de la página con cambios')
+    activate(guardedContents!)
+    await delay(300)
+    let prompts = 0
+    smokeHooks.confirmDiscard = () => {
+      prompts += 1
+      return false
+    }
+    const keptCard = await inUi<string>(`window.table.surface.unload(${JSON.stringify(guardedCard.id)})`)
+    record('beforeunload: si se mantiene, la web sigue cargada', keptCard === 'kept' && prompts === 1 && !guardedContents!.isDestroyed(), { keptCard, prompts })
+    smokeHooks.confirmDiscard = () => {
+      prompts += 1
+      return true
+    }
+    const discardedCard = await inUi<string>(`window.table.surface.unload(${JSON.stringify(guardedCard.id)})`)
+    record('beforeunload: si se descarta, se descarga', discardedCard === 'unloaded' && prompts === 2, { discardedCard, prompts })
+
+    // beforeunload en un popup de la tarjeta.
+    await inUi(`window.table.surface.enter(${JSON.stringify(mesa.id)}, ${JSON.stringify(fixtureCard.id)})`)
+    await waitFor(() => surface.getStates().find(state => state.cardId === fixtureCard.id), state => state?.status === 'ready', 'página sintética cargada')
+    const opener = await waitFor(() => findContents(fixtureUrl), Boolean, 'webContents de la página sintética')
+    await opener!.executeJavaScript(`window.open('/guarded') !== null`, true)
+    const popupContents = await waitFor(() => findContents(guardedUrl), Boolean, 'popup con cambios')
+    await waitFor(() => popupContents!.isLoading(), loading => !loading, 'carga del popup')
+    activate(popupContents!)
+    await delay(300)
+    prompts = 0
+    smokeHooks.confirmDiscard = () => {
+      prompts += 1
+      return false
+    }
+    const keptPopup = await inUi<string>(`window.table.surface.unload(${JSON.stringify(fixtureCard.id)})`)
+    record(
+      'popup: si su web se mantiene, la tarjeta no se descarga',
+      keptPopup === 'kept' && prompts === 1 && !popupContents!.isDestroyed() && !opener!.isDestroyed(),
+      { keptPopup, prompts },
+    )
+    smokeHooks.confirmDiscard = () => {
+      prompts += 1
+      return true
+    }
+    const discardedPopup = await inUi<string>(`window.table.surface.unload(${JSON.stringify(fixtureCard.id)})`)
+    record('popup: si se descarta, se cierran popup y tarjeta', discardedPopup === 'unloaded' && popupContents!.isDestroyed(), {
+      discardedPopup,
+      prompts,
+    })
+    smokeHooks.confirmDiscard = () => false
+
     await inUi(`window.table.surface.openMesa(null)`)
     await inUi(`window.table.mesas.remove(${JSON.stringify(mesa.id)})`)
-    const remaining = await inUi<{ name: string }[]>('window.table.mesas.list()')
-    record('mesas: borrar elimina la mesa', remaining.every(item => item.name !== 'Mesa de prueba'))
+    const listing = await inUi<{ mesas: { name: string }[] }>('window.table.mesas.list()')
+    record('mesas: borrar elimina la mesa', listing.mesas.every(item => item.name !== 'Mesa de prueba'))
+
+    // Cierre coordinado: mover el lienzo y cerrar antes del retardo de guardado.
+    const closingMesa = await inUi<Mesa>(`window.table.mesas.create('Mesa de cierre')`)
+    closingMesaId = closingMesa.id
+    ui.reload()
+    await waitFor(() => inUi<boolean>(`[...document.querySelectorAll('.mesa-row-open')].some(b => b.textContent.includes('Mesa de cierre'))`), Boolean, 'mesa de cierre en el inicio')
+    await inUi(`[...document.querySelectorAll('.mesa-row-open')].find(b => b.textContent.includes('Mesa de cierre')).click()`)
+    await waitFor(() => inUi<boolean>(`!!document.querySelector('.react-flow__pane')`), Boolean, 'lienzo de cierre')
+    await inUi(`(() => {
+      const pane = document.querySelector('.react-flow__pane')
+      const r = pane.getBoundingClientRect()
+      for (let i = 0; i < 5; i += 1) {
+        pane.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 120, clientX: r.left + 300, clientY: r.top + 300 }))
+      }
+    })()`)
+    await delay(250)
   } catch (error) {
     record('ejecución', false, error instanceof Error ? error.message : String(error))
   } finally {
     server.close()
   }
 
-  const failed = checks.filter(check => !check.ok).length
-  console.log(`[table-smoke] ${checks.length - failed}/${checks.length} comprobaciones correctas`)
   window.once('closed', () => {
+    if (closingMesaId) {
+      try {
+        const saved = JSON.parse(readFileSync(join(app.getPath('userData'), 'mesas', `${closingMesaId}.json`), 'utf8')) as Mesa
+        record('cierre: guarda la vista pendiente del lienzo', saved.viewport.y !== 0 || saved.viewport.x !== 0, saved.viewport)
+      } catch (error) {
+        record('cierre: guarda la vista pendiente del lienzo', false, error instanceof Error ? error.message : String(error))
+      }
+    }
+    const failed = checks.filter(check => !check.ok).length
+    console.log(`[table-smoke] ${checks.length - failed}/${checks.length} comprobaciones correctas`)
     clearTimeout(watchdog)
     app.exit(failed === 0 ? 0 : 1)
   })

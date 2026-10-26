@@ -3,6 +3,16 @@ import { IPC, type TableApi } from '../shared/ipc'
 import type { Card, MesaId } from '../shared/model'
 import type { SurfaceCardState } from '../shared/surface'
 
+const flushHandlers = new Set<() => Promise<void>>()
+
+// El proceso principal pide guardar lo pendiente antes de cerrar; se responde
+// con el mismo id cuando terminan todos los manejadores, hayan fallado o no.
+ipcRenderer.on(IPC.appFlushRequest, (_event: IpcRendererEvent, requestId: unknown) => {
+  void Promise.allSettled([...flushHandlers].map(handler => handler())).then(() => {
+    ipcRenderer.send(IPC.appFlushDone, requestId)
+  })
+})
+
 const api: TableApi = {
   platform: process.platform,
   mesas: {
@@ -38,6 +48,19 @@ const api: TableApi = {
     ipcRenderer.on(IPC.cardChanged, handler)
     return () => {
       ipcRenderer.removeListener(IPC.cardChanged, handler)
+    }
+  },
+  onPersistenceError: listener => {
+    const handler = (_event: IpcRendererEvent, message: string): void => listener(message)
+    ipcRenderer.on(IPC.persistenceError, handler)
+    return () => {
+      ipcRenderer.removeListener(IPC.persistenceError, handler)
+    }
+  },
+  onFlushRequest: handler => {
+    flushHandlers.add(handler)
+    return () => {
+      flushHandlers.delete(handler)
     }
   },
 }

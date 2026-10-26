@@ -41,7 +41,7 @@ describe('mesas', () => {
   })
 
   it('lista sin carpeta previa devuelve vacío', async () => {
-    expect(await store.list()).toEqual([])
+    expect(await store.list()).toEqual({ mesas: [], unreadable: 0 })
   })
 
   it('lista por recencia, la modificada primero', async () => {
@@ -49,11 +49,11 @@ describe('mesas', () => {
     const a = await store.create('A')
     setNow('2026-10-26T11:00:00.000Z')
     const b = await store.create('B')
-    expect((await store.list()).map(m => m.id)).toEqual([b.id, a.id])
+    expect((await store.list()).mesas.map(m => m.id)).toEqual([b.id, a.id])
 
     setNow('2026-10-26T12:00:00.000Z')
     await store.addCard(a.id, card)
-    const list = await store.list()
+    const list = (await store.list()).mesas
     expect(list.map(m => m.id)).toEqual([a.id, b.id])
     expect(list[0]).toEqual({
       id: a.id,
@@ -88,7 +88,7 @@ describe('mesas', () => {
     await expect(store.get(mesa.id)).rejects.toThrow('La mesa no existe')
     expect(existsSync(join(baseDir, 'captures', mesa.id))).toBe(false)
     expect(store.capturePath(mesa.id, added.id)).toBeNull()
-    expect(await store.list()).toEqual([])
+    expect(await store.list()).toEqual({ mesas: [], unreadable: 0 })
   })
 
   it('get, rename y remove de una mesa inexistente lanzan', async () => {
@@ -112,7 +112,7 @@ describe('archivos ilegibles', () => {
     const content = JSON.stringify({ schemaVersion: 99, id, name: 'Futura', createdAt: 'x', updatedAt: 'x', viewport: {}, cards: [] })
     await writeFile(path, content)
 
-    expect((await store.list()).map(m => m.id)).toEqual([good.id])
+    expect(await store.list()).toEqual({ mesas: [expect.objectContaining({ id: good.id })], unreadable: 1 })
     await expect(store.get(id)).rejects.toThrow(/versión de esquema/)
     await expect(store.rename(id, 'Pisada')).rejects.toThrow(/versión de esquema/)
     await expect(store.addCard(id, card)).rejects.toThrow(/versión de esquema/)
@@ -124,8 +124,82 @@ describe('archivos ilegibles', () => {
     const id = randomUUID()
     await mkdir(join(baseDir, 'mesas'), { recursive: true })
     await writeFile(join(baseDir, 'mesas', `${id}.json`), '{roto')
-    expect(await store.list()).toEqual([])
+    expect(await store.list()).toEqual({ mesas: [], unreadable: 1 })
     await expect(store.get(id)).rejects.toThrow(/JSON/)
+  })
+
+  /** Escribe una mesa válida con una tarjeta y devuelve el archivo modificado por `tamper`. */
+  async function writeTampered(tamper: (cardJson: Record<string, unknown>, mesa: Record<string, unknown>) => void) {
+    const mesa = await store.create('Original')
+    const added = await store.addCard(mesa.id, card)
+    const path = join(baseDir, 'mesas', `${mesa.id}.json`)
+    const json = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>
+    tamper((json.cards as [Record<string, unknown>])[0], json)
+    const content = JSON.stringify(json)
+    await writeFile(path, content)
+    return { id: mesa.id, cardId: added.id, path, content }
+  }
+
+  async function expectUnreadable(file: { id: string; path: string; content: string }): Promise<void> {
+    expect(await store.list()).toEqual({ mesas: [], unreadable: 1 })
+    await expect(store.get(file.id)).rejects.toThrow('no es válido')
+    await expect(store.rename(file.id, 'Pisada')).rejects.toThrow()
+    await expect(store.remove(file.id)).rejects.toThrow()
+    expect(await readFile(file.path, 'utf8')).toBe(file.content)
+  }
+
+  it('tarjeta con URL file: no es legible y no se toca', async () => {
+    await expectUnreadable(await writeTampered(c => (c.url = 'file:///etc/passwd')))
+  })
+
+  it('tarjeta sin size no es legible y no se toca', async () => {
+    await expectUnreadable(await writeTampered(c => delete c.size))
+  })
+
+  it('ids de tarjeta duplicados no son legibles', async () => {
+    await expectUnreadable(
+      await writeTampered((c, m) => {
+        m.cards = [c, { ...c }]
+      }),
+    )
+  })
+
+  it('viewport inválido no es legible', async () => {
+    await expectUnreadable(await writeTampered((_c, m) => (m.viewport = { x: 0, y: 0 })))
+  })
+
+  it('list cuenta ilegibles junto a mesas válidas', async () => {
+    const good = await store.create('Buena')
+    await mkdir(join(baseDir, 'mesas'), { recursive: true })
+    await writeFile(join(baseDir, 'mesas', `${randomUUID()}.json`), '{roto')
+    await writeFile(join(baseDir, 'mesas', `${randomUUID()}.json`), JSON.stringify({ schemaVersion: SCHEMA_VERSION }))
+    const listing = await store.list()
+    expect(listing.mesas.map(m => m.id)).toEqual([good.id])
+    expect(listing.unreadable).toBe(2)
+  })
+})
+
+describe('flush y persistencia', () => {
+  it('flush espera a escrituras lanzadas sin await', async () => {
+    const mesa = await store.create('Flush')
+    void store.rename(mesa.id, 'Renombrada')
+    const failing = store.rename(randomUUID(), 'X')
+    failing.catch(() => undefined)
+    await store.flush()
+    const json = JSON.parse(await readFile(join(baseDir, 'mesas', `${mesa.id}.json`), 'utf8')) as { name: string }
+    expect(json.name).toBe('Renombrada')
+  })
+
+  it('otra instancia sobre la misma carpeta ve los datos', async () => {
+    const mesa = await store.create('Persistente')
+    const added = await store.addCard(mesa.id, card)
+    await store.setViewport(mesa.id, { x: 1, y: 2, zoom: 1.5 })
+    await store.flush()
+    const other = createMesaStore(baseDir)
+    const loaded = await other.get(mesa.id)
+    expect(loaded.cards).toEqual([added])
+    expect(loaded.viewport).toEqual({ x: 1, y: 2, zoom: 1.5 })
+    expect((await other.list()).mesas.map(m => m.id)).toEqual([mesa.id])
   })
 })
 

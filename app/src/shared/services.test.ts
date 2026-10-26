@@ -129,3 +129,25 @@ describe('normalizeUrlInput', () => {
     expect(normalizeUrlInput(input)).toBe(expected)
   })
 })
+
+describe('ampliar el catálogo', () => {
+  // Criterio de T-002: un servicio nuevo es solo una entrada más del catálogo.
+  const miro = {
+    id: 'miro',
+    name: 'Miro',
+    badge: { monogram: 'M', color: '#ffd02f' },
+    matches: (url: URL) => url.hostname === 'miro.com' || url.hostname.endsWith('.miro.com'),
+  }
+  const catalog = [...SERVICES, miro]
+
+  it('reconoce el servicio añadido sin afectar a los existentes', () => {
+    expect(recognizeService('https://miro.com/app/board/uXjVFake=/', catalog).id).toBe('miro')
+    expect(recognizeService('https://www.figma.com/design/AbC123xyz/Prueba', catalog).id).toBe('figma')
+    expect(recognizeService('https://example.com/', catalog).id).toBe(WEB_SERVICE.id)
+  })
+
+  it('lo resuelve por id para pintar su distintivo', () => {
+    expect(serviceById('miro', catalog).badge.monogram).toBe('M')
+    expect(serviceById('miro').id).toBe(WEB_SERVICE.id)
+  })
+})

@@ -1,4 +1,4 @@
-import { LayoutGrid, Pencil, Plus, Trash2 } from 'lucide-react'
+import { LayoutGrid, Pencil, Plus, TriangleAlert, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import type { MesaId, MesaSummary } from '../../shared/model'
 import { absoluteDate, cardCountLabel, relativeDate } from '../lib/format'
@@ -7,6 +7,8 @@ import { NameEditor } from './NameEditor'
 interface HomeProps {
   /** null mientras se carga la lista. */
   readonly mesas: readonly MesaSummary[] | null
+  /** Archivos de mesa que no se pudieron leer (dañados o de otra versión). */
+  readonly unreadable: number
   readonly onOpen: (id: MesaId) => void
   readonly onNewMesa: () => void
   readonly onRename: (id: MesaId, name: string) => Promise<void>
@@ -14,7 +16,7 @@ interface HomeProps {
 }
 
 /** Inicio: mesas más recientes primero y «Nueva mesa». */
-export function Home({ mesas, onOpen, onNewMesa, onRename, onDelete }: HomeProps) {
+export function Home({ mesas, unreadable, onOpen, onNewMesa, onRename, onDelete }: HomeProps) {
   const [renaming, setRenaming] = useState<MesaId | null>(null)
   const sorted = mesas ? [...mesas].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) : null
 
@@ -33,6 +35,15 @@ export function Home({ mesas, onOpen, onNewMesa, onRename, onDelete }: HomeProps
             </button>
           )}
         </header>
+
+        {unreadable > 0 && (
+          <p className="home-unreadable" role="status">
+            <TriangleAlert aria-hidden size={14} strokeWidth={1.75} />
+            {unreadable === 1
+              ? '1 mesa no se puede abrir: archivo dañado o de otra versión. No se ha modificado.'
+              : `${unreadable} mesas no se pueden abrir: archivo dañado o de otra versión. No se han modificado.`}
+          </p>
+        )}
 
         {sorted === null && (
           <ul className="mesa-list" aria-busy="true" aria-label="Cargando mesas">
