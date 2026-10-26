@@ -217,3 +217,28 @@ Validación del arnés con una página sintética local, 2 ciclos: reposo del sh
 ### Condiciones del equipo antes de medir
 
 El 2026-10-26, antes de cualquier medición, el equipo estaba en presión de memoria de **aviso** (`kern.memorystatus_vm_pressure_level` = 2) con **~24 000 de 24 576 MiB de swap usados**, con otras aplicaciones abiertas. En ese estado el criterio «presión normal y swap sin crecimiento» no se puede cumplir por causas ajenas a Table. La medición requiere cerrar aplicaciones pesadas y registrar el estado inicial.
+
+Para medir, el usuario cerró todas las aplicaciones salvo Finder y el terminal. Estado inicial (2026-10-26 15:51 UTC): presión **normal** (1), swap 9 371 / 10 240 MiB usados; quedaba swap de la sesión anterior, que siguió bajando durante el ensayo.
+
+### Medición de Table (escenario A)
+
+Build compilada (`electron-vite build`), archivo de Figma del piloto, sesión iniciada, permisos denegados sin intervención y una sola tarjeta.
+
+| Medida | Resultado | Umbral | Estado |
+| --- | --- | --- | --- |
+| Shell en reposo, sin web | 112–115 MiB | Sin umbral | Registrado |
+| Figma activa, estable (mediana de los últimos 30 s de 60 s activa) | 1 585 MiB | Figma de escritorio + 15 % | Pendiente de la base |
+| Pico durante carga y uso | 2 172 MiB (pasada de 60 s); 2 524 MiB máximo en 10 ciclos | Figma de escritorio + 15 % | Pendiente de la base |
+| Conservada (5 s tras salir) | 1 292–1 883 MiB | — | Registrado |
+| 30 s tras descargar, ciclos 1–10 | 154, 153, 361, 234, 234, 232, 233, 234, 234, 232 MiB | — | Registrado |
+| Crecimiento residual | 3,8 MiB por ciclo (mínimos cuadrados); estable en ~233 MiB desde el ciclo 4 | ≤ 20 MiB por ciclo, sin tendencia | Cumple |
+| Carga hasta `did-stop-loading` | 2,0–2,7 s (10 ciclos); 4,0 s en la pasada de 60 s | ≤ 10 s | Cumple, con límite: el editor puede tardar más en quedar usable |
+| Presión y swap | Presión normal en todas las muestras; swap −184 MiB | Normal, sin crecimiento | Cumple |
+| Procesos tras cerrar | 0 | 0 | Cumple |
+| Descargas bloqueadas por `beforeunload` | 0 de 11 | — | Registrado |
+
+Descargar libera la mayor parte de la memoria de Figma (de ~1,8 GiB conservada a ~233 MiB). Respecto al shell en reposo quedan ~120 MiB retenidos tras el ciclo 4, sin crecimiento posterior. `[INFERENCIA]` Caché compartida de Chromium o de la partición.
+
+### Base: Figma de escritorio
+
+Primer intento no comparable. `open -a Figma <url>` con muestreo de 120 s dio 13 procesos (8 renderers, varios de 228 a 930 MB), 4 574 MiB estables, 5 652 MiB de pico y presión de **aviso**. `[INFERENCIA]` Figma restauró pestañas de sesiones anteriores además del archivo del piloto. Pendiente de repetir con una sola pestaña.
