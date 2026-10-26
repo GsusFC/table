@@ -1,6 +1,6 @@
 # Tarea 006 · Validación de la Fase 1
 
-Estado: preparada el 2026-10-26. Fase: 1. Cierra la fase.
+Estado: cerrada sin la sesión completa por decisión del usuario el 2026-10-26 ([D-018](../decisions.md)); los criterios abiertos se comprueban durante el uso real en la Fase 2. Fase: 1.
 
 ## Resultado esperado
 

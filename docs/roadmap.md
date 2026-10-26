@@ -27,8 +27,8 @@ Salida: evidencia de que la edición integrada y su ciclo de vida funcionan, dec
 - [x] Mostrar una selección de frames del archivo de Figma enlazado. T-005, con un solo editor por archivo.
 - [x] Editar en el navegador integrado según el resultado de T-001; referencias con URL y captura con fecha. T-002 (Figma, Notion y Pinterest).
 - [x] Crear notas, conexiones y posiciones persistentes. T-004.
-- [ ] Reabrir la mesa sin perder trabajo y distinguir caché de información actual.
-- [ ] Validar memoria del flujo sin agentes, cierre y recuperación.
+- [x] Reabrir la mesa sin perder trabajo y distinguir caché de información actual. Cierre forzado probado 30 veces (T-006); fichas y miniaturas indican su fecha.
+- [ ] Validar memoria del flujo sin agentes, cierre y recuperación. Pendiente con una mesa real; la fase se cerró igualmente por decisión del usuario ([D-018](decisions.md)).
 
 Salida: una sesión de trabajo real que pueda retomarse, con resultados de uso y consumo registrados. No implica colaboración simultánea ni integración completa de agentes.
 
