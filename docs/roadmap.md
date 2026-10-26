@@ -1,6 +1,6 @@
 # Fases y estado
 
-Fecha: 2026-10-26. **Estado actual: Fase 0 cerrada (decisiones D-010 a D-015). Fase 1 lista para empezar con [T-002](tasks/002-mesa-y-enlaces.md). No hay implementación de producto.**
+Fecha: 2026-10-26. **Estado actual: Fase 1 en curso. [T-002](tasks/002-mesa-y-enlaces.md) completada: app con mesas libres, «Añadir URL», webs integradas, ordenar con imán y descarga automática.**
 
 Los hitos preservan el orden acordado. Los hallazgos de una prueba pueden cambiar una propuesta técnica sin ampliar la fase entera.
 
@@ -20,12 +20,12 @@ Salida: evidencia de que la edición integrada y su ciclo de vida funcionan, dec
 
 ## Fase 1 · El proyecto en un sitio
 
-- [ ] Crear mesas libremente, con nombre, y añadir enlaces al crearlas o después ([D-013](decisions.md)).
-- [ ] «Añadir URL» con clic derecho; reconocer Figma, Notion, Pinterest y otras webs, y crear la tarjeta web ([D-012](decisions.md)).
+- [x] Crear mesas libremente, con nombre, y añadir enlaces al crearlas o después ([D-013](decisions.md)). T-002.
+- [x] «Añadir URL» con clic derecho; reconocer Figma, Notion, Pinterest y otras webs, y crear la tarjeta web ([D-012](decisions.md)). T-002.
 - [ ] Configuración global: credenciales de Notion y preferencias comunes, fuera de la mesa y de Git.
 - [ ] Mostrar la ficha autorizada de Notion de la mesa por API.
 - [ ] Mostrar una selección de frames del archivo de Figma enlazado.
-- [ ] Editar en el navegador integrado según el resultado de T-001; guardar referencias con URL, captura y fecha.
+- [x] Editar en el navegador integrado según el resultado de T-001; referencias con URL y captura con fecha. T-002 (Figma, Notion y Pinterest).
 - [ ] Crear notas, conexiones y posiciones persistentes.
 - [ ] Reabrir la mesa sin perder trabajo y distinguir caché de información actual.
 - [ ] Validar memoria del flujo sin agentes, cierre y recuperación.
@@ -65,4 +65,4 @@ Salida: publicación deliberada y trazable de un resultado revisado. Workers y e
 
 ## Próxima tarea
 
-[T-001](tasks/001-desktop-spike.md) está completada y la Fase 0, cerrada. La primera tarea de producto es [T-002: mesa libre y enlaces con «Añadir URL»](tasks/002-mesa-y-enlaces.md), propuesta y sin empezar. No ejecutar toda la hoja de ruta de forma automática. Cada sesión debe terminar con un resultado verificable y el estado real de su tarea.
+[T-002](tasks/002-mesa-y-enlaces.md) está completada. Siguen en Fase 1: configuración global, ficha de Notion por API, frames de Figma, notas y conexiones, y la validación de memoria del escenario B (umbrales propuestos en los [resultados de T-002](research/002-mesa-y-enlaces-results.md#memoria-con-1-3-y-6-tarjetas-2026-10-26), pendientes de aceptación). No ejecutar toda la hoja de ruta de forma automática. Cada sesión debe terminar con un resultado verificable y el estado real de su tarea.

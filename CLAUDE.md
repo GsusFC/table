@@ -4,8 +4,8 @@ Lee `AGENTS.md` antes de actuar: contiene las instrucciones comunes del proyecto
 
 ## Situación actual
 
-- El repositorio contiene documentación y el ensayo de T-001 en `spikes/desktop-001/`. No hay aplicación de producto.
-- Fase 0 cerrada. Fase 1 empieza con `docs/tasks/002-mesa-y-enlaces.md` (propuesta, sin empezar). Decisiones D-010 a D-015 en `docs/decisions.md`.
+- El repositorio contiene la app en `app/` (T-002) y el ensayo de T-001 en `spikes/desktop-001/`.
+- Fase 1 en curso. T-002 completada: `docs/tasks/002-mesa-y-enlaces.md` y resultados en `docs/research/002-mesa-y-enlaces-results.md`. Decisiones D-010 a D-016 en `docs/decisions.md`; diseño en `docs/design.md`.
 - T-001 está completada: apto para continuar, con límites. Figma y Pinterest funcionan integrados y la memoria del escenario A cumple los umbrales. Estado en `docs/tasks/001-desktop-spike.md` y resultados en `docs/research/001-desktop-spike-results.md`.
 - Base del prototipo aceptada (D-010): Electron + React + TypeScript con `WebContentsView`. Lienzo, terminal y almacenamiento siguen siendo propuestas. El ensayo usa versiones fijadas; sus comandos están en el informe de resultados.
 
