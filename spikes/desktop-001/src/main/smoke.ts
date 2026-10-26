@@ -1,4 +1,4 @@
-import { app, type BrowserWindow, type WebContents } from 'electron'
+import { app, BrowserWindow, type WebContents } from 'electron'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -175,9 +175,28 @@ export async function runSmoke(window: BrowserWindow, surface: WebSurface): Prom
       await inUi('window.tableSpike.setZoom(10).then(() => false, () => true)'),
     )
 
-    const popupDenied = (await web.executeJavaScript(`window.open('https://example.org/popup') === null`, true)) as boolean
-    record('popup: se deniega y se registra su origen', popupDenied && surface.getState().lastBlockedPopup === 'https://example.org', {
-      lastBlockedPopup: surface.getState().lastBlockedPopup,
+    const windowsBefore = BrowserWindow.getAllWindows().length
+    const popupOpened = (await web.executeJavaScript(
+      `window.open(${JSON.stringify(`${fixtureUrl}popup`)}) !== null`,
+      true,
+    )) as boolean
+    await waitFor(() => BrowserWindow.getAllWindows().length > windowsBefore, 'ventana del popup', 3_000).catch(
+      () => undefined,
+    )
+    const popup = BrowserWindow.getAllWindows().find(candidate => candidate !== window)
+    record('popup: se abre como ventana hija con la misma sesión', popupOpened && popup?.getParentWindow() === window && popup.webContents.session === web.session, {
+      lastPopup: surface.getState().lastPopup,
+    })
+    popup?.close()
+
+    await waitFor(() => BrowserWindow.getAllWindows().length === windowsBefore, 'cierre del popup', 3_000).catch(
+      () => undefined,
+    )
+    // Puede bloquearlo Chromium antes de llegar al handler; basta con que no se abra nada.
+    const blockedPopup = (await web.executeJavaScript(`window.open('figma://file/sintetico') === null`, true)) as boolean
+    await delay(300)
+    record('popup: no abre esquemas no web', blockedPopup && BrowserWindow.getAllWindows().length === windowsBefore, {
+      lastPopup: surface.getState().lastPopup,
     })
   } catch (error) {
     record('ejecución', false, error instanceof Error ? error.message : String(error))

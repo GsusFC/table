@@ -32,6 +32,14 @@ export function App() {
     return api.onState(setState)
   }, [])
 
+  // La barra refleja la URL real tras redirecciones (p. ej. al iniciar sesión).
+  const currentUrl = state?.url ?? null
+  useEffect(() => {
+    if (currentUrl) {
+      setAddress(currentUrl)
+    }
+  }, [currentUrl])
+
   const reportBounds = useCallback(() => {
     const element = surfaceRef.current
     if (!element) {
@@ -172,8 +180,12 @@ export function App() {
             <dd>
               <kbd>{SHORTCUT}</kbd> o «Volver a Table». <kbd>Esc</kbd> llega a la web.
             </dd>
-            <dt>Último popup bloqueado</dt>
-            <dd>{state?.lastBlockedPopup ?? '—'}</dd>
+            <dt>Último popup</dt>
+            <dd>
+              {state?.lastPopup
+                ? `${state.lastPopup.origin} · ${state.lastPopup.opened ? 'ventana' : 'bloqueado'}`
+                : '—'}
+            </dd>
           </dl>
           {(error ?? state?.error) && (
             <p className="error" role="alert">

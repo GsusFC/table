@@ -1,6 +1,6 @@
 # Resultados de T-001 · Navegador de escritorio
 
-Fecha: 2026-10-26. Estado: **incremento A implementado y comprobado con entradas sintéticas; falta la prueba manual. Incrementos B y C sin empezar.** No hay conclusión de la tarea.
+Fecha: 2026-10-26. Estado: **incremento A implementado y comprobado con entradas sintéticas; falta la prueba manual. Incremento B en curso: preparado, pendiente de login y edición. Incremento C sin empezar.** No hay conclusión de la tarea.
 
 Ficha de la tarea: [T-001](../tasks/001-desktop-spike.md).
 
@@ -47,9 +47,9 @@ La sesión web persistente vive en la partición `persist:table-t001`, dentro de
 | Superficie | Medida |
 | --- | --- |
 | Interfaz local | `sandbox`, `contextIsolation`, sin Node; CSP en `index.html`; navegación limitada a la propia app; popups denegados. |
-| Contenido remoto | `sandbox`, `contextIsolation`, sin Node ni preload; navegación y redirecciones solo `http(s)`; popups denegados y registrados por origen; `<webview>` prohibido en toda la app. |
+| Contenido remoto | `sandbox`, `contextIsolation`, sin Node ni preload; navegación y redirecciones solo `http(s)`; popups registrados por origen (denegados en A, ventana hija desde B); `<webview>` prohibido en toda la app. |
 | IPC | Cada canal comprueba que el emisor es el documento principal de la interfaz local (`senderFrame`, proceso y URL de la app). URL, límites y zoom se validan en el proceso principal. |
-| Permisos y descargas | Denegados y registrados en el incremento A. El incremento B decidirá qué necesitan Figma y Pinterest a partir de esos registros. |
+| Permisos y descargas | Incremento A: denegados y registrados. Desde la preparación de B, cada permiso se pregunta al usuario y la decisión se recuerda por origen hasta cerrar Table. Descargas bloqueadas. |
 | Registros | Solo orígenes, nunca rutas ni parámetros de URL. |
 
 Al cerrar la ventana con una web cargada, se cierra su contenido con `waitForBeforeUnload: true`. Si la página avisa de trabajo pendiente, Table pregunta al usuario y no descarta cambios por su cuenta. Este camino no se ha ejercitado con una página que bloquee el cierre; corresponde al incremento C.
@@ -75,9 +75,10 @@ Al cerrar la ventana con una web cargada, se cierra su contenido con `waitForBef
 | La rueda desplaza la web | Correcto: `scrollY` 549 |
 | El zoom se aplica a la web y no a la interfaz | Correcto: 150 % / 100 % |
 | El IPC rechaza un zoom fuera de rango | Correcto |
-| Popup denegado y registrado | Correcto: `https://example.org` |
+| Popup http(s) abierto como ventana hija con la misma sesión | Correcto (desde la preparación de B) |
+| Popup con esquema no web (`figma://`) no abre nada | Correcto |
 
-Resultado: 18/18 en seis ejecuciones consecutivas. Tras cada una no quedaron procesos del ensayo.
+Resultado: 18/18 en seis ejecuciones consecutivas del incremento A; 19/19 en cuatro ejecuciones tras preparar B. Tras cada una no quedaron procesos del ensayo.
 
 **Incidencia.** En la primera ejecución las teclas enviadas inmediatamente después de entrar no llegaron a la página (16/18). Tras añadir dos consultas a la página antes de enviarlas, no se ha repetido. `[INFERENCIA]` Las teclas sintéticas enviadas antes de que el renderer procese el foco se pierden. Hay que vigilar si ocurre con teclado real al entrar y escribir enseguida.
 
@@ -98,12 +99,25 @@ Las entradas sintéticas no recorren el foco del sistema operativo ni los atajos
 
 - Navegar desde la barra de dirección reutiliza la vista sin consultar `beforeunload`.
 - Una sola tarjeta; sin lienzo, pan ni zoom de lienzo.
-- Los popups se deniegan siempre. Si el login de Figma o Google los necesita, el incremento B tendrá que abrir una ventana real.
 - Sin medición de memoria: corresponde al incremento C y requiere los umbrales del escenario A.
 
 ## Incremento B · Sesión y edición real
 
-No empezado. Requiere un archivo de Figma de prueba con una edición reversible, cuentas de prueba y el método de login (Google, email o SSO).
+En curso. Archivo del piloto configurado fuera del repositorio con la variable `TABLE_SPIKE_START_URL`:
+
+```sh
+TABLE_SPIKE_START_URL='<url-del-archivo-de-figma>' npm run dev
+```
+
+Cambios respecto al incremento A, motivados por la [evaluación de OpenCove](opencove-evaluation.md):
+
+- Los popups `http(s)` y `about:blank` se abren como ventana hija real, con `window.opener` y la misma partición, para no romper logins como el de Google. Cada popup tiene las mismas restricciones de navegación; otros esquemas se bloquean.
+- Permisos preguntados al usuario en vez de denegados, para descubrir qué pide Figma sin concederlo a ciegas.
+- No se modifica el user agent: si Google rechaza el login por detectar un navegador integrado, se registra como bloqueo; suplantar a Chrome no es una vía admitida por el proveedor.
+
+Observado al cargar el archivo sin sesión: Figma carga y consulta el permiso `background-sync` (denegado por defecto).
+
+Pendiente: login, edición reversible, persistencia tras reiniciar y Pinterest.
 
 ## Incremento C · Conservación, descarga y memoria
 

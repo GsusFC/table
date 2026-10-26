@@ -20,8 +20,8 @@ export interface SurfaceState {
   /** Captura tomada al salir; no representa la web activa. */
   readonly captureDataUrl: string | null
   readonly error: string | null
-  /** Origen del último popup denegado. */
-  readonly lastBlockedPopup: string | null
+  /** Último popup: abierto como ventana hija o bloqueado. */
+  readonly lastPopup: { readonly origin: string; readonly opened: boolean } | null
 }
 
 export interface SurfaceBounds {

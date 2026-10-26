@@ -1,6 +1,6 @@
 # Tarea 001 · Validar el navegador de escritorio
 
-Estado: en curso. Incremento A implementado en `spikes/desktop-001/` y comprobado con entradas sintéticas; falta la prueba manual. B y C sin empezar. Fase: 0. Fecha: 26 de octubre de 2026.
+Estado: en curso. Incremento A implementado en `spikes/desktop-001/` y comprobado con entradas sintéticas; falta la prueba manual. B preparado, pendiente de login y edición reales. C sin empezar. Fase: 0. Fecha: 26 de octubre de 2026.
 
 Esta ficha define la primera prueba de implementación. Resultados en [001-desktop-spike-results.md](../research/001-desktop-spike-results.md).
 

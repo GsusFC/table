@@ -174,5 +174,16 @@ void app.whenReady().then(async () => {
 
   if (smokeMode && surface) {
     await runSmoke(window, surface)
+    return
+  }
+
+  // Dirección del piloto configurada fuera del repositorio.
+  const startUrl = process.env['TABLE_SPIKE_START_URL']
+  if (startUrl) {
+    try {
+      surface?.open(parseHttpUrl(startUrl))
+    } catch (error) {
+      log('start-url-rejected', { message: error instanceof Error ? error.message : String(error) })
+    }
   }
 })

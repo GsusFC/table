@@ -3,6 +3,7 @@ import {
   session,
   WebContentsView,
   type BrowserWindow,
+  type BrowserWindowConstructorOptions,
   type Rectangle,
   type WebContents,
 } from 'electron'
@@ -25,39 +26,72 @@ const INITIAL_STATE: SurfaceState = {
   zoomFactor: 1,
   captureDataUrl: null,
   error: null,
-  lastBlockedPopup: null,
+  lastPopup: null,
 }
 
 let sessionConfigured = false
 
 /**
- * Incremento A: permisos y descargas denegados y registrados. El incremento B
- * decidirá qué necesita cada servicio a partir de esos registros.
+ * Incremento B: cada permiso se pregunta al usuario y la decisión se recuerda
+ * por origen hasta cerrar Table. Las descargas siguen bloqueadas.
  */
-function configureSurfaceSession(): void {
+function configureSurfaceSession(window: BrowserWindow): void {
   if (sessionConfigured) {
     return
   }
   sessionConfigured = true
   const surfaceSession = session.fromPartition(SURFACE_PARTITION)
+  const decisions = new Map<string, boolean>()
   const reportedChecks = new Set<string>()
 
   surfaceSession.setPermissionRequestHandler((_contents, permission, callback, details) => {
-    log('permission-request-denied', { permission, origin: originOf(details.requestingUrl) })
-    callback(false)
+    const origin = originOf(details.requestingUrl)
+    const key = `${origin}|${permission}`
+    const remembered = decisions.get(key)
+    if (remembered !== undefined) {
+      callback(remembered)
+      return
+    }
+    void dialog
+      .showMessageBox(window, {
+        type: 'question',
+        buttons: ['Denegar', 'Permitir'],
+        defaultId: 0,
+        cancelId: 0,
+        message: `${origin} solicita el permiso «${permission}».`,
+        detail: 'La decisión se recuerda para este origen hasta cerrar Table.',
+      })
+      .then(({ response }) => {
+        const granted = response === 1
+        decisions.set(key, granted)
+        log('permission-request', { permission, origin, granted })
+        callback(granted)
+      })
   })
   surfaceSession.setPermissionCheckHandler((_contents, permission, requestingOrigin) => {
-    const key = `${permission}@${requestingOrigin}`
+    const granted = decisions.get(`${requestingOrigin}|${permission}`) ?? false
+    const key = `${requestingOrigin}|${permission}|${granted}`
     if (!reportedChecks.has(key)) {
       reportedChecks.add(key)
-      log('permission-check-denied', { permission, origin: requestingOrigin })
+      log('permission-check', { permission, origin: requestingOrigin, granted })
     }
-    return false
+    return granted
   })
   surfaceSession.on('will-download', (event, item) => {
     log('download-blocked', { origin: originOf(item.getURL()) })
     event.preventDefault()
   })
+}
+
+/** Popups de login: ventana real hija, con `window.opener` y la misma sesión. */
+function popupWindowOptions(parent: BrowserWindow): BrowserWindowConstructorOptions {
+  return {
+    parent,
+    width: 520,
+    height: 720,
+    autoHideMenuBar: true,
+    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+  }
 }
 
 export class WebSurface {
@@ -90,7 +124,7 @@ export class WebSurface {
    */
   open(url: string): void {
     const view = this.view ?? this.createView()
-    this.update({ status: 'loading', url, title: null, error: null, lastBlockedPopup: null })
+    this.update({ status: 'loading', url, title: null, error: null, lastPopup: null })
     log('surface-open', { origin: originOf(url) })
     // Los fallos se notifican con `did-fail-load`.
     view.webContents.loadURL(url).catch(() => undefined)
@@ -187,8 +221,38 @@ export class WebSurface {
     return promise
   }
 
+  /**
+   * Navegación limitada a http(s). Los popups http(s) o `about:blank` se abren
+   * como ventana hija real, con la misma sesión, para no romper logins que
+   * usan `window.opener`. Cada popup recibe las mismas restricciones.
+   */
+  private guardNavigation(contents: WebContents): void {
+    contents.setWindowOpenHandler(({ url }) => {
+      const opened = url === 'about:blank' || isHttpUrl(url)
+      const origin = isHttpUrl(url) ? originOf(url) : `${url.split(':', 1)[0]}:`
+      log(opened ? 'popup-opened' : 'popup-blocked', { origin })
+      this.update({ lastPopup: { origin, opened } })
+      return opened
+        ? { action: 'allow', overrideBrowserWindowOptions: popupWindowOptions(this.window) }
+        : { action: 'deny' }
+    })
+    contents.on('did-create-window', popup => {
+      this.guardNavigation(popup.webContents)
+      popup.once('closed', () => log('popup-closed'))
+    })
+
+    const allowOnlyWeb = (event: { preventDefault(): void; url: string }): void => {
+      if (!isHttpUrl(event.url)) {
+        log('navigation-blocked', { scheme: event.url.split(':', 1)[0] })
+        event.preventDefault()
+      }
+    }
+    contents.on('will-navigate', allowOnlyWeb)
+    contents.on('will-redirect', allowOnlyWeb)
+  }
+
   private createView(): WebContentsView {
-    configureSurfaceSession()
+    configureSurfaceSession(this.window)
     const view = new WebContentsView({
       webPreferences: {
         partition: SURFACE_PARTITION,
@@ -219,21 +283,7 @@ export class WebSurface {
   }
 
   private guard(contents: WebContents): void {
-    contents.setWindowOpenHandler(({ url }) => {
-      const origin = originOf(url)
-      log('popup-blocked', { origin })
-      this.update({ lastBlockedPopup: origin })
-      return { action: 'deny' }
-    })
-
-    const allowOnlyWeb = (event: { preventDefault(): void; url: string }): void => {
-      if (!isHttpUrl(event.url)) {
-        log('navigation-blocked', { scheme: event.url.split(':', 1)[0] })
-        event.preventDefault()
-      }
-    }
-    contents.on('will-navigate', allowOnlyWeb)
-    contents.on('will-redirect', allowOnlyWeb)
+    this.guardNavigation(contents)
 
     contents.on('before-input-event', (event, input) => {
       if (isExitShortcut(input, process.platform)) {
