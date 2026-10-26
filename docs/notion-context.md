@@ -27,8 +27,8 @@ Fuente: API de Notion (`Notion-Version: 2022-06-28`), integración interna de so
 | `Preview` | `files` | Imagen del proyecto; candidata a miniatura de la tarjeta. | Por decidir. | No contado |
 | `Budget` | `rich_text` | Información económica interna, como texto libre (no número). | **Excluido.** | 2 |
 | `Opportunity` | `relation` | Oportunidad comercial, en otra base. Mismo caso que `Account`. | Excluido por defecto hasta aclarar su contenido. | No accesible |
-| `Lead` | `url` | Sin uso documentado. | Excluido por defecto hasta aclarar. | No contado |
-| `Notion Link` | `url` | Sin uso documentado. | Excluido por defecto hasta aclarar. | No contado |
+| `Lead` | `url` | Sin uso relevante según el usuario. | Excluido. | No contado |
+| `Notion Link` | `url` | Sin uso relevante según el usuario. | Excluido. | No contado |
 
 Diferencias con el documento guía: `Account` es una relación con otra base, no un texto; `Budget` es texto libre, así que un filtro no puede depender de su formato; hay cinco propiedades no descritas (`Remaining days`, `Preview`, `Opportunity`, `Lead`, `Notion Link`).
 

@@ -48,7 +48,7 @@ La exclusión de `Budget` del contexto de agentes es un requisito del documento 
 | --- | --- |
 | Mesa como base de código | El repo público revisado solo tenía README y licencia; último commit 2026-03-30. No hay implementación pública acreditada que reutilizar. Esto no prueba abandono del producto privado. |
 | OpenCove como base | Revisado estáticamente y arrancado en modo desarrollo el 2026-10-26 (commit `e10604b9`). Recomendación del asistente: usarlo como referencia, no como base; T-001 se construyó así. Ver [evaluación](research/opencove-evaluation.md). |
-| ccanvas como base | Referencia candidata con Tauri/Rust; no adoptada ni auditada. |
+| ccanvas como base | Descartado por el usuario el 2026-10-26 sin auditar: usa Tauri/Rust, no elegido (D-010). |
 | Rust/Tauri | No elegido para el prototipo (D-010). Tauri 2 usa WebKit en macOS y sus vistas web hijas son inestables; reevaluar solo si el escenario B o C de memoria no cumple con Electron. |
 | Electron con un componente Rust | Posibilidad futura si un perfil de rendimiento identifica una necesidad concreta. |
 | UI propia de Claude y Codex como destino obligatorio | Reemplazada por D-005. Adaptadores opcionales siguen siendo posibles. |
@@ -57,7 +57,6 @@ La exclusión de `Budget` del contexto de agentes es un requisito del documento 
 
 - Bases relacionadas (`Account`, `Opportunity`): no compartidas con la integración. Decidir si el contexto de los agentes necesita el cliente; `Opportunity` sigue excluida por defecto.
 - Cómo se representan las páginas y frames de un archivo de Figma en el lienzo. Propuesta: un único editor web cargado por archivo y tarjetas ligeras de página o frame (miniatura por API) que llevan ese editor al nodo, en vez de un editor por página. Cada editor de Figma cargado ocupó ~1,6 GiB en T-001.
-- Uso de `Opportunity`, `Lead` y `Notion Link`, para decidir si el contexto entregado a los agentes los incluye. Ver [contexto de Notion](notion-context.md#esquema-comprobado).
 - Notion como tarjeta web editable dentro de Table: login y edición no probados en T-001.
 - Planes, permisos y límites disponibles de Notion/Figma en el estudio.
 - Carga habitual del equipo de referencia con todas las herramientas abiertas (equipo fijado en D-011). Otros equipos del estudio, si los hay.
