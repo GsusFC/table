@@ -1,0 +1,71 @@
+# Resultados de T-002 · Mesa libre y enlaces
+
+Fecha: 2026-10-26. Estado: **implementada y comprobada de forma automática; pendiente de revisión independiente, prueba manual con el usuario, login de Notion y medición de memoria.**
+
+Ficha de la tarea: [T-002](../tasks/002-mesa-y-enlaces.md).
+
+## Cómo se construyó
+
+Contratos escritos primero (`app/src/shared/`, interfaces de `app/src/main/store/types.ts` y `app/src/main/web/types.ts`, integración en `app/src/main/index.ts`). Después, cuatro partes en paralelo por subagentes de Claude Code, cada una contra esos contratos:
+
+| Parte | Archivos | Verificación del autor |
+| --- | --- | --- |
+| Guardado | `app/src/main/store/mesaStore.ts` | 17 tests (Vitest) |
+| Servicios | `app/src/shared/services.ts` | 72 tests (Vitest) |
+| Superficie web | `app/src/main/web/` | Tipos; sin ejecutar |
+| Interfaz | `app/src/renderer/` | Tipos y build; sin ejecutar |
+
+La integración y el smoke de punta a punta los hizo el integrador. La revisión independiente se encarga a Codex.
+
+## Comandos
+
+Desde `app/`:
+
+| Comando | Qué hace |
+| --- | --- |
+| `npm install` | Dependencias. Si `electron-vite dev` dice «Electron uninstall», ejecutar `node node_modules/electron/install.js` (ocurrió una vez). |
+| `npm run dev` | App en desarrollo. |
+| `npm test` | Tests de guardado y servicios. |
+| `npm run typecheck` | Tipos. |
+| `npm run smoke` | Recorrido de punta a punta con datos temporales; `TABLE_SMOKE_SHOTS=<carpeta>` guarda capturas de la interfaz. |
+
+Las mesas se guardan en `~/Library/Application Support/table/` (`mesas/<id>.json`, `captures/<mesaId>/<cardId>.jpg`). El smoke usa una carpeta temporal y no toca esas mesas.
+
+## Decisiones internas
+
+- **Guardado (P-005):** un JSON por mesa con escritura atómica y cola por mesa. No se necesitó SQLite para este alcance.
+- **Lienzo (P-002):** React Flow 12. Tarjetas arrastrables y redimensionables, pan con dos dedos, pellizco para zoom; sin zoom con doble clic.
+- **Servicios (P-013):** reconocimiento solo por hostname exacto o subdominio; Pinterest con lista cerrada de dominios locales. Añadir un servicio es añadir un objeto a `SERVICES`.
+- **Opción B (D-016):** la web ocupa el panel principal; las demás cargadas quedan ocultas y en memoria. El lienzo queda `inert` debajo. Menús, campo «Añadir URL» y diálogos se cierran o no se pintan con una web abierta.
+- **Superficie:** operaciones en cola (entrar, salir, descargar, cambiar de mesa); al cambiar de mesa se descargan las webs de la anterior respetando `beforeunload`.
+
+## Smoke de punta a punta
+
+Build compilada, página sintética local y URLs inventadas de Figma, Pinterest y Notion (no se cargan; solo se reconocen).
+
+| Comprobación | Resultado |
+| --- | --- |
+| La interfaz local no tiene Node | Correcto |
+| El IPC rechaza `file://` al añadir tarjeta | Correcto |
+| Reconoce web, Figma y Pinterest | Correcto |
+| Abre la mesa con sus tarjetas desde el inicio | Correcto |
+| Clic derecho → «Añadir URL» crea una tarjeta Notion, añadiendo `https://` | Correcto |
+| Entrar carga la web en el panel | Correcto (73–99 ms) |
+| Barra con «Volver al lienzo» con la web abierta | Correcto |
+| Captura al salir | **Fallo de entorno**: la pantalla estaba bloqueada (`CGSSessionScreenIsLocked` = 1) y Chromium no compone ni captura. El smoke de T-001, que antes pasaba, falla igual en ese estado. Repetir con la pantalla desbloqueada. |
+| Título de la página guardado en la tarjeta | Correcto |
+| Descargar la web | Correcto |
+| Recargar conserva la mesa y sus 4 tarjetas | Correcto |
+| Al abrir una mesa no se carga ninguna web | Correcto |
+| Borrar la mesa | Correcto |
+| Procesos tras cerrar | 0 |
+
+12/13; el fallo es del entorno.
+
+## Pendiente
+
+- Repetir el smoke con la pantalla desbloqueada (captura y su visualización en la tarjeta).
+- Revisión independiente de Codex y corrección de sus hallazgos.
+- Prueba manual con el usuario: aspecto, interacción, tarjeta descargada «en acción» (D-016).
+- Notion como tarjeta web: login y edición.
+- Memoria con 1, 3 y 6 tarjetas.
