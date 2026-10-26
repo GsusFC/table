@@ -1,6 +1,6 @@
 # Resultados de T-002 · Mesa libre y enlaces
 
-Fecha: 2026-10-26. Estado: **implementada, revisada por Codex en dos rondas y comprobada de forma automática; pendiente de prueba manual con el usuario, login de Notion, captura con la pantalla desbloqueada y medición de memoria.**
+Fecha: 2026-10-26. Estado: **implementada, revisada por Codex en dos rondas y comprobada de forma automática (smoke 19/19); pendiente de prueba manual con el usuario, login de Notion y medición de memoria.**
 
 Ficha de la tarea: [T-002](../tasks/002-mesa-y-enlaces.md).
 
@@ -84,7 +84,7 @@ Build compilada, página sintética local y URLs inventadas de Figma, Pinterest 
 
 ## Pendiente
 
-- Repetir el smoke con la pantalla desbloqueada (captura y su visualización en la tarjeta).
+- ~~Repetir el smoke con la pantalla desbloqueada~~ Hecho: **19/19** con la pantalla desbloqueada; la captura se guarda al salir y se ve en la tarjeta.
 - Prueba manual con el usuario: aspecto, interacción, tarjeta descargada «en acción» (D-016).
 - Notion como tarjeta web: login y edición.
 - Memoria con 1, 3 y 6 tarjetas en condiciones controladas.
