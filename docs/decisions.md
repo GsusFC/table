@@ -22,9 +22,9 @@ La exclusión de `Budget` del contexto de agentes es un requisito del documento 
 
 | ID | Propuesta | Qué falta para decidir |
 | --- | --- | --- |
-| P-001 | Base propia con Electron + React + TypeScript. | Prueba del navegador integrado, memoria y decisión posterior. |
+| P-001 | Base propia con Electron + React + TypeScript. | T-001 concluye «apto para continuar» en el escenario A ([resultados](research/001-desktop-spike-results.md)). Falta la decisión del usuario. |
 | P-002 | React Flow para el lienzo. | Validar interacción con tarjetas, foco y cantidad representativa de nodos. |
-| P-003 | WebContentsView para la web activa, si se elige Electron. | Login, sesiones, edición, foco, geometría y cierre seguro. |
+| P-003 | WebContentsView para la web activa, si se elige Electron. | Comprobados en T-001: login, sesión persistente, edición, foco, geometría y cierre con `beforeunload` sintético. Falta observar el aviso real de Figma con cambios sin sincronizar y la decisión del usuario. |
 | P-004 | xterm.js + node-pty para la terminal, si se elige Electron. | Compatibilidad con arneses, señales, redimensionado y empaquetado. |
 | P-005 | SQLite para los datos propios de la mesa. | Modelo mínimo y necesidad de copias, exportación y migraciones. JSON sigue siendo alternativa inicial. |
 | P-006 | Campos de Notion configurables, resueltos por ID y tipo. | Validar esquema real y el alcance del asistente de configuración. |

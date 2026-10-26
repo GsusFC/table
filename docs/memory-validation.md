@@ -97,7 +97,7 @@ No declarar validado un escenario sin completar sus criterios o con mediciones n
 
 | Ejecución | Escenario | Equipo / versiones | Reposo | Pico | Tras descarga | Presión / swap | Apertura / recuperación | Resultado |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| — | A | — | — | — | — | — | — | No ejecutado |
+| T-001, 2026-10-26 | A | M2 Pro 16 GiB, macOS 27.2; Electron 44.9.3; Figma de escritorio 126.10.11 como base | Shell 112–115 MiB; Figma activa 1 585 MiB (base 2 582) | 2 172–2 524 MiB (base 3 998) | ~233 MiB; 3,8 MiB/ciclo en 10 ciclos | Normal / swap sin crecimiento | 2,0–4,0 s hasta `did-stop-loading` | Cumple con límites ([informe](research/001-desktop-spike-results.md)) |
 | — | B | — | — | — | — | — | — | No ejecutado |
 | — | C | — | — | — | — | — | — | No ejecutado |
 

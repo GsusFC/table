@@ -1,6 +1,6 @@
 # Tarea 001 · Validar el navegador de escritorio
 
-Estado: en curso. A implementado (comprobación automática; prueba manual parcial). B completado: Figma y Pinterest funcionan con login, uso real y sesión persistente. C sin empezar. Fase: 0. Fecha: 26 de octubre de 2026.
+Estado: completada el 2026-10-26. Conclusión: **apto para continuar**, con límites documentados en los [resultados](../research/001-desktop-spike-results.md#conclusión). Fase: 0.
 
 Esta ficha define la primera prueba de implementación. Resultados en [001-desktop-spike-results.md](../research/001-desktop-spike-results.md).
 
@@ -75,14 +75,14 @@ Cada incremento debe poder revisarse por separado. Detener la ampliación cuando
 - [x] La prueba usa versiones y comandos documentados que otra persona puede reproducir.
 - [x] Figma permite autenticación y edición real en el entorno elegido, o queda registrado un bloqueo reproducible.
 - [x] Pinterest permite el flujo de navegación probado, o queda registrado un bloqueo reproducible.
-- [ ] Se han comprobado foco, teclado, scroll y retorno a Table.
+- [x] Se han comprobado foco, teclado, scroll y retorno a Table. Con entradas sintéticas y durante el uso real; pellizco en trackpad sin confirmar.
 - [x] La persistencia de sesión se ha probado tras reiniciar la aplicación.
 - [x] La captura no se presenta como garantía de conservar la sesión de edición.
-- [ ] No se fuerza el cierre de contenido con trabajo pendiente o estado de guardado desconocido.
-- [ ] Se distinguen páginas activas, conservadas y descargadas en los resultados.
-- [ ] Hay mediciones del escenario A con equipo, método, umbrales y limitaciones; no se extrapolan al escenario C.
-- [ ] El cierre no deja procesos del ensayo sin explicación y no afecta a procesos ajenos.
-- [ ] La evidencia publicada no contiene datos de clientes ni credenciales.
+- [x] No se fuerza el cierre de contenido con trabajo pendiente o estado de guardado desconocido.
+- [x] Se distinguen páginas activas, conservadas y descargadas en los resultados.
+- [x] Hay mediciones del escenario A con equipo, método, umbrales y limitaciones; no se extrapolan al escenario C.
+- [x] El cierre no deja procesos del ensayo sin explicación y no afecta a procesos ajenos.
+- [x] La evidencia publicada no contiene datos de clientes ni credenciales.
 
 Los puntos con un bloqueo documentado cierran el informe de la prueba, pero no aprueban esa capacidad para el producto.
 

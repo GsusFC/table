@@ -6,7 +6,7 @@ Lee `AGENTS.md` antes de actuar: contiene las instrucciones comunes del proyecto
 
 - El repositorio contiene documentación y el ensayo de T-001 en `spikes/desktop-001/`. No hay aplicación de producto.
 - Estamos en Fase 0: preparación y validación de supuestos.
-- T-001 está en curso: incrementos A y B hechos (Figma y Pinterest con login, uso real y sesión persistente); falta C, memoria y cierre seguro. Estado en `docs/tasks/001-desktop-spike.md` y resultados en `docs/research/001-desktop-spike-results.md`.
+- T-001 está completada: apto para continuar, con límites. Figma y Pinterest funcionan integrados y la memoria del escenario A cumple los umbrales. Estado en `docs/tasks/001-desktop-spike.md` y resultados en `docs/research/001-desktop-spike-results.md`.
 - El stack del producto no está confirmado. El ensayo usa Electron 44, React y TypeScript con versiones fijadas; sus comandos están en el informe de resultados.
 
 ## En cada sesión

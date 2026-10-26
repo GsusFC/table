@@ -36,7 +36,7 @@ La primera validación será de uso interno. El consumo de memoria y la edición
 
 **Claude Code y Codex colaborarán en el desarrollo de Table.** Ambos pueden construir y revisar; los roles se asignan por tarea. Comparten las instrucciones de [AGENTS.md](AGENTS.md). [CLAUDE.md](CLAUDE.md) es el punto de entrada para Claude Code y remite a esa misma base.
 
-Lee producto, decisiones y fases antes de implementar. Trabaja en una tarea comprobable cada vez y actualiza los documentos afectados con lo aprendido. La primera tarea está **en curso**: ver sus [resultados](docs/research/001-desktop-spike-results.md).
+Lee producto, decisiones y fases antes de implementar. Trabaja en una tarea comprobable cada vez y actualiza los documentos afectados con lo aprendido. La primera tarea está **completada**: ver sus [resultados](docs/research/001-desktop-spike-results.md).
 
 Para compartir el contexto con Claude Code:
 
@@ -44,7 +44,7 @@ Para compartir el contexto con Claude Code:
 
 ## Estado técnico
 
-Electron + React + TypeScript es la propuesta principal para el prototipo. React Flow, WebContentsView, xterm.js, node-pty y SQLite son piezas candidatas. Rust/Tauri se han evaluado conceptualmente. **La arquitectura aún no está aprobada ni medida.**
+Electron + React + TypeScript es la propuesta principal para el prototipo. React Flow, WebContentsView, xterm.js, node-pty y SQLite son piezas candidatas. Rust/Tauri se han evaluado conceptualmente. Electron y WebContentsView superaron el ensayo T-001 (escenario A de memoria); **la arquitectura aún no está aprobada**.
 
 ## Información del repositorio
 

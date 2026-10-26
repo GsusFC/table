@@ -1,6 +1,6 @@
 # Resultados de T-001 · Navegador de escritorio
 
-Fecha: 2026-10-26. Estado: **incremento A implementado y comprobado automáticamente; prueba manual parcial durante el uso real. Incremento B completado con Figma y Pinterest. Incremento C sin empezar.** No hay conclusión de la tarea.
+Fecha: 2026-10-26. Estado: **completada. Conclusión: apto para continuar, con los límites indicados al final.** Incrementos A, B y C hechos.
 
 Ficha de la tarea: [T-001](../tasks/001-desktop-spike.md).
 
@@ -179,7 +179,7 @@ Lo que cambió respecto al incremento A para que funcionara: popups como ventana
 
 ## Incremento C · Conservación, descarga y memoria
 
-En curso. Umbrales fijados en [validación de memoria](../memory-validation.md) el 2026-10-26.
+Hecho. Umbrales fijados en [validación de memoria](../memory-validation.md) el 2026-10-26.
 
 ### Estados y cierre seguro
 
@@ -227,8 +227,8 @@ Build compilada (`electron-vite build`), archivo de Figma del piloto, sesión in
 | Medida | Resultado | Umbral | Estado |
 | --- | --- | --- | --- |
 | Shell en reposo, sin web | 112–115 MiB | Sin umbral | Registrado |
-| Figma activa, estable (mediana de los últimos 30 s de 60 s activa) | 1 585 MiB | Figma de escritorio + 15 % | Pendiente de la base |
-| Pico durante carga y uso | 2 172 MiB (pasada de 60 s); 2 524 MiB máximo en 10 ciclos | Figma de escritorio + 15 % | Pendiente de la base |
+| Figma activa, estable (mediana de los últimos 30 s de 60 s activa) | 1 585 MiB | ≤ 2 969 MiB (Figma de escritorio 2 582 + 15 %) | Cumple: −39 % |
+| Pico durante carga y uso | 2 172 MiB (pasada de 60 s); 2 524 MiB máximo en 10 ciclos | ≤ 4 598 MiB (Figma de escritorio 3 998 + 15 %) | Cumple |
 | Conservada (5 s tras salir) | 1 292–1 883 MiB | — | Registrado |
 | 30 s tras descargar, ciclos 1–10 | 154, 153, 361, 234, 234, 232, 233, 234, 234, 232 MiB | — | Registrado |
 | Crecimiento residual | 3,8 MiB por ciclo (mínimos cuadrados); estable en ~233 MiB desde el ciclo 4 | ≤ 20 MiB por ciclo, sin tendencia | Cumple |
@@ -241,4 +241,43 @@ Descargar libera la mayor parte de la memoria de Figma (de ~1,8 GiB conservada a
 
 ### Base: Figma de escritorio
 
-Primer intento no comparable. `open -a Figma <url>` con muestreo de 120 s dio 13 procesos (8 renderers, varios de 228 a 930 MB), 4 574 MiB estables, 5 652 MiB de pico y presión de **aviso**. `[INFERENCIA]` Figma restauró pestañas de sesiones anteriores además del archivo del piloto. Pendiente de repetir con una sola pestaña.
+**Intento 1, no comparable.** `open -a Figma <url>` con muestreo de 120 s dio 13 procesos (8 renderers, varios de 228 a 930 MB), 4 574 MiB estables, 5 652 MiB de pico y presión de aviso. `[INFERENCIA]` Figma restauró pestañas de sesiones anteriores.
+
+**Intento 2, descartado.** El usuario cerró las pestañas y Figma volvió a abrirse antes de empezar el muestreo: no se capturó la carga. Estable: 2 589 MiB, coherente con el intento 3.
+
+**Intento 3, válido.** Figma cerrado y comprobado durante 30 s, presión normal. Muestreo desde antes de `open -a Figma <url>` con solo el archivo del piloto, 120 s:
+
+| Medida | Figma de escritorio 126.10.11 | Table |
+| --- | --- | --- |
+| Procesos | 11 (6 renderers) | 5 |
+| Estable | 2 582 MiB (mediana de los últimos 30 s de 120 s) | 1 585 MiB (últimos 30 s de 60 s activa) |
+| Pico | 3 998 MiB | 2 172 MiB (misma pasada); 2 524 MiB en 10 ciclos |
+| Presión / swap | Normal / sin variación | Normal / bajando |
+
+Mayor consumo de Figma de escritorio, desglosado al final del intento 3: un renderer de 710 MB, el proceso GPU de 572 MB y cinco renderers más de 27 a 359 MB. `[INFERENCIA]` La app carga interfaz propia (pestañas, inicio, servicios nativos) que Table no tiene. El agente de fuentes de Figma (`FigmaAgent.app`) queda fuera de ambas mediciones: corre aparte y da servicio a los dos flujos.
+
+Límites de la comparación: una sola pasada por flujo; ventanas de estabilidad distintas (30–60 s tras cargar en Table, 90–120 s tras abrir en Figma de escritorio); Figma de escritorio incluye el arranque de la app; el editor en Table es la versión web de Figma, no la app de escritorio.
+
+## Conclusión
+
+**Apto para continuar** según los criterios de la tarea: en este equipo, la edición real de Figma, el cierre seguro y la memoria cumplen los criterios fijados para el escenario A.
+
+| Capacidad | Resultado |
+| --- | --- |
+| Web integrada con `WebContentsView` | Funciona: geometría, foco, teclado, zoom y retorno a Table (automático y uso real). |
+| Login y sesión | Figma y Pinterest con Google; sesión persistente tras reiniciar. Requiere popups como ventana real. |
+| Edición y portapapeles | Edición guardada en Figma; texto, capas e imágenes de Pinterest. Requiere menú contextual propio. |
+| Ciclo de vida | Activa, conservada y descargada; la descarga libera ~1,6 GiB y no se acumula entre ciclos. |
+| Cierre seguro | Respeta `beforeunload` y pregunta al usuario; nunca descarga automáticamente. |
+| Memoria (escenario A) | 39 % por debajo de Figma de escritorio en estable; 46 % en pico de la misma pasada (37 % con el máximo de los 10 ciclos). |
+
+Límites que siguen abiertos:
+
+- **`beforeunload` real de Figma no observado:** en 11 descargas y 4 cierres Figma nunca declaró cambios pendientes. El camino está probado con una página sintética; falta provocar trabajo sin sincronizar en Figma, por ejemplo sin conexión.
+- **Carga medida hasta `did-stop-loading`**, no hasta que el editor responde.
+- **Equipo de referencia provisional:** el Mac del usuario, con 16 GiB y apps cerradas para medir.
+- **Permisos no persistentes** entre reinicios.
+- **Prueba manual del incremento A parcial:** pellizco en trackpad y escribir justo al entrar sin confirmar explícitamente.
+- **Aprobar el escenario A no valida B ni C** de [validación de memoria](../memory-validation.md): lienzo con varias tarjetas, Notion y arneses siguen sin medir.
+
+La adopción de Electron y `WebContentsView` (P-001, P-003) sigue siendo una decisión del usuario; este informe aporta la evidencia.

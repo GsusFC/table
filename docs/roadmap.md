@@ -1,6 +1,6 @@
 # Fases y estado
 
-Fecha: 2026-10-26. **Estado actual: Fase 0. T-001 en curso: incrementos A y B hechos, C (memoria) pendiente. No hay implementación de producto.**
+Fecha: 2026-10-26. **Estado actual: Fase 0. T-001 completada: apto para continuar, con límites. Pendiente la decisión técnica del usuario. No hay implementación de producto.**
 
 Los hitos preservan el orden acordado. Los hallazgos de una prueba pueden cambiar una propuesta técnica sin ampliar la fase entera.
 
@@ -12,7 +12,7 @@ Los hitos preservan el orden acordado. Los hallazgos de una prueba pueden cambia
 - [ ] Revisar esta base documental con el usuario y cerrar las decisiones pendientes que condicionen la primera tarea.
 - [ ] Identificar equipo de prueba, RAM, usuarios iniciales y proyecto piloto.
 - [ ] Validar campos, permisos y enlaces de Notion; resolver los dos campos de Pinterest.
-- [ ] Ejecutar [T-001: prueba de escritorio](tasks/001-desktop-spike.md). En curso: A y B hechos, falta C ([resultados](research/001-desktop-spike-results.md)).
+- [x] Ejecutar [T-001: prueba de escritorio](tasks/001-desktop-spike.md). Apto para continuar, con límites ([resultados](research/001-desktop-spike-results.md)).
 - [ ] Comparar una base propia con la reutilización que realmente ahorre trabajo. Mesa no ofrece implementación en el repo público revisado; OpenCove [evaluado](research/opencove-evaluation.md) con recomendación de usarlo como referencia, pendiente de decisión; ccanvas sin auditar.
 - [ ] Registrar la decisión técnica y el protocolo de memoria aplicable.
 
@@ -64,4 +64,4 @@ Salida: publicación deliberada y trazable de un resultado revisado. Workers y e
 
 ## Próxima tarea
 
-[T-001](tasks/001-desktop-spike.md) es la primera tarea propuesta. No ejecutar toda la hoja de ruta de forma automática. Cada sesión debe terminar con un resultado verificable y el estado real de su tarea.
+[T-001](tasks/001-desktop-spike.md) está completada. La siguiente tarea de producto depende de la decisión sobre P-001 y P-003 y de los puntos abiertos de esta fase. No ejecutar toda la hoja de ruta de forma automática. Cada sesión debe terminar con un resultado verificable y el estado real de su tarea.
