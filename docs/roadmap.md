@@ -1,6 +1,6 @@
 # Fases y estado
 
-Fecha: 2026-10-26. **Estado actual: Fase 0. T-001 completada y D-010 aceptada: Electron + React + TypeScript con WebContentsView para el prototipo. No hay implementación de producto.**
+Fecha: 2026-10-26. **Estado actual: Fase 0 cerrada (decisiones D-010 a D-015). Fase 1 lista para empezar con [T-002](tasks/002-mesa-y-enlaces.md). No hay implementación de producto.**
 
 Los hitos preservan el orden acordado. Los hallazgos de una prueba pueden cambiar una propuesta técnica sin ampliar la fase entera.
 
@@ -9,8 +9,8 @@ Los hitos preservan el orden acordado. Los hallazgos de una prueba pueden cambia
 - [x] Consolidar visión, terminal universal y Notion como contexto en documentación inicial.
 - [x] Preparar instrucciones compartidas para Claude Code y Codex.
 - [x] Registrar fuentes revisadas y distinguirlas de pruebas ejecutadas.
-- [ ] Revisar esta base documental con el usuario y cerrar las decisiones pendientes que condicionen la primera tarea.
-- [ ] Identificar equipo de prueba, RAM, usuarios iniciales y proyecto piloto. Equipo y RAM fijados ([D-011](decisions.md)); usuarios: el equipo de FLOC* ([D-014](decisions.md)); proyecto piloto con archivo de Figma configurado localmente. Falta decidir si las mesas son individuales o compartidas.
+- [x] Revisar esta base documental con el usuario y cerrar las decisiones pendientes que condicionen la primera tarea (D-010 a D-015).
+- [x] Identificar equipo de prueba, RAM, usuarios iniciales y proyecto piloto. Equipo y RAM ([D-011](decisions.md)), usuarios: el equipo de FLOC* ([D-014](decisions.md)), mesas individuales ([D-015](decisions.md)), proyecto piloto con archivo de Figma configurado localmente.
 - [x] Validar campos, permisos y enlaces de Notion. Integración de solo lectura conectada a la base de proyectos; esquema, estados y uso de campos comprobados ([contexto de Notion](notion-context.md#esquema-comprobado)). La duda de Pinterest la cierra [D-012](decisions.md).
 - [x] Ejecutar [T-001: prueba de escritorio](tasks/001-desktop-spike.md). Apto para continuar, con límites ([resultados](research/001-desktop-spike-results.md)).
 - [x] Comparar una base propia con la reutilización que realmente ahorre trabajo. Mesa no ofrece implementación pública; OpenCove [evaluado](research/opencove-evaluation.md) y usado como referencia; ccanvas descartado (Tauri). Resultado: base propia ([D-010](decisions.md)).
@@ -65,4 +65,4 @@ Salida: publicación deliberada y trazable de un resultado revisado. Workers y e
 
 ## Próxima tarea
 
-[T-001](tasks/001-desktop-spike.md) está completada y [D-010](decisions.md) fija la base del prototipo. Antes de la primera tarea de Fase 1 quedan los puntos abiertos de esta fase: equipo y usuarios de prueba, campos de Notion y comparación con reutilización (ccanvas sin auditar). No ejecutar toda la hoja de ruta de forma automática. Cada sesión debe terminar con un resultado verificable y el estado real de su tarea.
+[T-001](tasks/001-desktop-spike.md) está completada y la Fase 0, cerrada. La primera tarea de producto es [T-002: mesa libre y enlaces con «Añadir URL»](tasks/002-mesa-y-enlaces.md), propuesta y sin empezar. No ejecutar toda la hoja de ruta de forma automática. Cada sesión debe terminar con un resultado verificable y el estado real de su tarea.

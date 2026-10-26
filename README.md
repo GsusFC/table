@@ -27,10 +27,11 @@ La primera validación será de uso interno. El consumo de memoria y la edición
 | [Terminal y arneses](docs/harnesses.md) | Compatibilidad básica y conexión con el lienzo. |
 | [Validación de memoria](docs/memory-validation.md) | Cómo medir el coste real sin inventar presupuestos. |
 | [Fases](docs/roadmap.md) | Hitos y criterios de salida. |
-| [Primera tarea](docs/tasks/001-desktop-spike.md) | Prueba técnica acotada del contenedor de escritorio. |
+| [T-001](docs/tasks/001-desktop-spike.md) | Prueba técnica del contenedor de escritorio (completada). |
+| [T-002](docs/tasks/002-mesa-y-enlaces.md) | Primera tarea de producto: mesa libre y enlaces con «Añadir URL». |
 | [Fuentes](docs/research/sources.md) | Evidencia técnica consultada y límites de esa evidencia. |
 | [Resultados de T-001](docs/research/001-desktop-spike-results.md) | Entorno, comandos y resultados del ensayo de escritorio. |
-| [Evaluación de OpenCove](docs/research/opencove-evaluation.md) | Revisión y arranque de una posible base; recomendación pendiente. |
+| [Evaluación de OpenCove](docs/research/opencove-evaluation.md) | Revisión de una posible base; usada como referencia. |
 
 ## Trabajar con Claude Code y Codex
 
