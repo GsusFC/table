@@ -22,9 +22,10 @@ La app de escritorio de Codex es el punto de partida: ventana sobria, carril lat
 
 | Zona | Contenido en T-002 | Más adelante |
 | --- | --- | --- |
-| Barra superior | Semáforos de macOS integrados; atrás y adelante; mostrar u ocultar el carril; nueva mesa; nombre de la mesa con estado de guardado; acciones de la mesa (`···`) y «Añadir URL» (`+`). | Compartir (D-015 lo deja para después), sesiones de agentes. |
-| Carril lateral | Inicio (lista de mesas) arriba; Ajustes abajo (T-003). | Agentes, contexto. |
+| Barra superior | Semáforos de macOS integrados; atrás y adelante; mostrar u ocultar el carril; nueva mesa; nombre de la mesa con estado de guardado; acciones de la mesa (`···`) y «Añadir URL» (`+`); «Agentes» abre o pliega el panel de agentes (T-007). | Compartir (D-015 lo deja para después). |
+| Carril lateral | Inicio (lista de mesas) arriba; Ajustes abajo (T-003). | Contexto. |
 | Panel principal | Inicio: lista de mesas y «Nueva mesa». Mesa: lienzo abierto con tarjetas, notas (T-004) y conexiones entre ellas. | — |
+| Panel de agentes | A la derecha en una mesa (T-007): sesiones de arnés en pestañas. | — |
 
 ## Interacción
 
@@ -46,6 +47,12 @@ La app de escritorio de Codex es el punto de partida: ventana sobria, carril lat
 - **Editor de Figma compartido (T-005):** tarjetas del mismo archivo de Figma comparten un único editor; entrar en un frame reutiliza el editor cargado y lo lleva a ese frame (la tarjeta que lo tenía pasa a descargada y, si la página avisa de cambios sin guardar, el editor se queda donde estaba).
 - **Ajustes (T-003):** botón abajo en el carril. Notion: «Conectar con Notion» abre el navegador para autorizar a Table con la cuenta de cada persona; después muestra quién está conectado y «Desconectar». Como cualquier diálogo, cierra antes la web abierta.
 - **Ficha del proyecto (T-003):** una tarjeta de Notion cuya página es una ficha de una base de proyectos muestra, en lugar de la captura, los campos permitidos: estado, servicios, inicio y entrega (con cuánto falta). El pie dice «Ficha de Notion · leída hace…»; si no se pudo leer, «Caché de hace… · motivo» en ámbar. Se vuelve a leer al abrir la mesa, con el botón de la esquina y al conectar o desconectar. «Entrar» sigue abriendo la web de Notion.
+- **Panel de agentes (T-007):** panel a la derecha del lienzo, abierto o plegado con «Agentes» en la barra superior (o con su botón de plegar). Se redimensiona arrastrando su borde izquierdo (o con las flechas con el borde enfocado), entre 320 px y el 70 % de la ventana; Table recuerda el ancho y si estaba abierto. Ocupa su propia columna: el panel principal se estrecha, así que una web abierta nunca tapa el terminal.
+  - Cada sesión de la mesa es una pestaña con su nombre y un punto de estado (verde en marcha; al terminar, su código de salida). «+» lista los perfiles: los arneses del catálogo que no están instalados aparecen desactivados con «no instalado». Sin sesiones, el panel explica qué hace y ofrece los perfiles directamente.
+  - Encima del terminal se ven la carpeta de trabajo, el estado y «Desacoplar». Cerrar la pestaña de una sesión en marcha pide confirmación («El agente sigue en marcha. Se cerrará el proceso.»); una terminada se cierra sin preguntar. Borrar una mesa avisa si tiene agentes en marcha.
+  - El terminal es claro, con la fuente monoespaciada del sistema y un historial acotado. Con el foco en él, los atajos del lienzo (`⌫`, `⌘A`, pegar una URL) no actúan; con una web abierta, `⌘⇧Esc` sigue volviendo al lienzo.
+- **Desacoplar (T-007):** la sesión pasa a una tarjeta flotante sobre el lienzo, de 640 × 420 cerca del centro visible: el mismo terminal, sin reiniciar el proceso ni perder lo escrito. Se arrastra por la cabecera (nombre, estado y «Volver al panel»), se redimensiona por los bordes y las teclas y la rueda van al terminal. No es parte de la mesa: no se guarda, no se conecta, no entra en la selección ni en ordenar o alinear, y el imán no la mueve ni la usa de guía. «Volver al panel» la devuelve a su pestaña (abre el panel si estaba plegado). Desacoplar con una web abierta vuelve antes al lienzo.
+- **Ajustes · Agentes (T-007):** lista los arneses del catálogo con si están instalados y los perfiles propios con «Quitar»; un formulario con nombre y comando añade otro. El comando se ejecuta con el shell de inicio de sesión en la carpeta de la mesa.
 
 ## Principios visuales
 

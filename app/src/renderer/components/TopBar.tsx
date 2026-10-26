@@ -9,6 +9,7 @@ import {
   Pencil,
   Plus,
   SquarePen,
+  SquareTerminal,
   Trash2,
   X,
 } from 'lucide-react'
@@ -43,6 +44,9 @@ interface TopBarProps {
   readonly onForward: () => void
   readonly railOpen: boolean
   readonly onToggleRail: () => void
+  /** Panel de agentes de la mesa (T-007), a la derecha. */
+  readonly agentsOpen: boolean
+  readonly onToggleAgents: () => void
   readonly onNewMesa: () => void
   /** null en el inicio. */
   readonly mesa: { readonly name: string; readonly save: SaveStatus } | null
@@ -76,6 +80,8 @@ export function TopBar({
   onForward,
   railOpen,
   onToggleRail,
+  agentsOpen,
+  onToggleAgents,
   onNewMesa,
   mesa,
   onRenameMesa,
@@ -219,6 +225,20 @@ export function TopBar({
               <Plus aria-hidden {...ICON} />
             </button>
           </div>
+        )}
+
+        {/* Fuera del panel principal: se puede abrir y plegar también con una web dentro. */}
+        {mesa !== null && (
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Agentes"
+            aria-pressed={agentsOpen}
+            title={agentsOpen ? 'Plegar agentes' : 'Agentes'}
+            onClick={onToggleAgents}
+          >
+            <SquareTerminal aria-hidden {...ICON} />
+          </button>
         )}
 
         {entered !== null && (

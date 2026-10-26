@@ -12,15 +12,16 @@ import {
   type IpcMainInvokeEvent,
   type MenuItemConstructorOptions,
 } from 'electron'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { existsSync, mkdtempSync } from 'node:fs'
+import { homedir, tmpdir, userInfo } from 'node:os'
+import { isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { figmaFileKey } from '../shared/figma'
 import { CAPTURE_PROTOCOL, IPC, type PersistenceError } from '../shared/ipc'
 import type { MesaId } from '../shared/model'
 import { recognizeService } from '../shared/services'
 import {
+  isCustomProfileId,
   parseCardPatch,
   parseHttpUrl,
   parseId,
@@ -28,6 +29,9 @@ import {
   parseNotePatch,
   parsePanelBounds,
   parsePoint,
+  parseProfileId,
+  parseTerminalInput,
+  parseTerminalSize,
   parseViewport,
 } from '../shared/validate'
 import { log } from './log'
@@ -40,6 +44,9 @@ import { runMeasure } from './measure'
 import { runSmoke, smokeHooks } from './smoke'
 import { createMesaStore } from './store/mesaStore'
 import type { MesaStore } from './store/types'
+import { createProfileCatalog, loginShellDetector, type ProfileCatalog } from './terminal/profiles'
+import { createSessionManager, sessionEnvironment, type SessionManager } from './terminal/sessions'
+import { createWorkFolders, type WorkFolders } from './terminal/workFolder'
 import { createSurfaceManager } from './web/surfaceManager'
 import type { SurfaceManager } from './web/types'
 
@@ -72,6 +79,9 @@ let store: MesaStore | null = null
 let settings: SettingsStore | null = null
 let projects: ProjectService | null = null
 let frames: FrameService | null = null
+let profileCatalog: ProfileCatalog | null = null
+let terminals: SessionManager | null = null
+let workFolders: WorkFolders | null = null
 /** Autorización con Notion en curso (navegador abierto); se puede cancelar. */
 let connectingNotion: AbortController | null = null
 /** Escrituras iniciadas por el proceso principal (capturas, títulos); se esperan al cerrar. */
@@ -199,6 +209,25 @@ function confirmCloseWithUnsaved(window: BrowserWindow, flush: FlushResult): boo
   return choice === 1
 }
 
+/** Si hay sesiones de terminal en marcha, el usuario decide si terminarlas y cerrar. `true` = cerrar. */
+function confirmTerminateSessions(window: BrowserWindow, running: number): boolean {
+  if (running === 0) {
+    return true
+  }
+  if (smokeMode) {
+    return smokeHooks.confirmTerminateSessions(running)
+  }
+  const choice = dialog.showMessageBoxSync(window, {
+    type: 'warning',
+    buttons: ['Volver a Table', running === 1 ? 'Terminar la sesión y cerrar' : `Terminar ${running} sesiones y cerrar`],
+    defaultId: 0,
+    cancelId: 0,
+    message: running === 1 ? 'Hay 1 sesión de terminal en marcha.' : `Hay ${running} sesiones de terminal en marcha.`,
+    detail: 'Al cerrar Table se terminan sus procesos y los que hayan abierto. Lo que el agente no haya guardado se pierde.',
+  })
+  return choice === 1
+}
+
 function registerIpc(): void {
   handle(IPC.mesasList, () => requireStore().list())
   handle(IPC.mesasCreate, name => requireStore().create(parseMesaName(name)))
@@ -221,6 +250,9 @@ function registerIpc(): void {
       }
       throw error
     }
+    // Sus sesiones de terminal no tienen ya mesa: se terminan. Su carpeta de trabajo se conserva en disco.
+    await terminals?.closeMesa(mesaId)
+    await workFolders?.forget(mesaId)
   })
   handle(IPC.mesasSetViewport, (id, viewport) => requireStore().setViewport(parseId(id), parseViewport(viewport)))
 
@@ -420,6 +452,70 @@ function registerFigmaIpc(): void {
   })
 }
 
+function requireTerminals(): { catalog: ProfileCatalog; sessions: SessionManager } {
+  if (!profileCatalog || !terminals) {
+    throw new Error('Las terminales no están listas')
+  }
+  return { catalog: profileCatalog, sessions: terminals }
+}
+
+/** Mensaje sin respuesta del renderer (alta frecuencia): se valida y, si no vale, se descarta con registro. */
+function listen(channel: string, run: (...args: unknown[]) => void): void {
+  ipcMain.on(channel, (event, ...args: unknown[]) => {
+    if (!isTrustedSender(event)) {
+      log('ipc-rejected', { channel })
+      return
+    }
+    try {
+      run(...args)
+    } catch (error) {
+      log('ipc-invalid', { channel, message: error instanceof Error ? error.message : String(error) })
+    }
+  })
+}
+
+/** Sesiones de terminal con un arnés (T-007). Table transporta teclas y salida; no responde por el arnés. */
+function registerTerminalIpc(): void {
+  handle(IPC.terminalProfiles, () => requireTerminals().catalog.list())
+  handle(IPC.terminalSaveCustomProfile, async input => {
+    await requireSettings().addCustomProfile(input)
+    return requireTerminals().catalog.list()
+  })
+  handle(IPC.terminalRemoveCustomProfile, async profileId => {
+    const id = parseProfileId(profileId)
+    if (!isCustomProfileId(id)) {
+      throw new Error('Solo se pueden quitar perfiles propios')
+    }
+    // Las sesiones abiertas con ese perfil siguen en marcha.
+    await requireSettings().removeCustomProfile(id)
+    return requireTerminals().catalog.list()
+  })
+  handle(IPC.terminalSessions, mesaId => requireTerminals().sessions.sessions(parseId(mesaId)))
+  handle(IPC.terminalStart, (mesaId, profileId, size) =>
+    requireTerminals().sessions.start(parseId(mesaId), parseProfileId(profileId), parseTerminalSize(size)),
+  )
+  handle(IPC.terminalReplay, sessionId => requireTerminals().sessions.replay(parseId(sessionId)))
+  handle(IPC.terminalClose, sessionId => requireTerminals().sessions.close(parseId(sessionId)))
+  listen(IPC.terminalWrite, (sessionId, data) => terminals?.write(parseId(sessionId), parseTerminalInput(data)))
+  listen(IPC.terminalResize, (sessionId, size) => terminals?.resize(parseId(sessionId), parseTerminalSize(size)))
+  listen(IPC.terminalAck, (sessionId, chars) => {
+    if (typeof chars !== 'number' || !Number.isSafeInteger(chars) || chars < 0) {
+      throw new Error('Confirmación no válida')
+    }
+    terminals?.ack(parseId(sessionId), chars)
+  })
+}
+
+/** Shell de inicio de sesión del usuario; zsh es el de macOS por defecto. */
+function loginShell(): string {
+  for (const candidate of [process.env['SHELL'], userInfo().shell]) {
+    if (candidate && isAbsolute(candidate) && existsSync(candidate)) {
+      return candidate
+    }
+  }
+  return '/bin/zsh'
+}
+
 /** `table-figma://thumb/<archivo>/<nodo>`: miniaturas de frames guardadas, solo lectura. */
 function registerFigmaProtocol(): void {
   protocol.handle(FIGMA_THUMB_PROTOCOL, async request => {
@@ -490,6 +586,9 @@ function createWindow(): BrowserWindow {
     },
   })
   const contents = window.webContents
+  // Al recargar la interfaz, la salida enviada y sin confirmar ya no se confirmará: no puede dejar sesiones pausadas.
+  contents.on('did-start-loading', () => terminals?.resetFlowControl())
+  contents.on('did-finish-load', () => terminals?.resetFlowControl())
 
   // El zoom de la interfaz local descuadraría getBoundingClientRect() frente a setBounds().
   void contents.setVisualZoomLevelLimits(1, 1)
@@ -523,7 +622,8 @@ function createWindow(): BrowserWindow {
   surface = manager
 
   // Cierre coordinado: guardar lo pendiente de la interfaz, descargar las webs
-  // respetando `beforeunload` y esperar a que terminen las escrituras.
+  // respetando `beforeunload`, terminar las sesiones de terminal (con
+  // confirmación) y esperar a que terminen las escrituras.
   let closing = false
   let closeInProgress = false
   window.on('close', event => {
@@ -543,9 +643,14 @@ function createWindow(): BrowserWindow {
         if (!confirmCloseWithUnsaved(window, flush)) {
           return
         }
+        if (!confirmTerminateSessions(window, terminals?.runningCount() ?? 0)) {
+          return
+        }
         if (!(await manager.closeAll())) {
           return
         }
+        // Procesos de las sesiones y sus descendientes; espera acotada a que salgan.
+        await terminals?.closeAll()
         // Las capturas tomadas al salir de la última web también se esperan.
         await Promise.allSettled([...pendingPersistence])
         await requireStore().flush()
@@ -577,6 +682,10 @@ app.on('web-contents-created', (_event, contents) => {
 })
 
 app.on('window-all-closed', () => app.quit())
+
+// Red de seguridad si se sale sin pasar por el cierre coordinado: ningún proceso de sesión queda huérfano.
+app.on('will-quit', () => terminals?.killAllNow())
+process.on('exit', () => terminals?.killAllNow())
 
 app.on('second-instance', () => {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -613,6 +722,31 @@ void app.whenReady().then(async () => {
   registerIpc()
   registerNotionIpc()
   registerFigmaIpc()
+  const shell = loginShell()
+  const sessionEnv = sessionEnvironment(process.env)
+  const currentSettings = settings
+  profileCatalog = createProfileCatalog(loginShellDetector(shell, sessionEnv), () => currentSettings.customProfiles())
+  void profileCatalog.refresh()
+  const catalog = profileCatalog
+  // El smoke trabaja en una carpeta desechable, nunca en ~/Table.
+  const folders = createWorkFolders(
+    join(app.getPath('userData'), 'work-folders.json'),
+    smokeMode ? join(app.getPath('userData'), 'Table') : join(homedir(), 'Table'),
+  )
+  workFolders = folders
+  terminals = createSessionManager({
+    shell,
+    env: sessionEnv,
+    workFolder: async mesaId => folders.folderFor(mesaId, (await requireStore().get(mesaId)).name),
+    profile: id => catalog.get(id),
+    onData: (sessionId, data) => sendToRenderer(IPC.terminalData, sessionId, data),
+    onSession: session => sendToRenderer(IPC.terminalSession, session),
+  })
+  registerTerminalIpc()
+  if (smokeMode) {
+    const sessions = terminals
+    smokeHooks.terminalPid = sessionId => sessions.pidOf(sessionId)
+  }
   const window = createWindow()
   mainWindow = window
   log('app-ready', { electron: process.versions.electron, chrome: process.versions.chrome })

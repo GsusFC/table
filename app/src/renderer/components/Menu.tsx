@@ -8,6 +8,8 @@ export interface MenuItem {
   readonly onSelect: () => void
   readonly danger?: boolean
   readonly hint?: string
+  /** Visible pero sin acción (p. ej. un arnés no instalado); se salta con las flechas. */
+  readonly disabled?: boolean
 }
 
 interface MenuProps {
@@ -53,7 +55,7 @@ export function Menu({ anchor, align = 'start', label, items, onClose }: MenuPro
   useLayoutEffect(() => {
     if (position && !focused.current) {
       focused.current = true
-      ref.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
+      ref.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus()
     }
   }, [position])
 
@@ -84,7 +86,7 @@ export function Menu({ anchor, align = 'start', label, items, onClose }: MenuPro
   }, [])
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    const buttons = Array.from(ref.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])
+    const buttons = Array.from(ref.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? [])
     const current = buttons.indexOf(document.activeElement as HTMLElement)
     const focusAt = (index: number): void => buttons[(index + buttons.length) % buttons.length]?.focus()
     switch (event.key) {
@@ -131,6 +133,7 @@ export function Menu({ anchor, align = 'start', label, items, onClose }: MenuPro
             type="button"
             role="menuitem"
             className={item.danger ? 'menu-item menu-item-danger' : 'menu-item'}
+            disabled={item.disabled}
             onClick={() => {
               onClose()
               item.onSelect()

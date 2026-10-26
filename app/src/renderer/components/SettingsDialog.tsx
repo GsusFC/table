@@ -1,6 +1,8 @@
+import { Trash2 } from 'lucide-react'
 import { useEffect, useState, type KeyboardEvent } from 'react'
 import type { FigmaSettingsView } from '../../shared/figma'
 import { PROJECT_FIELDS, type NotionSettingsView } from '../../shared/notion'
+import { MAX_PROFILE_COMMAND_LENGTH, MAX_PROFILE_NAME_LENGTH, type HarnessProfile } from '../../shared/terminal'
 import { errorMessage } from '../lib/errors'
 import { notifyFigmaThumbnailsChanged } from '../lib/figmaThumbnails'
 import { notifyNotionSettingsChanged } from '../lib/notionSettings'
@@ -108,6 +110,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
         )}
       </section>
       <FigmaSettings />
+      <AgentsSettings />
     </Dialog>
   )
 }
@@ -191,6 +194,130 @@ function FigmaSettings() {
           </button>
         </div>
       )}
+      {error && (
+        <p className="field-error" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
+  )
+}
+
+/** Arneses: los del catálogo (con si están instalados) y perfiles propios con nombre y comando. */
+function AgentsSettings() {
+  const [profiles, setProfiles] = useState<readonly HarnessProfile[] | null>(null)
+  const [name, setName] = useState('')
+  const [command, setCommand] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    api.terminal.profiles().then(setProfiles, (caught: unknown) => setError(errorMessage(caught)))
+  }, [])
+
+  const run = (task: () => Promise<HarnessProfile[]>, onDone?: () => void): void => {
+    if (busy) {
+      return
+    }
+    setBusy(true)
+    setError(null)
+    task().then(
+      next => {
+        setBusy(false)
+        setProfiles(next)
+        onDone?.()
+      },
+      (caught: unknown) => {
+        setBusy(false)
+        setError(errorMessage(caught))
+      },
+    )
+  }
+
+  const canAdd = name.trim().length > 0 && command.trim().length > 0
+  const add = (): void =>
+    run(
+      () => api.terminal.saveCustomProfile({ name, command }),
+      () => {
+        setName('')
+        setCommand('')
+      },
+    )
+  // Enter añade el perfil en lugar de cerrar Ajustes.
+  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      if (canAdd) {
+        add()
+      }
+    }
+  }
+
+  return (
+    <section className="settings-section" aria-labelledby="settings-agents">
+      <h3 id="settings-agents" className="settings-heading">
+        Agentes
+      </h3>
+      <p className="settings-help">
+        Programas que se abren en el panel de agentes de cada mesa, con tu shell de inicio de sesión y en la carpeta de
+        la mesa. Tienen tus permisos: Table no filtra lo que hacen.
+      </p>
+      {profiles === null ? (
+        <p className="settings-help">Cargando…</p>
+      ) : (
+        <ul className="profile-list" aria-label="Perfiles de arnés">
+          {profiles.map(profile => (
+            <li key={profile.id} className="profile-row">
+              <span className="profile-name">{profile.name}</span>
+              <code className="profile-command" title={profile.command ?? undefined}>
+                {profile.command ?? 'shell'}
+              </code>
+              {profile.source === 'custom' ? (
+                <button
+                  type="button"
+                  className="icon-button icon-button-small icon-button-danger"
+                  aria-label={`Quitar ${profile.name}`}
+                  title="Quitar"
+                  disabled={busy}
+                  onClick={() => run(() => api.terminal.removeCustomProfile(profile.id))}
+                >
+                  <Trash2 aria-hidden size={14} strokeWidth={1.75} />
+                </button>
+              ) : (
+                <span className={profile.available ? 'profile-state' : 'profile-state profile-state-missing'}>
+                  {profile.available ? 'instalado' : 'no instalado'}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="settings-row">
+        <input
+          className="input profile-name-input"
+          value={name}
+          onChange={event => setName(event.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder="Nombre"
+          aria-label="Nombre del perfil"
+          maxLength={MAX_PROFILE_NAME_LENGTH}
+          autoComplete="off"
+        />
+        <input
+          className="input profile-command-input"
+          value={command}
+          onChange={event => setCommand(event.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder="Comando, p. ej. aider --model sonnet"
+          aria-label="Comando del perfil"
+          maxLength={MAX_PROFILE_COMMAND_LENGTH}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <button type="button" className="button" onClick={add} disabled={busy || !canAdd}>
+          Añadir
+        </button>
+      </div>
       {error && (
         <p className="field-error" role="alert">
           {error}

@@ -1,13 +1,16 @@
+import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { FigmaSettingsView } from '../../shared/figma'
 import type { NotionSettingsView } from '../../shared/notion'
+import { isCustomProfileId, parseCustomProfileInput } from '../../shared/validate'
 import { writeFileAtomic } from '../files'
 
 /**
  * Configuración global de Table (fuera de las mesas y de Git), en
  * `<userData>/settings.json`. Las credenciales se guardan cifradas con el
- * llavero del sistema; el archivo nunca las contiene en claro.
+ * llavero del sistema; el archivo nunca las contiene en claro. Los perfiles
+ * propios de terminal no son secretos y se guardan en claro.
  */
 interface SettingsFile {
   readonly version: 2
@@ -23,7 +26,21 @@ interface SettingsFile {
     /** Usuario de Figma del token, para mostrar quién está conectado. */
     readonly handle: string | null
   }
+  readonly terminal: {
+    readonly customProfiles: readonly CustomProfile[]
+  }
 }
+
+/** Perfil de terminal añadido por el usuario en Ajustes (T-007). */
+export interface CustomProfile {
+  /** `custom:<uuid>` */
+  readonly id: string
+  readonly name: string
+  readonly command: string
+}
+
+/** Perfiles propios que se conservan como máximo. */
+export const MAX_CUSTOM_PROFILES = 50
 
 /** Credenciales de la conexión con el MCP de Notion. Formato del SDK de MCP; Table no las interpreta. */
 export interface NotionConnection {
@@ -59,12 +76,18 @@ export interface SettingsStore {
   figmaToken(): string | null
   connectFigma(token: string, handle: string | null): Promise<void>
   disconnectFigma(): Promise<void>
+  customProfiles(): readonly CustomProfile[]
+  /** `input` sin validar; lanza si no es válido o se supera MAX_CUSTOM_PROFILES. */
+  addCustomProfile(input: unknown): Promise<CustomProfile>
+  /** Sin efecto si no existe. */
+  removeCustomProfile(id: string): Promise<void>
 }
 
 const EMPTY: SettingsFile = {
   version: 2,
   notion: { connection: null, workspaceName: null, userName: null },
   figma: { token: null, handle: null },
+  terminal: { customProfiles: [] },
 }
 
 export function createSettingsStore(userData: string, box: SecretBox): SettingsStore {
@@ -160,6 +183,28 @@ export function createSettingsStore(userData: string, box: SecretBox): SettingsS
     async disconnectFigma() {
       await update(current => ({ ...current, figma: EMPTY.figma }), false)
     },
+
+    customProfiles() {
+      return settings.terminal.customProfiles
+    },
+
+    async addCustomProfile(input) {
+      const profile: CustomProfile = { id: `custom:${randomUUID()}`, ...parseCustomProfileInput(input) }
+      await update(current => {
+        if (current.terminal.customProfiles.length >= MAX_CUSTOM_PROFILES) {
+          throw new Error(`Se admiten hasta ${MAX_CUSTOM_PROFILES} perfiles propios`)
+        }
+        return { ...current, terminal: { customProfiles: [...current.terminal.customProfiles, profile] } }
+      }, false)
+      return profile
+    },
+
+    async removeCustomProfile(id) {
+      await update(current => {
+        const customProfiles = current.terminal.customProfiles.filter(profile => profile.id !== id)
+        return customProfiles.length === current.terminal.customProfiles.length ? current : { ...current, terminal: { customProfiles } }
+      }, false)
+    },
   }
 }
 
@@ -190,8 +235,29 @@ function load(path: string): SettingsFile {
         token: typeof figma?.token === 'string' ? figma.token : null,
         handle: typeof figma?.handle === 'string' ? figma.handle : null,
       },
+      // Ajustes guardados antes de T-007 no tienen perfiles propios; los dañados se descartan.
+      terminal: { customProfiles: loadCustomProfiles(parsed.terminal?.customProfiles) },
     }
   } catch {
     return EMPTY
   }
+}
+
+function loadCustomProfiles(value: unknown): CustomProfile[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  const profiles: CustomProfile[] = []
+  for (const item of value.slice(0, MAX_CUSTOM_PROFILES)) {
+    const id = (item as { id?: unknown } | null)?.id
+    if (typeof id !== 'string' || !isCustomProfileId(id) || profiles.some(profile => profile.id === id)) {
+      continue
+    }
+    try {
+      profiles.push({ id, ...parseCustomProfileInput(item) })
+    } catch {
+      // Perfil dañado: se omite.
+    }
+  }
+  return profiles
 }

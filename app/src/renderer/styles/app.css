@@ -75,17 +75,20 @@ kbd {
 /* ---------- Estructura de la ventana ---------- */
 
 .shell {
+  /* La columna de agentes la fija la app (0 sin panel). */
+  --rail-column: var(--rail-width);
+  --agents-column: 0px;
   display: grid;
   grid-template-areas:
-    'top top'
-    'rail panel';
-  grid-template-columns: var(--rail-width) minmax(0, 1fr);
+    'top top top'
+    'rail panel agents';
+  grid-template-columns: var(--rail-column) minmax(0, 1fr) var(--agents-column);
   grid-template-rows: var(--topbar-height) minmax(0, 1fr);
   height: 100dvh;
 }
 
 .shell-no-rail {
-  grid-template-columns: 0 minmax(0, 1fr);
+  --rail-column: 0px;
 }
 
 .panel {
@@ -1598,4 +1601,396 @@ kbd {
 
 .frames-item-note {
   font-size: var(--font-size-sm);
+}
+
+/* ---------- Panel de agentes y terminal (T-007) ---------- */
+
+.menu-item:disabled,
+.menu-item:disabled > svg {
+  color: var(--color-text-faint);
+  cursor: default;
+}
+
+.menu-item:disabled:hover {
+  background: transparent;
+}
+
+.agents {
+  grid-area: agents;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  margin: 0 var(--space-2) var(--space-2) 0;
+  overflow: hidden;
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-panel);
+}
+
+/* Borde izquierdo para cambiar el ancho. */
+.agents-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  width: 6px;
+  cursor: col-resize;
+  outline: none;
+  transition: background-color var(--duration-fast) ease-out;
+}
+
+.agents-resize:hover,
+.agents-resize:active,
+.agents-resize:focus-visible {
+  background: var(--color-accent-soft);
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+
+.agents-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 40px;
+  flex-shrink: 0;
+  padding: 0 var(--space-1) 0 var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.agents-tabs {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.agents-tab {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  max-width: 200px;
+  height: var(--control-height);
+  border-radius: var(--radius-md);
+}
+
+.agents-tab:hover,
+.agents-tab-selected {
+  background: var(--color-surface-hover);
+}
+
+.agents-tab-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 100%;
+  padding: 0 2px 0 var(--space-2);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.agents-tab-selected .agents-tab-button {
+  color: var(--color-text);
+  font-weight: var(--font-weight-medium);
+}
+
+.agents-tab-button > svg {
+  flex-shrink: 0;
+  color: var(--color-text-faint);
+}
+
+.agents-tab-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agents-tab-code {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-faint);
+}
+
+.agents-tab-close {
+  opacity: 0;
+}
+
+.agents-tab:hover .agents-tab-close,
+.agents-tab-selected .agents-tab-close,
+.agents-tab-close:focus-visible {
+  opacity: 1;
+}
+
+.agents-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  background: var(--color-text-faint);
+}
+
+.agents-dot-live {
+  background: var(--color-success);
+}
+
+.agents-dot-danger {
+  background: var(--color-danger);
+}
+
+.agents-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.agents-session-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 36px;
+  flex-shrink: 0;
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.agents-cwd {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.agents-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.agents-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-6);
+  overflow-y: auto;
+  text-align: center;
+}
+
+.agents-empty-title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+}
+
+.agents-empty-text {
+  max-width: 340px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.agents-profiles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  max-width: 280px;
+  margin-top: var(--space-2);
+}
+
+.agents-profile {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 32px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  text-align: left;
+  cursor: pointer;
+}
+
+.agents-profile:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+.agents-profile:disabled {
+  color: var(--color-text-faint);
+  cursor: default;
+}
+
+.agents-profile > svg {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+}
+
+.agents-profile-name {
+  flex: 1;
+}
+
+.agents-profile-hint {
+  font-size: var(--font-size-xs);
+}
+
+/* Hueco del terminal: el padding va en `.xterm` para que el ajuste de columnas lo descuente. */
+.terminal-view {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--terminal-background);
+}
+
+/* xterm.css trae fondo y sombras negras pensados para un tema oscuro. */
+.terminal-view .xterm {
+  --vscode-scrollbar-shadow: transparent;
+  height: 100%;
+  padding: var(--space-2) var(--space-1) var(--space-2) var(--space-3);
+}
+
+.terminal-view .xterm .xterm-viewport {
+  background-color: var(--terminal-background);
+}
+
+/* Sesión desacoplada en el lienzo: flota sobre tarjetas y notas. */
+.terminal-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-overlay);
+}
+
+.terminal-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  flex-shrink: 0;
+  padding: 0 var(--space-1) 0 var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  cursor: grab;
+}
+
+.terminal-card-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text);
+}
+
+.terminal-card-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--terminal-background);
+  cursor: auto;
+}
+
+/* Deshace el zoom del lienzo (tamaño y escala en línea desde TerminalNode): xterm queda 1:1 con la pantalla. */
+.terminal-card-unscaled {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+
+.terminal-resize-line.react-flow__resize-control.line {
+  border-color: transparent;
+}
+
+.terminal-resize-handle.react-flow__resize-control.handle {
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--color-accent);
+  border-radius: 2px;
+  background: var(--color-surface);
+  opacity: 0;
+}
+
+.canvas .react-flow__node-terminal:hover .terminal-resize-handle {
+  opacity: 1;
+}
+
+/* Ajustes: perfiles de arnés. */
+.profile-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.profile-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: 0 var(--space-1) 0 var(--space-3);
+}
+
+.profile-row + .profile-row {
+  border-top: 1px solid var(--color-border);
+}
+
+.profile-name {
+  width: 104px;
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--font-weight-medium);
+}
+
+.profile-command {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.profile-state {
+  flex-shrink: 0;
+  padding-right: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-success);
+}
+
+.profile-state-missing {
+  color: var(--color-text-faint);
+}
+
+.settings-row .profile-name-input {
+  flex: 0 0 120px;
 }

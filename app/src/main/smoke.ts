@@ -1,5 +1,5 @@
 import { app, webContents, type BrowserWindow, type WebContents } from 'electron'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
@@ -8,6 +8,7 @@ import { Server as McpServer } from '@modelcontextprotocol/sdk/server/index.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import type { Card, Mesa, Point, Size } from '../shared/model'
+import type { HarnessProfile, SessionInfo } from '../shared/terminal'
 import {
   FIXTURE_OTHER_SOURCE,
   FIXTURE_PROJECT_PROPERTIES,
@@ -37,7 +38,7 @@ const FIXTURE_HTML = `<!doctype html><html lang="es"><head><meta charset="utf-8"
 const GUARDED_HTML = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Con cambios</title></head>
 <body><input autofocus><script>addEventListener('beforeunload', e => { e.preventDefault(); e.returnValue = '' })</script></body></html>`
 
-const TOTAL_TIMEOUT_MS = 120_000
+const TOTAL_TIMEOUT_MS = 180_000
 
 /** Decisión ante `beforeunload` que el smoke controla; la app la usa solo con TABLE_SMOKE=1. */
 export const smokeHooks = {
@@ -48,6 +49,23 @@ export const smokeHooks = {
   notionMcpUrl: undefined as string | undefined,
   /** API de Figma falsa en local, con archivos y miniaturas sintéticos. */
   figmaApiBase: undefined as string | undefined,
+  /** Cierre con sesiones de terminal en marcha: el smoke anota cuántas y cierra. */
+  confirmTerminateSessions: (running: number): boolean => {
+    smokeHooks.terminateConfirmations.push(running)
+    return true
+  },
+  terminateConfirmations: [] as number[],
+  /** PID del proceso de una sesión; no se expone por IPC. */
+  terminalPid: (_sessionId: string): number | null => null,
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** Chromium solo respeta `beforeunload` si la página recibió interacción del usuario. */
@@ -289,6 +307,8 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
   const { server, url: fixtureUrl } = await startFixtureServer()
 
   let closingMesaId: string | null = null
+  /** Sesión de terminal que sigue en marcha al cerrar Table. */
+  let quitSessionPid: number | null = null
   try {
     await waitFor(() => window.isVisible() && !ui.isLoading(), Boolean, 'interfaz lista')
     await waitFor(() => inUi<boolean>(`!!document.querySelector('.home')`), Boolean, 'inicio')
@@ -879,6 +899,324 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
       figmaServer.server.close()
     }
 
+    // T-007: interfaz del panel de agentes: pestañas, terminal xterm, desacoplar y volver, cerrar con confirmación.
+    {
+      const agentsMesa = await inUi<Mesa>(`window.table.mesas.create('Mesa de agentes')`)
+      const agentsArg = JSON.stringify(agentsMesa.id)
+      const goHome = async (): Promise<void> => {
+        await inUi(`document.querySelector('.rail [aria-label="Inicio"]').click()`)
+        await waitFor(() => inUi<boolean>(`!!document.querySelector('.home')`), Boolean, 'inicio')
+      }
+      await goHome()
+      await waitFor(
+        () => inUi<boolean>(`[...document.querySelectorAll('.mesa-row-open')].some(b => b.textContent.includes('Mesa de agentes'))`),
+        Boolean,
+        'mesa de agentes en el inicio',
+      )
+      await inUi(`[...document.querySelectorAll('.mesa-row-open')].find(b => b.textContent.includes('Mesa de agentes')).click()`)
+      await waitFor(() => inUi<boolean>(`!!document.querySelector('.react-flow__pane')`), Boolean, 'lienzo de agentes')
+      const panelWidth = (): Promise<number> => inUi(`document.querySelector('main.panel').getBoundingClientRect().width`)
+      const widthWithout = await panelWidth()
+      await inUi(`document.querySelector('.topbar [aria-label="Agentes"]').click()`)
+      await waitFor(() => inUi<number>(`document.querySelectorAll('.agents-profile').length`), count => count > 0, 'perfiles en el panel vacío')
+      // La web entra en el panel principal: no debe solaparse con el de agentes.
+      const layout = await inUi<{ panelRight: number; agentsLeft: number }>(`({
+        panelRight: document.querySelector('main.panel').getBoundingClientRect().right,
+        agentsLeft: document.querySelector('.agents').getBoundingClientRect().left,
+      })`)
+      record(
+        'agentes: el panel se abre a la derecha y estrecha el panel principal (donde va la web)',
+        layout.panelRight <= layout.agentsLeft && (await panelWidth()) < widthWithout,
+        layout,
+      )
+      const widthBefore = await inUi<number>(`document.querySelector('.agents').getBoundingClientRect().width`)
+      await inUi(`(() => {
+        const handle = document.querySelector('.agents-resize')
+        handle.focus()
+        for (let i = 0; i < 3; i += 1) {
+          handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true }))
+        }
+      })()`)
+      const widthAfter = await waitFor(
+        () => inUi<number>(`document.querySelector('.agents').getBoundingClientRect().width`),
+        width => width > widthBefore,
+        'panel más ancho',
+      ).catch(() => widthBefore)
+      record('agentes: el borde del panel cambia su ancho', widthAfter > widthBefore, { widthBefore, widthAfter })
+      await shot('16-agentes-vacio')
+
+      // Nueva sesión desde «+» con la terminal normal.
+      const shellName = (await inUi<HarnessProfile[]>(`window.table.terminal.profiles()`)).find(profile => profile.id === 'shell')!.name
+      await inUi(`document.querySelector('.agents [aria-label="Nueva sesión"]').click()`)
+      await waitFor(() => inUi<boolean>(`!!document.querySelector('.menu')`), Boolean, 'menú de perfiles')
+      await inUi(
+        `[...document.querySelectorAll('.menu [role="menuitem"]')].find(b => b.querySelector('.menu-item-label').textContent === ${JSON.stringify(shellName)}).click()`,
+      )
+      const [uiSession] = await waitFor(
+        () => inUi<SessionInfo[]>(`window.table.terminal.sessions(${agentsArg})`),
+        list => list.length === 1,
+        'sesión abierta desde el panel',
+      )
+      const rowsText = (selector: string): Promise<string> =>
+        inUi(`document.querySelector(${JSON.stringify(`${selector} .xterm-rows`)})?.textContent ?? ''`)
+      await waitFor(() => rowsText('.agents-terminal'), text => text.trim().length > 0, 'prompt en el terminal del panel', 20_000)
+      await delay(500)
+      /** Teclea en el terminal enfocado con eventos de entrada reales y pulsa Enter. */
+      const typeLine = async (selector: string, line: string): Promise<void> => {
+        await inUi(`document.querySelector(${JSON.stringify(`${selector} .xterm-helper-textarea`)}).focus()`)
+        for (const character of line) {
+          ui.sendInputEvent({ type: 'char', keyCode: character })
+        }
+        ui.sendInputEvent({ type: 'keyDown', keyCode: 'Return' })
+        ui.sendInputEvent({ type: 'keyUp', keyCode: 'Return' })
+      }
+      await typeLine('.agents-terminal', 'echo ui-$((1+1))')
+      const typed = await waitFor(() => rowsText('.agents-terminal'), text => text.includes('ui-2'), 'salida tecleada en el panel', 20_000).then(
+        () => true,
+        () => false,
+      )
+      record(
+        'agentes: «+» abre una terminal en una pestaña; lo tecleado llega y se ve su salida',
+        typed && uiSession?.status === 'running' && (await inUi<number>(`document.querySelectorAll('.agents-tab').length`)) === 1,
+      )
+      await shot('17-agentes-terminal')
+
+      // Desacoplar: el mismo terminal pasa a una tarjeta del lienzo, sin guardarse en la mesa.
+      await inUi(`[...document.querySelectorAll('.agents-session-bar button')].find(b => b.textContent.includes('Desacoplar')).click()`)
+      await waitFor(() => rowsText('.react-flow__node-terminal'), text => text.includes('ui-2'), 'tarjeta de terminal con la salida')
+      const cardId = await inUi<string | null>(`document.querySelector('.react-flow__node-terminal')?.dataset.id ?? null`)
+      await typeLine('.react-flow__node-terminal', 'echo card-$((2+3))')
+      const typedInCard = await waitFor(() => rowsText('.react-flow__node-terminal'), text => text.includes('card-5'), 'salida tecleada en la tarjeta', 20_000).then(
+        () => true,
+        () => false,
+      )
+      const afterDetach = await inUi<SessionInfo[]>(`window.table.terminal.sessions(${agentsArg})`)
+      const savedMesa = await inUi<Mesa>(`window.table.mesas.get(${agentsArg})`)
+      record(
+        'agentes: desacoplar lleva la misma sesión a una tarjeta del lienzo que no se guarda en la mesa',
+        cardId === uiSession?.id &&
+          typedInCard &&
+          afterDetach.length === 1 &&
+          afterDetach[0]?.id === uiSession.id &&
+          afterDetach[0].status === 'running' &&
+          !(await inUi<boolean>(`!!document.querySelector('.agents-terminal')`)) &&
+          savedMesa.cards.length === 0 &&
+          savedMesa.notes.length === 0,
+      )
+      await shot('18-agentes-tarjeta')
+
+      // Con zoom, el terminal de la tarjeta sigue 1:1 con la pantalla: doble clic selecciona la palabra bajo el ratón.
+      // Con el panel plegado la tarjeta ampliada cabe en el lienzo; «Volver al panel» lo vuelve a abrir.
+      await inUi(`document.querySelector('.agents [aria-label="Plegar agentes"]').click()`)
+      // Zoom con gesto de pellizco (rueda + Ctrl) junto a la esquina de la tarjeta, para que siga a la vista.
+      const pinch = (deltaY: number): Promise<unknown> =>
+        inUi(`(() => {
+          const card = document.querySelector('.react-flow__node-terminal').getBoundingClientRect()
+          document.querySelector('.react-flow__pane').dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, ctrlKey: true, deltaY: ${deltaY}, clientX: card.left - 8, clientY: card.top - 8 }))
+        })()`)
+      await pinch(-40)
+      await delay(400)
+      await typeLine('.react-flow__node-terminal', 'echo xx zzmark')
+      const markRow = `[...document.querySelectorAll('.react-flow__node-terminal .xterm-rows > div')].find(row => row.textContent.replace(/\\u00a0/g, ' ').trimEnd() === 'xx zzmark')`
+      await waitFor(() => inUi<boolean>(`!!${markRow}`), Boolean, 'línea marcada en la tarjeta', 20_000)
+      const target = await inUi<{ zoom: number; screenScale: number; x: number; y: number; left: number; width: number }>(`(() => {
+        const row = ${markRow}
+        const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT)
+        let node
+        while ((node = walker.nextNode()) && !node.textContent.includes('zzmark')) {}
+        const range = document.createRange()
+        const start = node.textContent.indexOf('zzmark')
+        range.setStart(node, start)
+        range.setEnd(node, start + 6)
+        const r = range.getBoundingClientRect()
+        const screen = document.querySelector('.react-flow__node-terminal .xterm-screen')
+        const viewport = document.querySelector('.react-flow__viewport').style.transform
+        return {
+          zoom: Number(/scale\\(([\\d.]+)\\)/.exec(viewport)?.[1] ?? 1),
+          screenScale: screen.getBoundingClientRect().width / screen.offsetWidth,
+          x: Math.round(r.left + r.width / 2),
+          y: Math.round(r.top + r.height / 2),
+          left: r.left,
+          width: r.width,
+        }
+      })()`)
+      for (const clickCount of [1, 2]) {
+        ui.sendInputEvent({ type: 'mouseDown', x: target.x, y: target.y, button: 'left', clickCount })
+        ui.sendInputEvent({ type: 'mouseUp', x: target.x, y: target.y, button: 'left', clickCount })
+      }
+      const selection = await waitFor(
+        () =>
+          inUi<{ left: number; width: number }[]>(
+            `[...document.querySelectorAll('.react-flow__node-terminal .xterm-selection div')].map(d => { const r = d.getBoundingClientRect(); return { left: r.left, width: r.width } }).filter(r => r.width > 0)`,
+          ),
+        rects => rects.length > 0,
+        'selección en la tarjeta',
+      ).catch(() => [])
+      const cell = target.width / 6
+      record(
+        'agentes: con zoom, el terminal de la tarjeta queda 1:1 y el doble clic selecciona la palabra bajo el ratón',
+        target.zoom > 1.5 &&
+          Math.abs(target.screenScale - 1) < 0.01 &&
+          selection.some(rect => Math.abs(rect.left - target.left) < cell / 2 && Math.abs(rect.width - target.width) < cell / 2),
+        { zoom: target.zoom, screenScale: target.screenScale, target: { left: target.left, width: target.width }, selection },
+      )
+      await shot('19-agentes-tarjeta-zoom')
+      await pinch(40)
+
+      // Volver al panel: la misma salida, sin reiniciar.
+      await inUi(`[...document.querySelectorAll('.terminal-card-header button')].find(b => b.textContent.includes('Volver al panel')).click()`)
+      const back = await waitFor(
+        () => rowsText('.agents-terminal'),
+        text => text.includes('ui-2') && text.includes('card-5'),
+        'terminal de vuelta en el panel',
+      ).then(
+        () => true,
+        () => false,
+      )
+      const afterAttach = await inUi<SessionInfo[]>(`window.table.terminal.sessions(${agentsArg})`)
+      record(
+        'agentes: volver al panel conserva la sesión y su salida',
+        back && !(await inUi<boolean>(`!!document.querySelector('.react-flow__node-terminal')`)) && afterAttach[0]?.id === uiSession?.id,
+      )
+
+      // Cerrar una sesión en marcha pide confirmación.
+      await inUi(`document.querySelector('.agents-tab-close').click()`)
+      await waitFor(() => inUi<boolean>(`!!document.querySelector('dialog[open]')`), Boolean, 'confirmación de cierre')
+      const confirmText = await inUi<string>(`document.querySelector('dialog[open]').textContent`)
+      await inUi(`document.querySelector('dialog[open] button[type="submit"]').click()`)
+      const closed = await waitFor(
+        () => inUi<SessionInfo[]>(`window.table.terminal.sessions(${agentsArg})`),
+        list => list.length === 0,
+        'sesión cerrada',
+      ).then(
+        () => true,
+        () => false,
+      )
+      // La pestaña desaparece cuando el renderer recibe la respuesta del cierre.
+      const emptyPanel = await waitFor(
+        () => inUi<boolean>(`document.querySelectorAll('.agents-tab').length === 0 && !!document.querySelector('.agents-profiles')`),
+        Boolean,
+        'panel sin sesiones',
+      ).catch(() => false)
+      record(
+        'agentes: cerrar una sesión en marcha pide confirmación y termina el proceso',
+        confirmText.includes('El agente sigue en marcha') && closed && emptyPanel,
+        { confirm: confirmText.includes('El agente sigue en marcha'), closed, emptyPanel },
+      )
+
+      await inUi(`document.querySelector('.agents [aria-label="Plegar agentes"]').click()`)
+      record('agentes: plegar el panel devuelve el ancho al panel principal', (await waitFor(panelWidth, width => width === widthWithout, 'panel plegado').catch(() => 0)) === widthWithout)
+      await goHome()
+      await inUi(`window.table.mesas.remove(${agentsArg})`)
+    }
+    // fin T-007 interfaz
+
+    // T-007: sesiones de terminal por la API del preload (proceso principal), con el shell real del usuario.
+    {
+      const termMesa = await inUi<Mesa>(`window.table.mesas.create('Agentes/../prueba')`)
+      const mesaArg = JSON.stringify(termMesa.id)
+      await inUi(`(() => {
+        window.__smokeTerm = { out: {}, sessions: [] }
+        window.table.terminal.onData((id, data) => { window.__smokeTerm.out[id] = (window.__smokeTerm.out[id] ?? '') + data })
+        window.table.terminal.onSession(session => { window.__smokeTerm.sessions.push(session) })
+      })()`)
+      const output = (id: string): Promise<string> => inUi(`window.__smokeTerm.out[${JSON.stringify(id)}] ?? ''`)
+      const waitOutput = (id: string, text: string, label: string): Promise<string> =>
+        waitFor(() => output(id), value => value.includes(text), label, 20_000)
+
+      const profiles = await inUi<HarnessProfile[]>(`window.table.terminal.profiles()`)
+      record(
+        'terminal: el catálogo ofrece la terminal normal y los arneses conocidos',
+        profiles.some(profile => profile.id === 'shell' && profile.available && profile.command === null) &&
+          ['claude', 'codex', 'gemini', 'opencode', 'omp', 'pi'].every(id => profiles.some(profile => profile.id === id && profile.source === 'builtin')),
+        { available: profiles.filter(profile => profile.available).map(profile => profile.id) },
+      )
+
+      const shellSession = await inUi<SessionInfo>(`window.table.terminal.start(${mesaArg}, 'shell', { cols: 80, rows: 24 })`)
+      const shellArg = JSON.stringify(shellSession.id)
+      const workFolder = join(app.getPath('userData'), 'Table', 'Agentes-..-prueba')
+      record(
+        'terminal: la sesión trabaja en la carpeta de la mesa, con nombre saneado',
+        shellSession.cwd === workFolder && existsSync(workFolder) && shellSession.title === 'Terminal' && shellSession.status === 'running',
+        { cwd: shellSession.cwd.slice(app.getPath('userData').length), title: shellSession.title },
+      )
+      // Se espera al primer texto (el prompt) antes de escribir.
+      await waitFor(() => output(shellSession.id), value => value.length > 0, 'prompt del shell', 20_000)
+      await delay(500)
+      await inUi(`window.table.terminal.write(${shellArg}, 'echo marca-$((40+2))\\r')`)
+      await waitOutput(shellSession.id, 'marca-42', 'salida de echo')
+      record('terminal: escribir en la sesión ejecuta el comando y llega su salida', true)
+
+      await inUi(`window.table.terminal.resize(${shellArg}, { cols: 100, rows: 30 })`)
+      await inUi(`window.table.terminal.write(${shellArg}, 'stty size\\r')`)
+      const resized = await waitOutput(shellSession.id, '30 100', 'tamaño nuevo').then(
+        () => true,
+        () => false,
+      )
+      record('terminal: redimensionar cambia el tamaño que ve el proceso', resized)
+
+      const replay = await inUi<string>(`window.table.terminal.replay(${shellArg})`)
+      record('terminal: la salida guardada permite volver a pintar la sesión', replay.includes('marca-42') && replay.includes('30 100'))
+
+      // Un hijo en segundo plano (otro grupo de procesos) también debe terminar al cerrar.
+      // `!` tecleado activaría la expansión del historial del shell interactivo: se genera con printf y eval.
+      const backgroundJob = `sleep 300 & eval "echo hijo-\\$$(printf '\\041')-fin"\r`
+      await inUi(`window.table.terminal.write(${shellArg}, ${JSON.stringify(backgroundJob)})`)
+      // Solo cuenta la línea con el PID ya expandido, no el eco de lo tecleado.
+      const childText = await waitFor(() => output(shellSession.id), value => /hijo-\d+-fin/.test(value), 'PID del hijo', 20_000)
+      const childPid = Number(/hijo-(\d+)-fin/.exec(childText)?.[1])
+      const shellPid = smokeHooks.terminalPid(shellSession.id)
+      await inUi(`window.table.terminal.close(${shellArg})`)
+      const listedAfterClose = await inUi<SessionInfo[]>(`window.table.terminal.sessions(${mesaArg})`)
+      record(
+        'terminal: cerrar termina el proceso y sus hijos y olvida la sesión',
+        shellPid !== null && !processAlive(shellPid) && childPid > 0 && !processAlive(childPid) && listedAfterClose.length === 0,
+        { shellPid: shellPid !== null, childPid: childPid > 0 },
+      )
+
+      const invalidRejected = await inUi<boolean>(
+        `window.table.terminal.saveCustomProfile({ name: 'Mal', command: 'echo a\\necho b' }).then(() => false, () => true)`,
+      )
+      const withCustom = await inUi<HarnessProfile[]>(
+        `window.table.terminal.saveCustomProfile({ name: 'Perfil de prueba', command: 'printf custom-ok; sleep 30' })`,
+      )
+      const withExit = await inUi<HarnessProfile[]>(`window.table.terminal.saveCustomProfile({ name: 'Sale con 3', command: 'printf adios; exit 3' })`)
+      const custom = withCustom.find(profile => profile.name === 'Perfil de prueba')
+      const exiting = withExit.find(profile => profile.name === 'Sale con 3')
+      record(
+        'terminal: los perfiles propios se validan y se guardan',
+        invalidRejected &&
+          custom?.source === 'custom' &&
+          custom.id.startsWith('custom:') &&
+          readFileSync(join(app.getPath('userData'), 'settings.json'), 'utf8').includes('printf custom-ok; sleep 30'),
+      )
+
+      const customSession = await inUi<SessionInfo>(`window.table.terminal.start(${mesaArg}, ${JSON.stringify(custom!.id)}, { cols: 80, rows: 24 })`)
+      await waitOutput(customSession.id, 'custom-ok', 'salida del perfil propio')
+      record('terminal: un perfil propio abre una sesión con su comando', customSession.title === 'Perfil de prueba')
+
+      const exitSession = await inUi<SessionInfo>(`window.table.terminal.start(${mesaArg}, ${JSON.stringify(exiting!.id)}, { cols: 80, rows: 24 })`)
+      const exited = await waitFor(
+        () => inUi<SessionInfo | null>(`window.__smokeTerm.sessions.find(s => s.id === ${JSON.stringify(exitSession.id)} && s.status === 'exited') ?? null`),
+        session => session !== null,
+        'salida con código',
+        20_000,
+      )
+      record('terminal: una sesión que termina informa de su código de salida', exited?.exitCode === 3 && (await output(exitSession.id)).includes('adios'))
+
+      const customPid = smokeHooks.terminalPid(customSession.id)
+      await inUi(`window.table.mesas.remove(${mesaArg})`)
+      const listedAfterRemove = await inUi<SessionInfo[]>(`window.table.terminal.sessions(${mesaArg})`)
+      record(
+        'terminal: borrar la mesa termina sus sesiones',
+        customPid !== null && !processAlive(customPid) && listedAfterRemove.length === 0,
+      )
+
+      await inUi(`window.table.terminal.removeCustomProfile(${JSON.stringify(custom!.id)})`)
+      const remaining = await inUi<HarnessProfile[]>(`window.table.terminal.removeCustomProfile(${JSON.stringify(exiting!.id)})`)
+      record('terminal: quitar perfiles propios', remaining.every(profile => profile.source === 'builtin'))
+    }
+
     await inUi(`window.table.surface.openMesa(null)`)
     await inUi(`window.table.mesas.remove(${JSON.stringify(mesa.id)})`)
     const listing = await inUi<{ mesas: { name: string }[] }>('window.table.mesas.list()')
@@ -887,6 +1225,8 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
     // Cierre coordinado: mover el lienzo y cerrar antes del retardo de guardado.
     const closingMesa = await inUi<Mesa>(`window.table.mesas.create('Mesa de cierre')`)
     closingMesaId = closingMesa.id
+    const quitSession = await inUi<SessionInfo>(`window.table.terminal.start(${JSON.stringify(closingMesa.id)}, 'shell', { cols: 80, rows: 24 })`)
+    quitSessionPid = smokeHooks.terminalPid(quitSession.id)
     ui.reload()
     await waitFor(() => inUi<boolean>(`[...document.querySelectorAll('.mesa-row-open')].some(b => b.textContent.includes('Mesa de cierre'))`), Boolean, 'mesa de cierre en el inicio')
     await inUi(`[...document.querySelectorAll('.mesa-row-open')].find(b => b.textContent.includes('Mesa de cierre')).click()`)
@@ -913,6 +1253,13 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
       } catch (error) {
         record('cierre: guarda la vista pendiente del lienzo', false, error instanceof Error ? error.message : String(error))
       }
+    }
+    if (quitSessionPid !== null) {
+      record(
+        'cierre: avisa de las sesiones en marcha y termina sus procesos',
+        smokeHooks.terminateConfirmations.length === 1 && smokeHooks.terminateConfirmations[0]! >= 1 && !processAlive(quitSessionPid),
+        { confirmations: smokeHooks.terminateConfirmations },
+      )
     }
     const failed = checks.filter(check => !check.ok).length
     console.log(`[table-smoke] ${checks.length - failed}/${checks.length} comprobaciones correctas`)

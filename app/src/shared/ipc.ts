@@ -72,6 +72,8 @@ export const IPC = {
   /** renderer → main, sin respuesta (alta frecuencia) */
   terminalWrite: 'terminal:write',
   terminalResize: 'terminal:resize',
+  /** Caracteres de `terminalData` ya pintados (control de flujo). */
+  terminalAck: 'terminal:ack',
   /** main → renderer */
   terminalData: 'terminal:data',
   terminalSession: 'terminal:session',
@@ -186,6 +188,12 @@ export interface TableApi {
     close(sessionId: SessionId): Promise<void>
     write(sessionId: SessionId, data: string): void
     resize(sessionId: SessionId, size: TerminalSize): void
+    /**
+     * Confirma que ya se procesaron `chars` caracteres (longitud de las cadenas
+     * recibidas por `onData`). Con demasiada salida sin confirmar, el proceso
+     * principal pausa la sesión hasta que la interfaz la alcanza.
+     */
+    ack(sessionId: SessionId, chars: number): void
     onData(listener: (sessionId: SessionId, data: string) => void): () => void
     /** Cambios de estado de una sesión (arranque, salida). */
     onSession(listener: (session: SessionInfo) => void): () => void

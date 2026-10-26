@@ -1,5 +1,5 @@
 import type { Viewport } from '@xyflow/react'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
   DEFAULT_CARD_SIZE,
   type Card,
@@ -18,6 +18,8 @@ import {
 } from '../shared/model'
 import { serviceById } from '../shared/services'
 import type { SurfaceCardState, UnloadResult } from '../shared/surface'
+import type { SessionId } from '../shared/terminal'
+import { AGENTS_MAX_RATIO, AgentsPanel, clampAgentsWidth } from './components/AgentsPanel'
 import { ConfirmDialog } from './components/Dialog'
 import { Home } from './components/Home'
 import { MesaCanvas } from './components/MesaCanvas'
@@ -30,6 +32,7 @@ import { errorMessage } from './lib/errors'
 import { cardCountLabel, displayHost } from './lib/format'
 import { isExitShortcut } from './lib/shortcut'
 import { cardStatus } from './lib/status'
+import { attachSession, forgetMesaSessions, loadSessions, setExitShortcutReserved, useMesaSessions } from './lib/terminals'
 
 const api = window.table
 const isMac = api.platform === 'darwin'
@@ -51,6 +54,10 @@ const HOME: Route = { kind: 'home' }
 const NOTICE_MS = { info: 4000, error: 8000 } as const
 /** Separación de las tarjetas creadas junto con la mesa. */
 const INITIAL_GRID = { columns: 3, gap: 40 } as const
+/** Panel de agentes: abierto o plegado y su ancho, recordados en este equipo. */
+const AGENTS_OPEN_KEY = 'table.agents.open'
+const AGENTS_WIDTH_KEY = 'table.agents.width'
+const AGENTS_DEFAULT_WIDTH = 520
 
 function sameRoute(a: Route, b: Route): boolean {
   return a.kind === 'home' ? b.kind === 'home' : b.kind === 'mesa' && a.mesaId === b.mesaId
@@ -115,6 +122,17 @@ export function App() {
   const [mesas, setMesas] = useState<readonly MesaSummary[] | null>(null)
   const [unreadable, setUnreadable] = useState<readonly string[]>([])
   const [railOpen, setRailOpen] = useState(true)
+  const [agentsOpen, setAgentsOpen] = useState(() => localStorage.getItem(AGENTS_OPEN_KEY) === '1')
+  const [agentsWidth, setAgentsWidth] = useState(() => {
+    const saved = Number(localStorage.getItem(AGENTS_WIDTH_KEY))
+    return clampAgentsWidth(Number.isFinite(saved) && saved > 0 ? saved : AGENTS_DEFAULT_WIDTH)
+  })
+  useEffect(() => {
+    localStorage.setItem(AGENTS_OPEN_KEY, agentsOpen ? '1' : '0')
+  }, [agentsOpen])
+  useEffect(() => {
+    localStorage.setItem(AGENTS_WIDTH_KEY, String(agentsWidth))
+  }, [agentsWidth])
   const [states, setStates] = useState<ReadonlyMap<CardId, SurfaceCardState>>(() => new Map())
   const [notice, setNotice] = useState<Notice | null>(null)
   const [dialog, setDialog] = useState<DialogState | null>(null)
@@ -227,6 +245,8 @@ export function App() {
   const enteredRef = useRef(entered)
   useEffect(() => {
     enteredRef.current = entered
+    // Con una web en el panel, ⌘⇧Esc desde un terminal vuelve al lienzo en lugar de llegar al arnés.
+    setExitShortcutReserved(entered)
   })
 
   // La web ocupa exactamente el panel principal (opción B): se informa su rectángulo.
@@ -446,8 +466,9 @@ export function App() {
   }
 
   const deleteMesa = async (id: MesaId): Promise<void> => {
-    // El proceso principal descarga antes las webs de la mesa (beforeunload).
+    // El proceso principal descarga antes las webs de la mesa (beforeunload) y termina sus sesiones.
     await api.mesas.remove(id)
+    forgetMesaSessions(id)
     setHistory(current => withoutMesa(current, id))
     setMesa(current => (current?.id === id ? null : current))
     setMesas(list => list?.filter(summary => summary.id !== id) ?? null)
@@ -619,6 +640,19 @@ export function App() {
     [mesaId, notifyError],
   )
 
+  // Sesiones de la mesa abierta que ya existían (p. ej. tras recargar la interfaz).
+  useEffect(() => {
+    if (mesaId) {
+      loadSessions(mesaId).catch(notifyError)
+    }
+  }, [mesaId, notifyError])
+
+  /** «Volver al panel» desde una tarjeta de terminal: abre el panel si estaba plegado. */
+  const attachTerminal = useCallback((sessionId: SessionId) => {
+    attachSession(sessionId)
+    setAgentsOpen(true)
+  }, [])
+
   const enteredCard = useMemo((): EnteredCard | null => {
     if (!enteredState) {
       return null
@@ -639,8 +673,17 @@ export function App() {
     [...failures.values()].some(failedMesaId => failedMesaId === null || failedMesaId === showingMesa.id)
   const saveStatus: SaveStatus = pendingSaves > 0 ? 'saving' : saveFailed ? 'failed' : 'saved'
 
+  const showAgents = showingMesa !== null && agentsOpen
+  const runningInDeleted = useMesaSessions(dialog?.kind === 'delete-mesa' ? dialog.mesa.id : null).filter(
+    session => session.status === 'running',
+  ).length
+
   return (
-    <div className={railOpen ? 'shell' : 'shell shell-no-rail'}>
+    <div
+      className={railOpen ? 'shell' : 'shell shell-no-rail'}
+      // El panel de agentes es una columna más: el panel principal (y la web que lo ocupa) se estrecha.
+      style={{ '--agents-column': showAgents ? `min(${agentsWidth}px, ${AGENTS_MAX_RATIO * 100}vw)` : '0px' } as CSSProperties}
+    >
       <TopBar
         isMac={isMac}
         canGoBack={back !== undefined}
@@ -649,6 +692,8 @@ export function App() {
         onForward={() => forward && void show(forward, current => ({ ...current, index: current.index + 1 }))}
         railOpen={railOpen}
         onToggleRail={() => setRailOpen(open => !open)}
+        agentsOpen={showAgents}
+        onToggleAgents={() => setAgentsOpen(open => !open)}
         onNewMesa={openNewMesa}
         mesa={showingMesa ? { name: showingMesa.name, save: saveStatus } : null}
         onRenameMesa={name => (showingMesa ? renameMesa(showingMesa.id, name) : Promise.resolve())}
@@ -704,6 +749,7 @@ export function App() {
               onRemoveEdge={removeEdge}
               onSaveViewport={saveViewport}
               onEnter={enterCard}
+              onAttachTerminal={attachTerminal}
               notify={notify}
               registerFlush={registerFlush}
             />
@@ -724,6 +770,19 @@ export function App() {
         )}
       </main>
 
+      {showingMesa && agentsOpen && (
+        <AgentsPanel
+          key={showingMesa.id}
+          mesaId={showingMesa.id}
+          width={agentsWidth}
+          onResize={setAgentsWidth}
+          onCollapse={() => setAgentsOpen(false)}
+          entered={entered}
+          onExitWeb={() => api.surface.exit()}
+          notify={notify}
+        />
+      )}
+
       {!entered && dialog?.kind === 'new-mesa' && (
         <NewMesaDialog onCreate={createMesa} onClose={() => setDialog(null)} />
       )}
@@ -733,12 +792,21 @@ export function App() {
           title="Borrar mesa"
           confirmLabel="Borrar mesa"
           description={
-            <p>
-              {dialog.mesa.cardCount === 0
-                ? `Se borrará «${dialog.mesa.name}». `
-                : `Se borrará «${dialog.mesa.name}» con ${cardCountLabel(dialog.mesa.cardCount)} y sus capturas. `}
-              No se puede deshacer. Las webs originales no cambian.
-            </p>
+            <>
+              <p>
+                {dialog.mesa.cardCount === 0
+                  ? `Se borrará «${dialog.mesa.name}». `
+                  : `Se borrará «${dialog.mesa.name}» con ${cardCountLabel(dialog.mesa.cardCount)} y sus capturas. `}
+                No se puede deshacer. Las webs originales no cambian.
+              </p>
+              {runningInDeleted > 0 && (
+                <p className="dialog-note">
+                  {runningInDeleted === 1
+                    ? 'Tiene un agente en marcha: se cerrará su proceso.'
+                    : `Tiene ${runningInDeleted} agentes en marcha: se cerrarán sus procesos.`}
+                </p>
+              )}
+            </>
           }
           onConfirm={() => deleteMesa(dialog.mesa.id)}
           onClose={() => setDialog(null)}

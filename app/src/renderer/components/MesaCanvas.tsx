@@ -65,12 +65,14 @@ import {
 import { figmaFileKey, figmaFrameUrl, figmaNodeId, type FigmaFrame } from '../../shared/figma'
 import { notionPageIdFromUrl, type ProjectSearchResult } from '../../shared/notion'
 import type { SurfaceCardState, UnloadResult } from '../../shared/surface'
+import type { SessionId } from '../../shared/terminal'
 import { copyText } from '../lib/clipboard'
 import { errorMessage } from '../lib/errors'
 import { notifyFigmaThumbnailsChanged } from '../lib/figmaThumbnails'
 import { displayHost } from '../lib/format'
 import { cardStatus } from '../lib/status'
 import { alignEdge, arrangeInGrid, magnetSnap, NO_GUIDES, snapToGrid, type Guides, type Rect } from '../lib/layout'
+import { isInTerminal, moveDetached, useDetached, useMesaSessions, type DetachedTerminal } from '../lib/terminals'
 import { readPastedUrls } from '../lib/url'
 import { AddUrlField } from './AddUrlField'
 import { CanvasContext, type CanvasContextValue } from './canvasContext'
@@ -81,6 +83,7 @@ import { FramesDialog } from './FramesDialog'
 import { LinkProjectDialog } from './LinkProjectDialog'
 import { Menu, type MenuItem } from './Menu'
 import { NoteNode, type NoteNodeType } from './NoteNode'
+import { TerminalNode, type TerminalNodeType } from './TerminalNode'
 
 export type Notify = (text: string, tone?: 'info' | 'error') => void
 
@@ -100,12 +103,15 @@ interface MesaCanvasProps {
   readonly onRemoveEdge: (edgeId: EdgeId) => Promise<void>
   readonly onSaveViewport: (viewport: Viewport) => void
   readonly onEnter: (cardId: CardId) => void
+  /** Devuelve una sesión desacoplada (tarjeta de terminal) al panel de agentes. */
+  readonly onAttachTerminal: (sessionId: SessionId) => void
   readonly notify: Notify
   /** Registra un guardado inmediato de lo pendiente (antes de cerrar); devuelve la baja. */
   readonly registerFlush: (flush: () => void) => () => void
 }
 
-type MesaNode = CardNodeType | NoteNodeType
+/** Las tarjetas de terminal son sesiones desacopladas: no son de la mesa ni se ordenan, conectan o guardan. */
+type MesaNode = CardNodeType | NoteNodeType | TerminalNodeType
 
 /** Tarjeta web con asas de conexión; `CardNode` solo dibuja la tarjeta. */
 const ConnectableCardNode = memo(function ConnectableCardNode(props: NodeProps<CardNodeType>) {
@@ -125,7 +131,7 @@ const FRAME_GRID_GAP = 24
 /** Tarjetas por petición de miniaturas (el proceso principal acepta hasta 200). */
 const THUMBNAIL_BATCH = 50
 
-const NODE_TYPES: NodeTypes = { card: ConnectableCardNode, note: NoteNode }
+const NODE_TYPES: NodeTypes = { card: ConnectableCardNode, note: NoteNode, terminal: TerminalNode }
 const EDGE_TYPES: EdgeTypes = { connection: ConnectionEdge }
 const VIEWPORT_SAVE_DELAY_MS = 400
 /** Retardo del guardado del texto de una nota mientras se escribe. */
@@ -166,9 +172,29 @@ function noteNode(note: Note): NoteNodeType {
   }
 }
 
+function terminalNode(sessionId: SessionId, position: Point, detached: DetachedTerminal): TerminalNodeType {
+  return {
+    id: sessionId,
+    type: 'terminal',
+    position,
+    width: detached.size.width,
+    height: detached.size.height,
+    data: { sessionId },
+    selectable: false,
+    connectable: false,
+    deletable: false,
+    focusable: false,
+    dragHandle: '.terminal-card-header',
+    // Flota sobre tarjetas y notas.
+    zIndex: 2000,
+  }
+}
+
 function initialNodes(mesa: Mesa): MesaNode[] {
   return [...mesa.cards.map(cardNode), ...mesa.notes.map(noteNode)]
 }
+
+const isMesaItem = (node: MesaNode): node is CardNodeType | NoteNodeType => node.type !== 'terminal'
 
 /** Mantiene la geometría local (el usuario puede estar arrastrando) y toma el resto del disco. */
 function mergeNodes(previous: readonly MesaNode[], cards: readonly Card[], notes: readonly Note[]): MesaNode[] {
@@ -187,7 +213,7 @@ function mergeNodes(previous: readonly MesaNode[], cards: readonly Card[], notes
     }
     return existing.data.note === note ? existing : { ...existing, data: { note } }
   })
-  return [...mergedCards, ...mergedNotes]
+  return [...mergedCards, ...mergedNotes, ...previous.filter(node => node.type === 'terminal')]
 }
 
 function connectionEdge(edge: Edge, selected = false): ConnectionEdgeType {
@@ -253,6 +279,7 @@ function CanvasInner({
   onRemoveEdge,
   onSaveViewport,
   onEnter,
+  onAttachTerminal,
   notify,
   registerFlush,
 }: MesaCanvasProps) {
@@ -289,6 +316,42 @@ function CanvasInner({
   useEffect(() => {
     setNodes(previous => mergeNodes(previous, mesa.cards, mesa.notes))
   }, [mesa.cards, mesa.notes])
+
+  // Sesiones desacopladas de esta mesa: tarjetas de terminal. Las nuevas se
+  // colocan cerca del centro visible; las que ya están conservan su geometría local.
+  const sessions = useMesaSessions(mesa.id)
+  const detached = useDetached()
+  const terminalCards = useMemo(
+    () => sessions.flatMap(session => {
+      const entry = detached.get(session.id)
+      return entry ? [{ sessionId: session.id, entry }] : []
+    }),
+    [sessions, detached],
+  )
+  useEffect(() => {
+    const rect = containerRef.current?.getBoundingClientRect()
+    let offset = 0
+    for (const { sessionId, entry } of terminalCards) {
+      if (entry.position === null && rect) {
+        const center = flow.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })
+        moveDetached(sessionId, {
+          position: roundPoint({
+            x: center.x - entry.size.width / 2 + offset * PASTE_OFFSET,
+            y: center.y - entry.size.height / 2 + offset * PASTE_OFFSET,
+          }),
+        })
+        offset += 1
+      }
+    }
+    setNodes(previous => {
+      const existing = new Map(previous.filter(node => node.type === 'terminal').map(node => [node.id, node]))
+      const terminals = terminalCards.flatMap(({ sessionId, entry }) =>
+        entry.position === null ? [] : [existing.get(sessionId) ?? terminalNode(sessionId, entry.position, entry)],
+      )
+      const unchanged = terminals.length === existing.size && terminals.every(node => existing.get(node.id) === node)
+      return unchanged ? previous : [...previous.filter(isMesaItem), ...terminals]
+    })
+  }, [terminalCards, flow])
 
   // Las conexiones vienen del disco; solo la selección es local.
   useEffect(() => {
@@ -398,7 +461,9 @@ function CanvasInner({
   const onNodesChange = useCallback(
     (changes: NodeChange<MesaNode>[]) => {
       const moving = changes.filter(isDragPosition)
-      if (moving.length === 0 || magnetOff.current) {
+      // Las tarjetas de terminal se mueven libres: sin imán ni rejilla.
+      const movingTerminal = moving.some(change => flow.getNode(change.id)?.type === 'terminal')
+      if (moving.length === 0 || magnetOff.current || movingTerminal) {
         if (moving.length > 0) {
           setGuides(NO_GUIDES)
         }
@@ -411,7 +476,7 @@ function CanvasInner({
       if (moving.length === 1 && first) {
         const node = current.find(candidate => candidate.id === first.id)
         if (node) {
-          const others = current.filter(candidate => candidate.id !== first.id).map(rectOf)
+          const others = current.filter(candidate => candidate.id !== first.id && isMesaItem(candidate)).map(rectOf)
           const snap = magnetSnap({ ...rectOf(node), ...first.position }, others, MAGNET_SCREEN_PX / flow.getZoom())
           setGuides(snap.guides)
           adjusted = changes.map(change => (change === first ? { ...first, position: snap.position } : change))
@@ -459,7 +524,12 @@ function CanvasInner({
   const onNodeDragStop = useCallback<OnNodeDrag<MesaNode>>(
     (_event, _node, dragged) => {
       setGuides(NO_GUIDES)
-      savePositions(dragged.map(node => [node.id, node.position] as const))
+      for (const node of dragged) {
+        if (node.type === 'terminal') {
+          moveDetached(node.id, { position: roundPoint(node.position) })
+        }
+      }
+      savePositions(dragged.filter(isMesaItem).map(node => [node.id, node.position] as const))
     },
     [savePositions],
   )
@@ -564,7 +634,7 @@ function CanvasInner({
   }
 
   const onPaste = (event: ClipboardEvent<HTMLDivElement>): void => {
-    if (isEditable(event.target) || addField || enteredCardId) {
+    if (isEditable(event.target) || isInTerminal(event.target) || addField || enteredCardId) {
       return
     }
     const text = event.clipboardData.getData('text/plain')
@@ -609,7 +679,7 @@ function CanvasInner({
     (clientX: number, clientY: number, fromId: string): string | null => {
       const point = flow.screenToFlowPosition({ x: clientX, y: clientY })
       let best: { id: string; area: number } | null = null
-      for (const node of flow.getNodes()) {
+      for (const node of flow.getNodes().filter(isMesaItem)) {
         const width = node.measured?.width ?? node.width ?? 0
         const height = node.measured?.height ?? node.height ?? 0
         const { x, y } = node.position
@@ -699,6 +769,10 @@ function CanvasInner({
   )
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    // Lo que se teclea en un terminal es del terminal: ningún atajo del lienzo.
+    if (isInTerminal(event.target)) {
+      return
+    }
     if (event.key === 'Escape' && (addField || itemMenu || paneMenu)) {
       event.preventDefault()
       closeOverlays()
@@ -711,7 +785,7 @@ function CanvasInner({
     // ⌘A / Ctrl+A selecciona todos los elementos.
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a') {
       event.preventDefault()
-      setNodes(previous => previous.map(node => (node.selected ? node : { ...node, selected: true })))
+      setNodes(previous => previous.map(node => (node.selected || !isMesaItem(node) ? node : { ...node, selected: true })))
       return
     }
     // ⌫ borra las conexiones seleccionadas (sin elementos seleccionados: borrar
@@ -731,7 +805,7 @@ function CanvasInner({
       if (id && notesById.has(id)) {
         event.preventDefault()
         setEditingNoteId(id)
-      } else if (id) {
+      } else if (id && cardsById.has(id)) {
         event.preventDefault()
         onEnter(id)
       }
@@ -776,8 +850,9 @@ function CanvasInner({
       resizeEnd,
       changeNoteText,
       stopEditingNote,
+      attachTerminal: onAttachTerminal,
     }),
-    [mesa.id, states, menuCard?.id, editingNoteId, onEnter, resizeEnd, changeNoteText, stopEditingNote],
+    [mesa.id, states, menuCard?.id, editingNoteId, onEnter, resizeEnd, changeNoteText, stopEditingNote, onAttachTerminal],
   )
 
   /** Pide a Figma las miniaturas de esas tarjetas de frame y avisa a las tarjetas. */
@@ -919,7 +994,7 @@ function CanvasInner({
         ? 'También se borrará su conexión.'
         : `También se borrarán sus ${removedEdgeCount} conexiones.`
   const removeLoaded = confirmRemove?.kind === 'card' ? cardStatus(states.get(confirmRemove.card.id)).loaded : false
-  const isEmpty = mesa.cards.length === 0 && mesa.notes.length === 0
+  const isEmpty = mesa.cards.length === 0 && mesa.notes.length === 0 && terminalCards.length === 0
 
   return (
     <CanvasContext.Provider value={context}>
@@ -953,11 +1028,15 @@ function CanvasInner({
           onNodeDoubleClick={(_event, node) => {
             if (node.type === 'note') {
               setEditingNoteId(node.id)
-            } else {
+            } else if (node.type === 'card') {
               onEnter(node.id)
             }
           }}
           onNodeContextMenu={(event, node) => {
+            // Un terminal deja su menú contextual al sistema (copiar, pegar).
+            if (node.type === 'terminal') {
+              return
+            }
             event.preventDefault()
             setAddField(null)
             setPaneMenu(null)

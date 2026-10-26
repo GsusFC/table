@@ -22,6 +22,8 @@ export interface CanvasContextValue {
   changeNoteText(noteId: NoteId, text: string): void
   /** Termina la edición y guarda ya el texto pendiente. */
   stopEditingNote(noteId: NoteId): void
+  /** Devuelve una sesión desacoplada al panel de agentes. */
+  attachTerminal(sessionId: string): void
 }
 
 export const CanvasContext = createContext<CanvasContextValue | null>(null)

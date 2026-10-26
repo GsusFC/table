@@ -53,3 +53,6 @@ export const MAX_TERMINAL_COLS = 500
 export const MAX_TERMINAL_ROWS = 200
 /** Tamaño máximo de una escritura del renderer (pegar texto largo se trocea). */
 export const MAX_TERMINAL_INPUT = 64 * 1024
+/** Perfil propio: nombre visible y comando de una sola línea. */
+export const MAX_PROFILE_NAME_LENGTH = 60
+export const MAX_PROFILE_COMMAND_LENGTH = 500

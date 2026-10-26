@@ -8,6 +8,14 @@ import {
   type Viewport,
 } from './model'
 import type { PanelBounds } from './surface'
+import {
+  MAX_PROFILE_COMMAND_LENGTH,
+  MAX_PROFILE_NAME_LENGTH,
+  MAX_TERMINAL_COLS,
+  MAX_TERMINAL_INPUT,
+  MAX_TERMINAL_ROWS,
+  type TerminalSize,
+} from './terminal'
 
 /**
  * Validación de todo lo que cruza el IPC. El proceso principal no confía en
@@ -151,4 +159,63 @@ export function parsePanelBounds(value: unknown): PanelBounds {
   const record = asRecord(value, 'Panel')
   const read = (key: keyof PanelBounds): number => Math.round(readNumber(record, key, 0, MAX_PANEL_DIMENSION))
   return { x: read('x'), y: read('y'), width: read('width'), height: read('height') }
+}
+
+/** Columnas y filas; valores fuera de los límites se ajustan al más cercano. */
+export function parseTerminalSize(value: unknown): TerminalSize {
+  const record = asRecord(value, 'Tamaño de terminal')
+  const read = (key: keyof TerminalSize, max: number): number => {
+    const n = record[key]
+    if (typeof n !== 'number' || !Number.isFinite(n)) {
+      throw new Error(`Valor no válido: ${key}`)
+    }
+    return Math.min(max, Math.max(1, Math.floor(n)))
+  }
+  return { cols: read('cols', MAX_TERMINAL_COLS), rows: read('rows', MAX_TERMINAL_ROWS) }
+}
+
+/** Teclas o texto pegado hacia una sesión. */
+export function parseTerminalInput(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_TERMINAL_INPUT) {
+    throw new Error('Entrada de terminal no válida')
+  }
+  return value
+}
+
+const BUILTIN_PROFILE_ID = /^[a-z][a-z0-9-]{0,31}$/
+const CUSTOM_PROFILE_ID = /^custom:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/
+
+/** ID de un perfil del catálogo (`claude`) o propio (`custom:<uuid>`); no comprueba que exista. */
+export function parseProfileId(value: unknown): string {
+  if (typeof value !== 'string' || !(BUILTIN_PROFILE_ID.test(value) || CUSTOM_PROFILE_ID.test(value))) {
+    throw new Error('Perfil no válido')
+  }
+  return value
+}
+
+export function isCustomProfileId(value: string): boolean {
+  return CUSTOM_PROFILE_ID.test(value)
+}
+
+/** Nombre (1–60) y comando de una línea (1–500) de un perfil propio. */
+export function parseCustomProfileInput(value: unknown): { name: string; command: string } {
+  const record = asRecord(value, 'Perfil')
+  const { name, command } = record
+  if (typeof name !== 'string' || typeof command !== 'string') {
+    throw new Error('Perfil no válido')
+  }
+  const cleanName = name.trim().replace(/\s+/g, ' ')
+  if (cleanName.length === 0 || cleanName.length > MAX_PROFILE_NAME_LENGTH || CONTROL_CHARACTER.test(cleanName)) {
+    throw new Error(`El nombre del perfil admite de 1 a ${MAX_PROFILE_NAME_LENGTH} caracteres`)
+  }
+  const cleanCommand = command.trim()
+  if (cleanCommand.length === 0 || cleanCommand.length > MAX_PROFILE_COMMAND_LENGTH) {
+    throw new Error(`El comando admite de 1 a ${MAX_PROFILE_COMMAND_LENGTH} caracteres`)
+  }
+  // Una sola línea y sin caracteres de control: se ejecuta tal cual con `$SHELL -l -c`.
+  if (CONTROL_CHARACTER.test(cleanCommand)) {
+    throw new Error('El comando debe ocupar una sola línea, sin caracteres de control')
+  }
+  return { name: cleanName, command: cleanCommand }
 }

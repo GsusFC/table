@@ -84,6 +84,27 @@
   --traffic-lights-inset: 80px;
   --control-height: 28px;
 
+  /* Terminal (T-007): claro, con colores ANSI legibles sobre blanco */
+  --terminal-background: #ffffff;
+  --terminal-foreground: #1f1f1d;
+  --terminal-selection: #cddcf7;
+  --terminal-black: #1f1f1d;
+  --terminal-red: #b3302b;
+  --terminal-green: #2f6f35;
+  --terminal-yellow: #8a6100;
+  --terminal-blue: #2f6fdf;
+  --terminal-magenta: #8e3fa8;
+  --terminal-cyan: #1d7a85;
+  --terminal-white: #8a8a84;
+  --terminal-bright-black: #6f6f6a;
+  --terminal-bright-red: #d0473f;
+  --terminal-bright-green: #3f8a45;
+  --terminal-bright-yellow: #a77a00;
+  --terminal-bright-blue: #4a86ea;
+  --terminal-bright-magenta: #a457bf;
+  --terminal-bright-cyan: #2a8f9b;
+  --terminal-bright-white: #b4b4ae;
+
   /* Escala fija de capas (los diálogos usan la capa superior nativa) */
   --z-canvas-overlay: 10;
   --z-menu: 20;

@@ -1,6 +1,6 @@
 # Tarea 007 · Terminal universal: sesiones de arnés
 
-Estado: en curso desde el 2026-10-27. Fase: 2. Primera tarea de la fase ([D-018](../decisions.md)).
+Estado: en curso desde el 2026-10-27; implementada, falta la prueba del usuario con los arneses reales. Fase: 2. Primera tarea de la fase ([D-018](../decisions.md)).
 
 Aplica [terminal universal y arneses](../harnesses.md) y la propuesta P-004 (xterm.js + node-pty).
 
@@ -42,3 +42,14 @@ Desde una mesa se abre una sesión con el arnés que elija la persona (Claude Co
 - [ ] Cerrar una sesión en marcha pide confirmación; cerrar Table termina todos los procesos de las sesiones, sin huérfanos.
 - [ ] La salida en memoria está acotada (historial limitado) y se mide el consumo con dos sesiones abiertas.
 - [ ] Tests y smoke de punta a punta con una terminal normal (los arneses reales se prueban a mano).
+
+
+## Comprobaciones (2026-10-27)
+
+- Tests (166 en total): nombres de carpeta de trabajo, catálogo de perfiles, perfiles propios en Ajustes y gestor de sesiones con procesos reales (códigos de salida, historial acotado a 256 KiB, cerrar mata también los hijos, cerrar las sesiones de una mesa).
+- Smoke 66/66: sesión de terminal por la API y por la interfaz (escribir con eventos reales y ver la salida), redimensionar, historial, cerrar sin dejar procesos (también un `sleep` en segundo plano), perfil propio, código de salida, carpeta de trabajo, sesiones de una mesa borrada, desacoplar a tarjeta y volver al panel con la misma sesión y su salida, el panel no se solapa con la web, confirmación al cerrar una pestaña en marcha y al salir de Table con sesiones abiertas.
+- Detección: los seis arneses del catálogo están instalados en el equipo de referencia y se detectan con el `PATH` del shell de inicio de sesión. Las sesiones arrancan con `$SHELL -l -c`: un comando que solo está en el `PATH` de `.zshrc` no se detecta ni arranca desde un perfil (sí desde la terminal normal).
+- Las sesiones no heredan las variables que `npm run` añade al arrancar Table en desarrollo (avisaban a nvm).
+- Revisión separada de Codex: 5 hallazgos (2 altos, 3 medios), corregidos. Altos: dos mesas podían acabar en la misma carpeta de trabajo (ahora la asignación se guarda por mesa y nunca reutiliza una carpeta existente), y el cierre podía enviar señales a un PID reutilizado tras salir el proceso (ahora se identifica por PID y hora de inicio y no se señaliza tras la salida). Medios: un arranque en curso sobrevivía al cierre de su mesa; la salida rápida no tenía control de flujo (ahora se pausa el proceso por encima de 1 MiB sin pintar); el zoom del lienzo desplazaba los clics en la tarjeta de terminal (ahora la terminal se pinta sin escala).
+- Tests 173; smoke 65/66 con la pantalla bloqueada (la comprobación que falla es la captura de una web de T-002, que necesita la pantalla desbloqueada; todas las de la terminal pasan).
+- Sin comprobar: los arneses reales con su autenticación, arrastrar el borde del panel con el ratón, la pausa por salida masiva en uso real y la medición de memoria con dos sesiones.

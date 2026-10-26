@@ -102,6 +102,7 @@ const api: TableApi = {
     close: sessionId => ipcRenderer.invoke(IPC.terminalClose, sessionId),
     write: (sessionId, data) => ipcRenderer.send(IPC.terminalWrite, sessionId, data),
     resize: (sessionId, size) => ipcRenderer.send(IPC.terminalResize, sessionId, size),
+    ack: (sessionId, chars) => ipcRenderer.send(IPC.terminalAck, sessionId, chars),
     onData: listener => {
       const handler = (_event: IpcRendererEvent, sessionId: SessionId, data: string): void => listener(sessionId, data)
       ipcRenderer.on(IPC.terminalData, handler)
