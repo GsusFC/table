@@ -1,0 +1,28 @@
+# Dependencias y resultados de compilación, si se adopta ese stack
+node_modules/
+dist/
+dist-electron/
+out/
+release/
+target/
+coverage/
+
+# Credenciales y configuración local
+.env
+.env.*
+!.env.example
+.claude/settings.local.json
+
+# Datos privados del producto y de las pruebas
+.table/
+.local/
+private/
+artifacts-private/
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.log
+
+# Sistema
+.DS_Store
