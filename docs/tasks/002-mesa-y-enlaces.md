@@ -1,6 +1,6 @@
 # Tarea 002 · Mesa libre y enlaces con «Añadir URL»
 
-Estado: propuesta, no empezada. Fase: 1. Fecha: 26 de octubre de 2026.
+Estado: implementada y revisada (Codex, dos rondas); pendiente de prueba manual, login de Notion y memoria. Resultados en [002-mesa-y-enlaces-results.md](../research/002-mesa-y-enlaces-results.md). Fase: 1. Fecha: 26 de octubre de 2026.
 
 Primera tarea de producto. Construye la base de la aplicación sobre [D-010](../decisions.md) y aplica D-012, D-013 y D-015.
 
