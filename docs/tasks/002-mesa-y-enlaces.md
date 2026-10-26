@@ -30,21 +30,21 @@ Una persona del equipo crea una mesa con un nombre, añade enlaces con clic dere
 Estas elecciones se toman al implementar, se registran en el informe y no fijan el producto:
 
 - Formato de guardado local: un archivo JSON por mesa o SQLite (P-005). Criterio: lo más simple que permita migrar el esquema.
-- Cómo se ve una web dentro del lienzo: dentro de la tarjeta, siguiendo pan y zoom, o en una superficie ampliada al entrar ([arquitectura](../architecture.md#navegador-integrado)). Hay que probar ambas con Figma antes de elegir.
+- Interfaz según [diseño](../design.md) ([D-016](../decisions.md)): carril lateral, barra superior y lienzo en panel.
 
 ## Riesgo principal
 
-`WebContentsView` es una vista nativa sobre el lienzo. Al mover o hacer zoom, la geometría de cada web activa debe seguir a su tarjeta, y las demás tarjetas, menús y diálogos del lienzo no pueden quedar tapados por ella. T-001 solo probó una tarjeta fija. Es lo primero que se prueba.
+Con la opción B (D-016) la web no sigue el pan y zoom del lienzo: al entrar ocupa el panel principal y al salir se oculta. El riesgo pasa a ser la coordinación entre la vista nativa y la interfaz local: que la barra superior siga usable con la web abierta, que ningún menú o diálogo del lienzo quede debajo de la web y que el foco vuelva bien al lienzo.
 
 ## Criterios de aceptación
 
-- [ ] Crear, abrir, renombrar y borrar mesas; borrar pide confirmación.
-- [ ] Clic derecho en el lienzo → «Añadir URL» crea la tarjeta en la posición del clic.
+- [ ] Inicio con la lista de mesas y «Nueva mesa»; abrir, renombrar y borrar mesas; borrar pide confirmación.
+- [ ] Clic derecho en el lienzo → «Añadir URL» crea la tarjeta en la posición del clic; también con `+` en la barra superior y pegando una URL sobre el lienzo.
 - [ ] URLs de Figma, Notion, Pinterest y otra web se reconocen y se muestran como tal. Las URL no `http(s)` se rechazan.
 - [ ] Añadir un servicio nuevo al catálogo no requiere cambiar el modelo de tarjetas ni el lienzo (comprobado añadiendo uno de prueba).
-- [ ] Entrar en una tarjeta, editar en Figma y volver al lienzo, como en T-001.
+- [ ] Entrar en una tarjeta abre la web en el panel principal; editar en Figma y volver al lienzo con el botón o `⌘⇧Esc`, como en T-001.
 - [ ] Notion abierto como tarjeta web: login y edición probados, o bloqueo registrado.
-- [ ] Pan y zoom del lienzo con una web activa: la web sigue a su tarjeta o se oculta de forma coherente, sin tapar menús ni diálogos.
+- [ ] Con una web abierta, la barra superior sigue usable y ningún menú ni diálogo queda debajo de la web.
 - [ ] Cerrar y reabrir Table conserva mesas, tarjetas, posiciones y capturas; las webs abren descargadas.
 - [ ] Descargar y cerrar respetan `beforeunload` como en T-001.
 - [ ] Memoria registrada con 1, 3 y 6 tarjetas (una activa y el resto descargadas), como dato para fijar los umbrales del escenario B; no se declara validado B.
