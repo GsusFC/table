@@ -31,6 +31,8 @@ La app de escritorio de Codex es el punto de partida: ventana sobria, carril lat
 - **Inicio:** lista de mesas, más recientes primero, y «Nueva mesa» con nombre.
 - **Lienzo:** abierto, con desplazamiento y zoom. Las tarjetas muestran captura, icono y nombre del servicio, y título.
 - **Añadir URL:** clic derecho en el lienzo abre un campo pequeño en el punto del clic; también desde `+` en la barra superior; pegar una URL sobre el lienzo crea la tarjeta directamente.
+- **Seleccionar y ordenar:** arrastrar en vacío dibuja una selección (como en Figma); `⇧`/`⌘`+clic añade tarjetas y `⌘A` selecciona todas. El lienzo se mueve con dos dedos, la rueda o `Espacio` + arrastrar. Con dos o más tarjetas seleccionadas aparece una barra abajo: «Ordenar en cuadrícula», alinear a la izquierda y alinear arriba. Pedido por el usuario el 2026-10-26.
+- **Imán:** al arrastrar una tarjeta sola, se alinea con los bordes o centros de las demás (con una guía azul) y, si no hay ninguna cerca, con la rejilla de 24 px de los puntos del fondo. Un grupo se mueve por la rejilla conservando sus distancias. Con `⌥` pulsado se arrastra sin imán.
 - **Entrar en una web (opción B):** la web ocupa el panel principal, como en un navegador, para usar una app, navegar o diseñar a tamaño normal. La barra superior muestra el servicio y «Volver al lienzo» (`⌘⇧Esc`); `Esc` llega a la web.
 - **Tarjeta descargada:** captura fija con su fecha. El usuario quiere verla en uso antes de cerrar su aspecto.
 

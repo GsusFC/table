@@ -872,6 +872,48 @@ kbd {
   border-color: transparent;
 }
 
+/* Guías del imán: líneas finas en coordenadas del lienzo. */
+.canvas-guide {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: var(--color-accent);
+  pointer-events: none;
+}
+
+.canvas-guide-vertical {
+  top: -100000px;
+  height: 200000px;
+}
+
+.canvas-guide-horizontal {
+  left: -100000px;
+  width: 200000px;
+}
+
+/* Barra para ordenar la selección, centrada abajo para no tapar las cabeceras. */
+.selection-bar {
+  position: absolute;
+  bottom: var(--space-4);
+  left: 50%;
+  z-index: var(--z-canvas-overlay);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+  transform: translateX(-50%);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-overlay);
+}
+
+.selection-bar-count {
+  margin-right: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
 .canvas-empty {
   position: absolute;
   inset: 0;

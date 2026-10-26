@@ -5,14 +5,18 @@ import {
   Controls,
   ReactFlow,
   ReactFlowProvider,
+  SelectionMode,
   useReactFlow,
+  useStore,
+  ViewportPortal,
   type NodeChange,
+  type NodePositionChange,
   type NodeTypes,
   type OnNodeDrag,
   type ResizeParams,
   type Viewport,
 } from '@xyflow/react'
-import { Copy, Download, LogIn, Plus, Trash2 } from 'lucide-react'
+import { AlignStartHorizontal, AlignStartVertical, Copy, Download, LayoutGrid, LogIn, Plus, Trash2 } from 'lucide-react'
 import {
   useCallback,
   useEffect,
@@ -28,6 +32,7 @@ import { copyText } from '../lib/clipboard'
 import { errorMessage } from '../lib/errors'
 import { displayHost } from '../lib/format'
 import { cardStatus } from '../lib/status'
+import { alignEdge, arrangeInGrid, magnetSnap, NO_GUIDES, snapToGrid, type Guides, type Rect } from '../lib/layout'
 import { readPastedUrls } from '../lib/url'
 import { AddUrlField } from './AddUrlField'
 import { CanvasContext, type CanvasContextValue } from './canvasContext'
@@ -93,6 +98,23 @@ function mergeNodes(previous: readonly CardNodeType[], cards: readonly Card[]): 
 
 const roundPoint = (point: Point): Point => ({ x: Math.round(point.x), y: Math.round(point.y) })
 
+/** Distancia en píxeles de pantalla a la que el imán atrae una tarjeta. */
+const MAGNET_SCREEN_PX = 8
+
+function rectOf(node: CardNodeType): Rect {
+  return {
+    id: node.id,
+    x: node.position.x,
+    y: node.position.y,
+    width: node.measured?.width ?? node.width ?? DEFAULT_CARD_SIZE.width,
+    height: node.measured?.height ?? node.height ?? DEFAULT_CARD_SIZE.height,
+  }
+}
+
+function isDragPosition(change: NodeChange<CardNodeType>): change is NodePositionChange & { position: Point } {
+  return change.type === 'position' && change.dragging === true && change.position !== undefined
+}
+
 function isEditable(target: EventTarget | null): boolean {
   return (
     target instanceof HTMLElement &&
@@ -133,6 +155,21 @@ function CanvasInner({
   const [addField, setAddField] = useState<AddFieldState | null>(null)
   const [cardMenu, setCardMenu] = useState<CardMenuState | null>(null)
   const [confirmRemove, setConfirmRemove] = useState<Card | null>(null)
+  const [guides, setGuides] = useState<Guides>(NO_GUIDES)
+  const zoom = useStore(state => state.transform[2])
+  /** Con Opción (Alt) pulsada se arrastra sin imán ni rejilla. */
+  const magnetOff = useRef(false)
+  useEffect(() => {
+    const track = (event: globalThis.KeyboardEvent): void => {
+      magnetOff.current = event.altKey
+    }
+    window.addEventListener('keydown', track)
+    window.addEventListener('keyup', track)
+    return () => {
+      window.removeEventListener('keydown', track)
+      window.removeEventListener('keyup', track)
+    }
+  }, [])
 
   useEffect(() => {
     setNodes(previous => mergeNodes(previous, mesa.cards))
@@ -186,23 +223,91 @@ function CanvasInner({
     [flushViewport],
   )
 
-  const onNodesChange = useCallback((changes: NodeChange<CardNodeType>[]) => {
-    setNodes(previous => applyNodeChanges(changes, previous))
-  }, [])
+  /**
+   * Imán al arrastrar: una tarjeta sola se alinea con bordes o centros de las
+   * demás y, si no hay ninguna cerca, con la rejilla; un grupo se mueve a la
+   * rejilla conservando las distancias entre sus tarjetas.
+   */
+  const onNodesChange = useCallback(
+    (changes: NodeChange<CardNodeType>[]) => {
+      const moving = changes.filter(isDragPosition)
+      if (moving.length === 0 || magnetOff.current) {
+        if (moving.length > 0) {
+          setGuides(NO_GUIDES)
+        }
+        setNodes(previous => applyNodeChanges(changes, previous))
+        return
+      }
+      const current = flow.getNodes()
+      let adjusted = changes
+      const [first] = moving
+      if (moving.length === 1 && first) {
+        const node = current.find(candidate => candidate.id === first.id)
+        if (node) {
+          const others = current.filter(candidate => candidate.id !== first.id).map(rectOf)
+          const snap = magnetSnap({ ...rectOf(node), ...first.position }, others, MAGNET_SCREEN_PX / flow.getZoom())
+          setGuides(snap.guides)
+          adjusted = changes.map(change => (change === first ? { ...first, position: snap.position } : change))
+        }
+      } else if (first) {
+        const dx = snapToGrid(first.position.x) - first.position.x
+        const dy = snapToGrid(first.position.y) - first.position.y
+        setGuides(NO_GUIDES)
+        adjusted = changes.map(change =>
+          isDragPosition(change) ? { ...change, position: { x: change.position.x + dx, y: change.position.y + dy } } : change,
+        )
+      }
+      setNodes(previous => applyNodeChanges(adjusted, previous))
+    },
+    [flow],
+  )
 
   const cardsById = useMemo(() => new Map(mesa.cards.map(card => [card.id, card])), [mesa.cards])
 
-  const onNodeDragStop = useCallback<OnNodeDrag<CardNodeType>>(
-    (_event, _node, dragged) => {
-      for (const node of dragged) {
-        const position = roundPoint(node.position)
-        const saved = cardsById.get(node.id)?.position
+  /** Guarda las posiciones que cambiaron respecto a lo guardado. */
+  const savePositions = useCallback(
+    (positions: Iterable<readonly [CardId, Point]>) => {
+      for (const [cardId, raw] of positions) {
+        const position = roundPoint(raw)
+        const saved = cardsById.get(cardId)?.position
         if (!saved || saved.x !== position.x || saved.y !== position.y) {
-          onUpdateCard(node.id, { position })
+          onUpdateCard(cardId, { position })
         }
       }
     },
     [cardsById, onUpdateCard],
+  )
+
+  const onNodeDragStop = useCallback<OnNodeDrag<CardNodeType>>(
+    (_event, _node, dragged) => {
+      setGuides(NO_GUIDES)
+      savePositions(dragged.map(node => [node.id, node.position] as const))
+    },
+    [savePositions],
+  )
+
+  const selectedCount = nodes.filter(node => node.selected).length
+
+  /** Ordena o alinea las tarjetas seleccionadas y guarda sus posiciones. */
+  const arrangeSelection = useCallback(
+    (kind: 'grid' | 'left' | 'top') => {
+      const rects = flow
+        .getNodes()
+        .filter(node => node.selected)
+        .map(rectOf)
+      if (rects.length < 2) {
+        return
+      }
+      const positions = kind === 'grid' ? arrangeInGrid(rects) : alignEdge(rects, kind)
+      setNodes(previous =>
+        previous.map(node => {
+          const position = positions.get(node.id)
+          return position ? { ...node, position } : node
+        }),
+      )
+      savePositions(positions)
+    },
+    [flow, savePositions],
   )
 
   const openAddFieldAt = useCallback(
@@ -294,6 +399,12 @@ function CanvasInner({
       return
     }
     const target = event.target
+    // ⌘A / Ctrl+A selecciona todas las tarjetas.
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a' && !isEditable(target)) {
+      event.preventDefault()
+      setNodes(previous => previous.map(node => (node.selected ? node : { ...node, selected: true })))
+      return
+    }
     if (event.key === 'Enter' && target instanceof HTMLElement && target.classList.contains('react-flow__node')) {
       const cardId = target.dataset['id']
       if (cardId) {
@@ -422,10 +533,60 @@ function CanvasInner({
           deleteKeyCode={null}
           disableKeyboardA11y
           ariaLabelConfig={ARIA_LABELS}
+          // Arrastrar en vacío selecciona (como en Figma); el lienzo se mueve con
+          // dos dedos, con la rueda o con Espacio + arrastrar.
+          selectionOnDrag
+          panOnDrag={[1]}
+          selectionMode={SelectionMode.Partial}
+          multiSelectionKeyCode={['Meta', 'Control', 'Shift']}
         >
           <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="var(--color-canvas-dot)" />
           <Controls showInteractive={false} position="bottom-left" />
+          <ViewportPortal>
+            {guides.vertical !== null && (
+              <div
+                className="canvas-guide canvas-guide-vertical"
+                style={{ transform: `translateX(${guides.vertical}px)`, width: 1 / zoom }}
+                aria-hidden
+              />
+            )}
+            {guides.horizontal !== null && (
+              <div
+                className="canvas-guide canvas-guide-horizontal"
+                style={{ transform: `translateY(${guides.horizontal}px)`, height: 1 / zoom }}
+                aria-hidden
+              />
+            )}
+          </ViewportPortal>
         </ReactFlow>
+
+        {selectedCount >= 2 && !enteredCardId && (
+          <div className="selection-bar" role="toolbar" aria-label="Ordenar tarjetas seleccionadas">
+            <span className="selection-bar-count tabular">{selectedCount} tarjetas</span>
+            <button type="button" className="button button-small" onClick={() => arrangeSelection('grid')}>
+              <LayoutGrid aria-hidden size={14} strokeWidth={1.75} />
+              Ordenar en cuadrícula
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Alinear a la izquierda"
+              title="Alinear a la izquierda"
+              onClick={() => arrangeSelection('left')}
+            >
+              <AlignStartVertical aria-hidden size={15} strokeWidth={1.75} />
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Alinear arriba"
+              title="Alinear arriba"
+              onClick={() => arrangeSelection('top')}
+            >
+              <AlignStartHorizontal aria-hidden size={15} strokeWidth={1.75} />
+            </button>
+          </div>
+        )}
 
         {mesa.cards.length === 0 && !addField && (
           <div className="canvas-empty">

@@ -202,6 +202,34 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager): 
     record('persistencia: la mesa conserva sus 4 tarjetas', true)
     record('memoria: al abrir la mesa no se carga ninguna web', surface.getStates().every(state => state.status === 'unloaded'))
 
+    // Seleccionar todo (⌘A) y «Ordenar en cuadrícula».
+    await inUi(`(() => {
+      const canvas = document.querySelector('.canvas')
+      canvas.focus()
+      canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', metaKey: true, ctrlKey: true, bubbles: true }))
+    })()`)
+    await waitFor(() => inUi<boolean>(`!!document.querySelector('.selection-bar')`), Boolean, 'barra de selección')
+    await shot('07-seleccion')
+    await inUi(`[...document.querySelectorAll('.selection-bar button')].find(b => b.textContent.includes('Ordenar en cuadrícula')).click()`)
+    const arranged = await waitFor(
+      () => inUi<Mesa>(`window.table.mesas.get(${JSON.stringify(mesa.id)})`),
+      current => current.cards.every(card => card.position.x % 24 === 0 && card.position.y % 24 === 0),
+      'posiciones ordenadas guardadas',
+    ).catch(() => null)
+    const overlaps = (cards: readonly Card[]): boolean =>
+      cards.some((a, i) =>
+        cards.some(
+          (b, j) =>
+            i < j &&
+            a.position.x < b.position.x + b.size.width &&
+            b.position.x < a.position.x + a.size.width &&
+            a.position.y < b.position.y + b.size.height &&
+            b.position.y < a.position.y + a.size.height,
+        ),
+      )
+    record('ordenar: la selección queda en cuadrícula, sin solapes y guardada', arranged !== null && !overlaps(arranged.cards))
+    await shot('08-ordenadas')
+
     // beforeunload en la web de una tarjeta.
     const guardedUrl = `${fixtureUrl}guarded`
     const guardedCard = await inUi<Card>(`window.table.cards.add(${JSON.stringify(mesa.id)}, ${JSON.stringify(guardedUrl)}, { x: 0, y: 700 })`)
