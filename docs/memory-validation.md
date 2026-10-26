@@ -79,7 +79,7 @@ Los valores del escenario A los propuso el asistente y los aceptó el usuario el
 
 | Criterio | Valor fijado | Unidad / método | Estado |
 | --- | --- | --- | --- |
-| RAM del equipo mínimo | 16 | GiB; Apple M2 Pro, macOS 27.2. Equipo de referencia provisional: es el del usuario. | Fijado |
+| RAM del equipo mínimo | 16 | GiB; Apple M2 Pro, macOS 27.2 ([D-011](decisions.md), confirmado por el usuario). | Fijado |
 | Presupuesto del shell en reposo | Sin umbral | Se registra como dato de referencia | Fijado |
 | Presupuesto del escenario A | Figma de escritorio con el mismo archivo + 15 % | Suma de `phys_footprint` (`footprint`) del árbol de procesos; estable y pico | Fijado |
 | Presupuesto del escenario B | — | MiB estable y pico | Pendiente |

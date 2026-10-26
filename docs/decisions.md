@@ -16,6 +16,7 @@ Fecha inicial: 2026-10-26. Este registro distingue lo acordado de las recomendac
 | D-008 | Documentación del producto en `GsusFC/table`. | Destino indicado por el usuario; repositorio vacío al comenzar. |
 | D-009 | El consumo de memoria es una preocupación prioritaria. | El usuario señala el conjunto Figma + Notion + Pinterest + terminal + dos agentes. Umbrales del escenario A aceptados el 2026-10-26 en [validación de memoria](memory-validation.md); B y C sin fijar. |
 | D-010 | Electron + React + TypeScript, con `WebContentsView` para la web integrada, como base del prototipo de Fase 1. Revisable si el escenario B de memoria no cumple sus umbrales. | Decisión expresa del usuario del 2026-10-26, tras recomendación del asistente, basada en [T-001](research/001-desktop-spike-results.md): login, sesión, edición y portapapeles reales en Figma y Pinterest; memoria 39 % por debajo de Figma de escritorio; descarga sin crecimiento residual. No decide lienzo, terminal ni almacenamiento (P-002, P-004, P-005), ni el stack definitivo del producto. Sustituye a P-001 y P-003. |
+| D-011 | Equipo de referencia para las mediciones: Apple M2 Pro, 16 GiB, macOS 27.2 (el Mac del usuario). | Confirmado por el usuario el 2026-10-26. Las mediciones de T-001 se hicieron en él con las demás aplicaciones cerradas. La carga habitual con todas las herramientas abiertas no está medida. |
 
 La exclusión de `Budget` del contexto de agentes es un requisito del documento guía, desarrollado en [contexto de Notion](notion-context.md). Su cumplimiento requiere controlar las vías reales de acceso, no solo el prompt inicial.
 
@@ -25,7 +26,7 @@ La exclusión de `Budget` del contexto de agentes es un requisito del documento 
 | --- | --- | --- |
 | P-001 | Base propia con Electron + React + TypeScript. | Aceptada como D-010 el 2026-10-26. |
 | P-002 | React Flow para el lienzo. | Validar interacción con tarjetas, foco y cantidad representativa de nodos. |
-| P-003 | WebContentsView para la web activa, si se elige Electron. | Aceptada como D-010 el 2026-10-26. Pendiente de observar: aviso real de Figma con cambios sin sincronizar. |
+| P-003 | WebContentsView para la web activa, si se elige Electron. | Aceptada como D-010 el 2026-10-26. El aviso real de Figma con cambios sin sincronizar no se ha observado; el usuario indica que en el estudio no se edita Figma sin conexión. Riesgo residual: desconexión accidental durante la edición, cubierto por el mismo mecanismo probado con una página sintética. |
 | P-004 | xterm.js + node-pty para la terminal, si se elige Electron. | Compatibilidad con arneses, señales, redimensionado y empaquetado. |
 | P-005 | SQLite para los datos propios de la mesa. | Modelo mínimo y necesidad de copias, exportación y migraciones. JSON sigue siendo alternativa inicial. |
 | P-006 | Campos de Notion configurables, resueltos por ID y tipo. | Validar esquema real y el alcance del asistente de configuración. |
@@ -52,7 +53,7 @@ La exclusión de `Budget` del contexto de agentes es un requisito del documento 
 - Identificadores de la base/data source de Notion y de las propiedades reales.
 - Enlaces ausentes en el proyecto piloto y campo correcto entre `Pinterest` y `Pinterest Link`.
 - Planes, permisos y límites disponibles de Notion/Figma en el estudio.
-- RAM, sistema operativo y carga habitual de los equipos de prueba.
+- Carga habitual del equipo de referencia con todas las herramientas abiertas (equipo fijado en D-011). Otros equipos del estudio, si los hay.
 - Usuarios iniciales, uso individual o compartido y política de copia/exportación.
 - Arneses que se probarán realmente y mecanismos de autenticación admitidos por cada uno.
 - Stack definitivo, distribución, firma, actualizaciones, licencia y nombre final.

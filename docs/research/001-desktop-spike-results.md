@@ -273,9 +273,9 @@ Límites de la comparación: una sola pasada por flujo; ventanas de estabilidad 
 
 Límites que siguen abiertos:
 
-- **`beforeunload` real de Figma no observado:** en 11 descargas y 4 cierres Figma nunca declaró cambios pendientes. El camino está probado con una página sintética; falta provocar trabajo sin sincronizar en Figma, por ejemplo sin conexión.
+- **`beforeunload` real de Figma no observado:** en 11 descargas y 4 cierres Figma nunca declaró cambios pendientes. El usuario indica que en el estudio no se edita Figma sin conexión; queda como riesgo una desconexión accidental durante la edición, cubierta por el mecanismo probado con una página sintética.
 - **Carga medida hasta `did-stop-loading`**, no hasta que el editor responde.
-- **Equipo de referencia provisional:** el Mac del usuario, con 16 GiB y apps cerradas para medir.
+- **Equipo de referencia:** el Mac del usuario ([D-011](../decisions.md)), con las demás aplicaciones cerradas para medir. La carga habitual con todo abierto no está medida.
 - **Permisos no persistentes** entre reinicios.
 - **Prueba manual del incremento A parcial:** pellizco en trackpad y escribir justo al entrar sin confirmar explícitamente.
 - **Aprobar el escenario A no valida B ni C** de [validación de memoria](../memory-validation.md): lienzo con varias tarjetas, Notion y arneses siguen sin medir.
