@@ -40,7 +40,7 @@ La exclusión de `Budget` del contexto de agentes es un requisito del documento 
 | Alternativa | Situación |
 | --- | --- |
 | Mesa como base de código | El repo público revisado solo tenía README y licencia; último commit 2026-03-30. No hay implementación pública acreditada que reutilizar. Esto no prueba abandono del producto privado. |
-| OpenCove como base | Referencia candidata, no adoptada. No se ha ejecutado ni auditado su código para Table. |
+| OpenCove como base | Revisado estáticamente y arrancado en modo desarrollo el 2026-10-26 (commit `e10604b9`). Recomendación pendiente de decisión: usarlo como referencia, no como base. Ver [evaluación](research/opencove-evaluation.md). |
 | ccanvas como base | Referencia candidata con Tauri/Rust; no adoptada ni auditada. |
 | Rust/Tauri | Evaluación conceptual. Puede aportar un motor local eficiente, pero la estrategia de navegador y la complejidad deben validarse. |
 | Electron con un componente Rust | Posibilidad futura si un perfil de rendimiento identifica una necesidad concreta. |

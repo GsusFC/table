@@ -42,7 +42,7 @@ Consultadas el 2026-10-26. Son fuentes de decisiones técnicas; no constituyen p
 | Proyecto | Evidencia revisada | Límite de la conclusión |
 | --- | --- | --- |
 | [Mesa](https://github.com/Mesa-App/mesa-app) | Solo README y licencia en el árbol público. [Último commit revisado](https://github.com/Mesa-App/mesa-app/commit/f67e40e7e2e6a9e5706ab18a122865bf87338726): 2026-03-30. | No hay implementación pública acreditada que reutilizar. No demuestra abandono de la aplicación privada. |
-| [OpenCove](https://github.com/DeadWaveWave/opencove) | README/árbol: Electron, React, terminales y licencia MIT; se declara alpha. | No se ha ejecutado ni auditado para este proyecto. |
+| [OpenCove](https://github.com/DeadWaveWave/opencove) | Commit `e10604b9`: Electron 41, React, `WebContentsView`, node-pty, MIT; alpha. Revisión estática y arranque en desarrollo. | Sin login web ni arneses probados. Ver [evaluación](opencove-evaluation.md). |
 | [ccanvas](https://github.com/DevoidSloth/ccanvas) | README/árbol: Tauri/Rust, terminales y Apache-2.0. | No se ha ejecutado ni auditado; cambia la arquitectura respecto a Electron. |
 | [Fabric MCP](https://fabric.so/features/mcp) | Documenta conexión con clientes externos como Claude Code y Codex. | No sostener la afirmación de que toda herramienta creativa tiene IA cerrada. |
 
@@ -51,7 +51,7 @@ Kosmik, Milanote, Maestri y Podium se mencionaron como referencias en el documen
 ## Estado de las comprobaciones
 
 - Revisión documental de fuentes públicas: realizada.
-- Inspección funcional de repos candidatos: no realizada.
+- Inspección funcional de repos candidatos: OpenCove revisado y arrancado ([evaluación](opencove-evaluation.md)); ccanvas no realizada.
 - Acceso y esquema real de Notion/Figma del piloto: no comprobados.
 - Autenticación de Figma/Pinterest dentro de Table: no probada.
 - Memoria del equipo o del prototipo: no medida.

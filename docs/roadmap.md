@@ -13,7 +13,7 @@ Los hitos preservan el orden acordado. Los hallazgos de una prueba pueden cambia
 - [ ] Identificar equipo de prueba, RAM, usuarios iniciales y proyecto piloto.
 - [ ] Validar campos, permisos y enlaces de Notion; resolver los dos campos de Pinterest.
 - [ ] Ejecutar [T-001: prueba de escritorio](tasks/001-desktop-spike.md).
-- [ ] Comparar una base propia con la reutilización que realmente ahorre trabajo. Mesa no ofrece implementación en el repo público revisado; OpenCove y ccanvas aún no están auditados.
+- [ ] Comparar una base propia con la reutilización que realmente ahorre trabajo. Mesa no ofrece implementación en el repo público revisado; OpenCove [evaluado](research/opencove-evaluation.md) con recomendación de usarlo como referencia, pendiente de decisión; ccanvas sin auditar.
 - [ ] Registrar la decisión técnica y el protocolo de memoria aplicable.
 
 Salida: evidencia de que la edición integrada y su ciclo de vida funcionan, decisiones documentadas y una tarea de producto delimitada. Un fallo de login o de estado pendiente puede cambiar el alcance; no se declara la fase libre de bloqueos por anticipado.

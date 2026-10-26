@@ -29,6 +29,7 @@ La primera validación será de uso interno. El consumo de memoria y la edición
 | [Fases](docs/roadmap.md) | Hitos y criterios de salida. |
 | [Primera tarea](docs/tasks/001-desktop-spike.md) | Prueba técnica acotada del contenedor de escritorio. |
 | [Fuentes](docs/research/sources.md) | Evidencia técnica consultada y límites de esa evidencia. |
+| [Evaluación de OpenCove](docs/research/opencove-evaluation.md) | Revisión y arranque de una posible base; recomendación pendiente. |
 
 ## Trabajar con Claude Code y Codex
 
