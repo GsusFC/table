@@ -2,7 +2,7 @@
 
 Una mesa de trabajo visual para reunir el contexto, el diseño, las referencias y las sesiones de agentes de cada proyecto de FLOC*.
 
-**Estado: definición y preparación.** Este repositorio contiene documentación; todavía no hay una aplicación ni comandos de instalación, desarrollo o pruebas.
+**Estado: definición y preparación.** Este repositorio contiene documentación y un ensayo técnico acotado (`spikes/desktop-001/`, tarea T-001); todavía no hay una aplicación de producto.
 
 Table es el nombre de trabajo del repositorio. El documento inicial llamaba a la propuesta «Lienzo FLOC*». La identidad y el nombre definitivo siguen abiertos.
 
@@ -29,13 +29,14 @@ La primera validación será de uso interno. El consumo de memoria y la edición
 | [Fases](docs/roadmap.md) | Hitos y criterios de salida. |
 | [Primera tarea](docs/tasks/001-desktop-spike.md) | Prueba técnica acotada del contenedor de escritorio. |
 | [Fuentes](docs/research/sources.md) | Evidencia técnica consultada y límites de esa evidencia. |
+| [Resultados de T-001](docs/research/001-desktop-spike-results.md) | Entorno, comandos y resultados del ensayo de escritorio. |
 | [Evaluación de OpenCove](docs/research/opencove-evaluation.md) | Revisión y arranque de una posible base; recomendación pendiente. |
 
 ## Trabajar con Claude Code y Codex
 
 **Claude Code y Codex colaborarán en el desarrollo de Table.** Ambos pueden construir y revisar; los roles se asignan por tarea. Comparten las instrucciones de [AGENTS.md](AGENTS.md). [CLAUDE.md](CLAUDE.md) es el punto de entrada para Claude Code y remite a esa misma base.
 
-Lee producto, decisiones y fases antes de implementar. Trabaja en una tarea comprobable cada vez y actualiza los documentos afectados con lo aprendido. La primera tarea está definida, pero **no se ha ejecutado**.
+Lee producto, decisiones y fases antes de implementar. Trabaja en una tarea comprobable cada vez y actualiza los documentos afectados con lo aprendido. La primera tarea está **en curso**: ver sus [resultados](docs/research/001-desktop-spike-results.md).
 
 Para compartir el contexto con Claude Code:
 

@@ -4,10 +4,10 @@ Lee `AGENTS.md` antes de actuar: contiene las instrucciones comunes del proyecto
 
 ## Situación actual
 
-- El repositorio contiene documentación inicial, no una aplicación.
+- El repositorio contiene documentación y el ensayo de T-001 en `spikes/desktop-001/`. No hay aplicación de producto.
 - Estamos en Fase 0: preparación y validación de supuestos.
-- La tarea propuesta para comenzar es `docs/tasks/001-desktop-spike.md`.
-- No hay un stack confirmado, dependencias instaladas, scripts de desarrollo ni pruebas ejecutadas.
+- T-001 está en curso: incremento A implementado; falta su prueba manual y los incrementos B y C. Estado en `docs/tasks/001-desktop-spike.md` y resultados en `docs/research/001-desktop-spike-results.md`.
+- El stack del producto no está confirmado. El ensayo usa Electron 44, React y TypeScript con versiones fijadas; sus comandos están en el informe de resultados.
 
 ## En cada sesión
 

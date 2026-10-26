@@ -1,14 +1,14 @@
 # Tarea 001 · Validar el navegador de escritorio
 
-Estado: propuesta, no ejecutada. Fase: 0. Fecha: 26 de octubre de 2026.
+Estado: en curso. Incremento A implementado en `spikes/desktop-001/` y comprobado con entradas sintéticas; falta la prueba manual. B y C sin empezar. Fase: 0. Fecha: 26 de octubre de 2026.
 
-Esta ficha define la primera prueba de implementación propuesta. El prototipo todavía no existe.
+Esta ficha define la primera prueba de implementación. Resultados en [001-desktop-spike-results.md](../research/001-desktop-spike-results.md).
 
 ## Resultado esperado
 
 Obtener evidencia de que una ventana de Table puede abrir y editar el Figma del proyecto piloto, conservar la sesión, volver a la vista local y cerrar contenido sin perder trabajo. Medir el coste del navegador mínimo antes de comprometer la arquitectura del producto.
 
-Electron + React + TypeScript es la opción recomendada para este ensayo, todavía propuesta. Utilizar `WebContentsView` como candidato de integración web. Registrar las versiones seleccionadas y el resultado en [Decisiones](../decisions.md). Una prueba favorable de esta pieza no valida por sí sola el lienzo completo ni su consumo con agentes.
+Electron + React + TypeScript es la opción recomendada para este ensayo, todavía propuesta. Utilizar `WebContentsView` como candidato de integración web. Registrar las versiones seleccionadas en el informe de resultados y la conclusión en [Decisiones](../decisions.md). Una prueba favorable de esta pieza no valida por sí sola el lienzo completo ni su consumo con agentes.
 
 ## Alcance
 
@@ -27,6 +27,16 @@ Quedan para tareas posteriores el lienzo infinito, la lista de proyectos, Notion
 2. Elegir un proyecto piloto accesible con la cuenta de prueba. Sus enlaces y datos se configuran localmente; no se incorporan al repositorio público.
 3. Identificar equipo, RAM y herramientas de medición. Completar los umbrales del escenario A antes de medir. Si el entorno bloquea la consulta, registrar la limitación; no inventar valores ni cambiar permisos para evitarla.
 4. Acordar una edición reversible de prueba y cómo verificar su guardado. Puede usarse un archivo de diseño específico para el ensayo.
+
+## Referencias de implementación
+
+La [evaluación de OpenCove](../research/opencove-evaluation.md) (commit `e10604b9`) identifica soluciones aplicables. Se estudian y reescriben a escala del ensayo; no se copia código sin conservar su aviso MIT.
+
+| Incremento | Qué estudiar en OpenCove | Qué corregir respecto a OpenCove |
+| --- | --- | --- |
+| A | `WebContentsView` en una vista anfitriona con geometría sincronizada desde el renderer (`src/app/main/websiteWindow/`); zoom de página de la ventana principal desactivado para no descuadrar `setBounds` (`src/app/main/index.ts`). Contenido remoto sin Node ni preload, con `sandbox` y `contextIsolation`. | Validar emisor (`senderFrame`) y argumentos de cada IPC; definir CSP en la interfaz local. |
+| B | Particiones `persist:` por perfil (`websiteWindowSessions.ts`); prompt de permisos con decisión recordada por origen. | No convertir popups en tarjetas: comprobar si el login de Figma o Google necesita `window.opener`. Particionar por proyecto si procede. |
+| C | Estados activa/templada/fría, presupuesto de vistas activas, captura con `capturePage` y descarte temporizado (`websiteWindowLifecycle.ts`, `websiteWindowPolicy.ts`). | No cerrar con `waitForBeforeUnload: false`; respetar `will-prevent-unload` y el guardado pendiente. |
 
 ## Trabajo en incrementos
 
@@ -78,7 +88,7 @@ Los puntos con un bloqueo documentado cierran el informe de la prueba, pero no a
 
 ## Entregables y decisión
 
-Al implementar esta tarea, añadir el prototipo mínimo y un informe en `docs/research/001-desktop-spike-results.md`. Ese informe todavía no existe; no hay resultados que recuperar.
+El prototipo mínimo está en `spikes/desktop-001/` y el informe en [`docs/research/001-desktop-spike-results.md`](../research/001-desktop-spike-results.md).
 
 El informe debe incluir: entorno, versiones, pasos, resultados observados, métricas, incidencias y una recomendación razonada. Clasificar la conclusión como:
 
