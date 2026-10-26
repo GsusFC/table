@@ -29,3 +29,7 @@ Con las demás apps cerradas, el modo de medición de T-002 con las URLs de la m
 - [ ] Escenario B: estable ≤ 2 048 MiB y pico ≤ 3 584 MiB con el límite de 2 webs, presión normal.
 - [ ] Pendientes de T-004 y T-005 comprobados.
 - [ ] Sesión real del usuario con su resultado registrado; la Fase 1 se declara cerrada solo si se cumple todo lo anterior.
+
+## Resultados
+
+- **Cierre forzado automatizado (2026-10-26):** un proceso escribe sin parar en una mesa (notas con texto, posiciones, conexiones, borrados) con el almacén real y se mata con `SIGKILL` en un momento al azar, 30 veces seguidas. Las 30 veces la mesa sigue legible y válida. Cada cierre dejaba un temporal sin renombrar en `mesas/`; ahora se borran al arrancar.

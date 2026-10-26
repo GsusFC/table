@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, unlinkSync } from 'node:fs'
 import { readdir, readFile, rm, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
@@ -217,9 +217,33 @@ function checkMesa(value: unknown, id: MesaId): Mesa {
   }
 }
 
+/**
+ * Un cierre forzado durante una escritura deja su temporal (`.<uuid>.tmp`) sin
+ * renombrar; el archivo de la mesa sigue intacto. Se borran al arrancar, antes
+ * de cualquier escritura, para que no se acumulen.
+ */
+function removeLeftoverTemps(dir: string): void {
+  let entries: string[]
+  try {
+    entries = readdirSync(dir)
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    if (/^\..+\.tmp$/.test(entry)) {
+      try {
+        unlinkSync(join(dir, entry))
+      } catch {
+        // Si no se puede borrar ahora, se intentará en el próximo arranque.
+      }
+    }
+  }
+}
+
 export function createMesaStore(baseDir: string): MesaStore {
   const mesasDir = join(baseDir, 'mesas')
   const capturesDir = join(baseDir, 'captures')
+  removeLeftoverTemps(mesasDir)
   /** Cola de escrituras por mesa: cada operación espera a la anterior. */
   const queues = new Map<MesaId, Promise<unknown>>()
 
