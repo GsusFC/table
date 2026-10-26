@@ -91,7 +91,7 @@ Build compilada, página sintética local y URLs inventadas de Figma, Pinterest 
 ## Pendiente
 
 - ~~Repetir el smoke con la pantalla desbloqueada~~ Hecho: **19/19** con la pantalla desbloqueada (22/22 tras añadir ordenar y la descarga automática); la captura se guarda al salir y se ve en la tarjeta.
-- Confirmar a mano: editar Figma desde una tarjeta, «Añadir URL» con `+` y pegando, y que la barra superior sigue usable con una web abierta.
+- ~~Confirmar a mano~~ Confirmado por el usuario: entrar y trabajar con la web abierta, «Añadir URL» con `+` y pegando, y la barra superior con la web abierta.
 - Memoria con 1, 3 y 6 tarjetas en condiciones controladas.
 
 ### Dato informal: 3 tarjetas cargadas en uso real

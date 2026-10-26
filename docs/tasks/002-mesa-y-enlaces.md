@@ -39,12 +39,12 @@ Con la opción B (D-016) la web no sigue el pan y zoom del lienzo: al entrar ocu
 ## Criterios de aceptación
 
 - [x] Inicio con la lista de mesas y «Nueva mesa»; abrir, renombrar y borrar mesas; borrar pide confirmación.
-- [ ] Clic derecho en el lienzo → «Añadir URL» crea la tarjeta en la posición del clic; también con `+` en la barra superior y pegando una URL sobre el lienzo.
+- [x] Clic derecho en el lienzo → «Añadir URL» crea la tarjeta en la posición del clic; también con `+` en la barra superior y pegando una URL sobre el lienzo.
 - [x] URLs de Figma, Notion, Pinterest y otra web se reconocen y se muestran como tal. Las URL no `http(s)` se rechazan.
 - [x] Añadir un servicio nuevo al catálogo no requiere cambiar el modelo de tarjetas ni el lienzo (comprobado añadiendo uno de prueba).
-- [ ] Entrar en una tarjeta abre la web en el panel principal; editar en Figma y volver al lienzo con el botón o `⌘⇧Esc`, como en T-001.
+- [x] Entrar en una tarjeta abre la web en el panel principal; editar en Figma y volver al lienzo con el botón o `⌘⇧Esc`, como en T-001.
 - [x] Notion abierto como tarjeta web: login y edición probados, o bloqueo registrado.
-- [ ] Con una web abierta, la barra superior sigue usable y ningún menú ni diálogo queda debajo de la web.
+- [x] Con una web abierta, la barra superior sigue usable y ningún menú ni diálogo queda debajo de la web.
 - [x] Cerrar y reabrir Table conserva mesas, tarjetas, posiciones y capturas; las webs abren descargadas.
 - [x] Descargar y cerrar respetan `beforeunload` como en T-001.
 - [ ] Memoria registrada con 1, 3 y 6 tarjetas (una activa y el resto descargadas), como dato para fijar los umbrales del escenario B; no se declara validado B.
