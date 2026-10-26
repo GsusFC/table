@@ -10,7 +10,7 @@ Los hitos preservan el orden acordado. Los hallazgos de una prueba pueden cambia
 - [x] Preparar instrucciones compartidas para Claude Code y Codex.
 - [x] Registrar fuentes revisadas y distinguirlas de pruebas ejecutadas.
 - [ ] Revisar esta base documental con el usuario y cerrar las decisiones pendientes que condicionen la primera tarea.
-- [ ] Identificar equipo de prueba, RAM, usuarios iniciales y proyecto piloto. Equipo y RAM fijados ([D-011](decisions.md)); proyecto piloto con archivo de Figma configurado localmente; faltan los usuarios iniciales.
+- [ ] Identificar equipo de prueba, RAM, usuarios iniciales y proyecto piloto. Equipo y RAM fijados ([D-011](decisions.md)); usuarios: el equipo de FLOC* ([D-014](decisions.md)); proyecto piloto con archivo de Figma configurado localmente. Falta decidir si las mesas son individuales o compartidas.
 - [x] Validar campos, permisos y enlaces de Notion. Integración de solo lectura conectada a la base de proyectos; esquema, estados y uso de campos comprobados ([contexto de Notion](notion-context.md#esquema-comprobado)). La duda de Pinterest la cierra [D-012](decisions.md).
 - [x] Ejecutar [T-001: prueba de escritorio](tasks/001-desktop-spike.md). Apto para continuar, con límites ([resultados](research/001-desktop-spike-results.md)).
 - [ ] Comparar una base propia con la reutilización que realmente ahorre trabajo. Mesa no ofrece implementación en el repo público revisado; OpenCove [evaluado](research/opencove-evaluation.md) con recomendación de usarlo como referencia, pendiente de decisión; ccanvas sin auditar.

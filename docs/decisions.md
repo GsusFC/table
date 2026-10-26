@@ -19,6 +19,7 @@ Fecha inicial: 2026-10-26. Este registro distingue lo acordado de las recomendac
 | D-011 | Equipo de referencia para las mediciones: Apple M2 Pro, 16 GiB, macOS 27.2 (el Mac del usuario). | Confirmado por el usuario el 2026-10-26. Las mediciones de T-001 se hicieron en él con las demás aplicaciones cerradas. La carga habitual con todas las herramientas abiertas no está medida. |
 | D-012 | Los enlaces de una mesa los añade el usuario en Table (clic derecho → «Añadir URL»), a medida que los tiene. Table reconoce el servicio por la URL (Figma, Notion, Pinterest u otra web) y todos se abren como tarjeta web con el mismo ciclo de vida; el reconocimiento solo añade capacidades propias de cada servicio. Credenciales y preferencias comunes van en una configuración global. | Decisión del usuario del 2026-10-26: leer los enlaces de campos de Notion no es usable (campos duplicados como `Pinterest`/`Pinterest Link`, fichas sin enlaces). Consecuencias: los campos URL de la base de Notion dejan de ser la fuente de los enlaces y se cierra la duda entre los dos campos de Pinterest. Notion sigue siendo la fuente del contexto (D-002). |
 | D-013 | Las mesas se crean libremente, como un proyecto de Claude: nombre propio y, en ese momento o después, los enlaces que se tengan (ficha o base de Notion, Figma, Pinterest u otros). El catálogo de servicios reconocidos debe poder ampliarse. | Decisión del usuario del 2026-10-26. Responde a cómo se crea una mesa: no se elige de una lista de Notion. Objetivo declarado por el usuario: que los agentes reciban contexto de todo lo que se añada a la mesa, idealmente con las plataformas conectadas a los agentes. Ese objetivo es la dirección de Fase 2; el modelo de conexión sigue abierto (P-013, P-014). |
+| D-014 | Usuarios iniciales: el equipo de FLOC*. | Indicación del usuario del 2026-10-26. Concreta D-001. Queda abierto si cada persona trabaja con sus mesas en local o se comparten (P-010). |
 
 La exclusión de `Budget` del contexto de agentes es un requisito del documento guía, desarrollado en [contexto de Notion](notion-context.md). Su cumplimiento requiere controlar las vías reales de acceso, no solo el prompt inicial.
 
@@ -35,7 +36,7 @@ La exclusión de `Budget` del contexto de agentes es un requisito del documento 
 | P-007 | Notion por API para la ficha y conexión filtrada para agentes. | Comprobar permisos, lista de campos y vías alternativas de acceso. |
 | P-008 | Un editor web de trabajo y referencias descargadas cuando sea seguro. | Medir coste y pérdida de continuidad; no confundir foco con contenido residente. |
 | P-009 | MCP local de Table y exportación temporal de contexto. | Contrato mínimo, permisos y compatibilidad de cada arnés. |
-| P-010 | Uso individual local para el primer prototipo. | Confirmar quién prueba la herramienta y cómo se recupera o comparte una mesa. |
+| P-010 | Uso individual local para el primer prototipo: cada persona del equipo con sus mesas en su equipo; compartir mesas en una fase posterior. | Usuarios fijados (D-014). Falta que el usuario confirme si el prototipo puede ser individual o si compartir mesas es necesario desde el principio. |
 | P-011 | Tarjetas de decisión y conexiones con significado. | Validar su valor en sesiones reales sin ampliar prematuramente el alcance. |
 | P-012 | Publicación mediante API de Notion, sin depender de Workers. | Revisar estructura real del portal y operaciones necesarias. |
 | P-013 | Servicio como unidad extensible: patrón de URL que lo reconoce y capacidades opcionales (vista web, miniatura, contexto para agentes). Añadir un servicio nuevo no toca el modelo de tarjetas. | Concretar en Fase 1 con Figma, Notion y Pinterest; validar que un servicio nuevo se añade sin cambiar el núcleo. |
@@ -60,7 +61,7 @@ La exclusión de `Budget` del contexto de agentes es un requisito del documento 
 - Notion como tarjeta web editable dentro de Table: login y edición no probados en T-001.
 - Planes, permisos y límites disponibles de Notion/Figma en el estudio.
 - Carga habitual del equipo de referencia con todas las herramientas abiertas (equipo fijado en D-011). Otros equipos del estudio, si los hay.
-- Usuarios iniciales, uso individual o compartido y política de copia/exportación.
+- Mesas individuales o compartidas entre el equipo (P-010), y política de copia/exportación.
 - Arneses que se probarán realmente y mecanismos de autenticación admitidos por cada uno.
 - Stack definitivo, distribución, firma, actualizaciones, licencia y nombre final.
 - Tecnología e interfaz actuales del escáner de evidencia, antes de plantear su integración.
