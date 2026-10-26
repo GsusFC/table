@@ -63,6 +63,8 @@ Causa: `LEGACY_CODEX_HOOK_REFERENCE_PATTERN` (`src/contexts/agent/infrastructure
 
 Consecuencia para Table: una herramienta que solo debía abrir un lienzo alteró la configuración global de un arnés. Es exactamente lo que [harnesses.md](../harnesses.md) pide evitar.
 
+Comunicado al proyecto con un caso sintético: [DeadWaveWave/opencove#464](https://github.com/DeadWaveWave/opencove/issues/464) (2026-10-26).
+
 ## Hallazgos frente a los requisitos de Table
 
 | Área | OpenCove | Encaje con Table |
