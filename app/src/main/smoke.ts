@@ -15,6 +15,7 @@ import {
   FIXTURE_PROJECTS_SOURCE,
   fixtureDataSourceResponse,
   fixturePageResponse,
+  fixtureSearchResponse,
 } from './notion/fixtures'
 import type { SettingsStore } from './settings/settingsStore'
 import type { SurfaceManager } from './web/types'
@@ -103,9 +104,23 @@ async function startNotionMcpServer(): Promise<{ server: Server; url: string }> 
   const server = createServer((request, response) => {
     const mcp = new McpServer({ name: 'notion-falso', version: '0.0.0' }, { capabilities: { tools: {} } })
     mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: [{ name: 'notion-fetch', inputSchema: { type: 'object' as const, properties: { id: { type: 'string' } } } }],
+      tools: ['notion-fetch', 'notion-search'].map(name => ({ name, inputSchema: { type: 'object' as const } })),
     }))
     mcp.setRequestHandler(CallToolRequestSchema, async call => {
+      if (call.params.name === 'notion-search') {
+        // Una ficha de la base de proyectos y una página de otra base con el mismo nombre.
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: fixtureSearchResponse([
+                { id: NOTION_PROJECT, title: 'Proyecto sintético', dataSourceUrl: FIXTURE_PROJECTS_SOURCE },
+                { id: NOTION_OTHER, title: 'Proyecto sintético (notas)', dataSourceUrl: FIXTURE_OTHER_SOURCE },
+              ]),
+            },
+          ],
+        }
+      }
       const id = String(call.params.arguments?.['id'] ?? '')
       const text =
         id === NOTION_PROJECT
@@ -585,10 +600,49 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
       )
 
       const notionMesa = await inUi<Mesa>(`window.table.mesas.create('Mesa de Notion')`)
-      const [projectCard, otherCard] = await inUi<Card[]>(`Promise.all([
-        window.table.cards.add(${JSON.stringify(notionMesa.id)}, 'https://www.notion.so/equipo/Proyecto-${NOTION_PROJECT}', { x: 0, y: 0 }),
-        window.table.cards.add(${JSON.stringify(notionMesa.id)}, 'https://www.notion.so/equipo/Pagina-${NOTION_OTHER}', { x: 380, y: 0 }),
-      ])`)
+      const otherCard = await inUi<Card>(
+        `window.table.cards.add(${JSON.stringify(notionMesa.id)}, 'https://www.notion.so/equipo/Pagina-${NOTION_OTHER}', { x: 380, y: 0 })`,
+      )
+      const found = await inUi<{ pageId: string }[]>(`window.table.notion.searchProjects('Proyecto')`)
+      record(
+        'vincular: la búsqueda solo devuelve fichas de proyecto, sin extractos',
+        found.length === 1 && found[0]!.pageId === NOTION_PROJECT && !JSON.stringify(found).includes('SECRETO'),
+        { found: found.length },
+      )
+
+      // «Vincular proyecto de Notion» desde el menú del lienzo: buscar, elegir y ver la ficha.
+      ui.reload()
+      await waitFor(() => inUi<boolean>(`[...document.querySelectorAll('.mesa-row-open')].some(b => b.textContent.includes('Mesa de Notion'))`), Boolean, 'mesa de Notion en el inicio')
+      await inUi(`[...document.querySelectorAll('.mesa-row-open')].find(b => b.textContent.includes('Mesa de Notion')).click()`)
+      await waitFor(() => inUi<boolean>(`!!document.querySelector('.react-flow__pane')`), Boolean, 'lienzo de Notion')
+      await openPaneMenu(60, 60)
+      await clickMenuItem('Vincular proyecto de Notion')
+      await waitFor(() => inUi<boolean>(`!!document.querySelector('dialog input[aria-label="Nombre del proyecto"]')`), Boolean, 'diálogo de vincular')
+      await inUi(`(() => {
+        const input = document.querySelector('dialog input[aria-label="Nombre del proyecto"]')
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'Proyecto')
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })()`)
+      await waitFor(() => inUi<number>(`document.querySelectorAll('.link-result').length`), count => count > 0, 'resultados de la búsqueda')
+      await shot('13-vincular-proyecto')
+      await inUi(`document.querySelector('.link-result').click()`)
+      const linked = await waitFor(
+        () => inUi<Mesa>(`window.table.mesas.get(${JSON.stringify(notionMesa.id)})`),
+        current => current.cards.length === 2,
+        'tarjeta vinculada',
+      )
+      const projectCard = linked.cards.find(card => card.url.includes(NOTION_PROJECT))
+      const face = await waitFor(
+        () => inUi<string>(`document.querySelector('.project-face')?.textContent ?? ''`),
+        text => text.includes('In progress'),
+        'ficha en el lienzo',
+      )
+      record(
+        'vincular: elegir un proyecto crea su tarjeta con la ficha',
+        !!projectCard && projectCard.serviceId === 'notion' && face.includes('Branding') && !face.includes('SECRETO'),
+      )
+      await shot('12-ficha-notion')
+
       const refresh = (card: Card): Promise<{ status: string; snapshot?: { fields: { name: string }[] }; cached?: { fetchedAt: string } | null }> =>
         inUi(`window.table.notion.refreshProject(${JSON.stringify(notionMesa.id)}, ${JSON.stringify(card!.id)})`)
       const ready = await refresh(projectCard!)
@@ -599,18 +653,7 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
           !JSON.stringify(ready).includes('SECRETO'),
         { status: ready.status },
       )
-      record('notion: una página de otra base queda como tarjeta web', (await refresh(otherCard!)).status === 'not-project')
-
-      ui.reload()
-      await waitFor(() => inUi<boolean>(`[...document.querySelectorAll('.mesa-row-open')].some(b => b.textContent.includes('Mesa de Notion'))`), Boolean, 'mesa de Notion en el inicio')
-      await inUi(`[...document.querySelectorAll('.mesa-row-open')].find(b => b.textContent.includes('Mesa de Notion')).click()`)
-      const face = await waitFor(
-        () => inUi<string>(`document.querySelector('.project-face')?.textContent ?? ''`),
-        text => text.includes('In progress'),
-        'ficha en el lienzo',
-      )
-      record('notion: la tarjeta muestra la ficha en el lienzo', face.includes('Branding') && !face.includes('SECRETO'))
-      await shot('12-ficha-notion')
+      record('notion: una página de otra base queda como tarjeta web', (await refresh(otherCard)).status === 'not-project')
 
       notionServer.server.close()
       notionServer.server.closeAllConnections()

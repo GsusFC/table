@@ -20,6 +20,7 @@ La primera versión usaba el token de una integración interna pegado en Ajustes
 ## Alcance
 
 - **Ajustes** (configuración global, fuera de las mesas y de Git): botón en el carril lateral → diálogo con «Conectar con Notion» y, una vez conectado, quién está conectado y «Desconectar».
+- **Vincular proyecto de Notion** (añadido el 2026-10-26 a petición del usuario): clic derecho en el lienzo → buscar por nombre → la tarjeta de la ficha elegida se crea sin copiar la URL. Usa `notion-search` y solo muestra páginas de bases con el esquema de proyectos; una vez conocida la base, busca dentro de ella.
   - Credenciales OAuth cifradas con el llavero del sistema (`safeStorage`, Keychain en macOS). Nunca se registran ni llegan al renderer.
   - El código de autorización llega a un puerto local de un solo uso en `127.0.0.1`; se comprueba `state`. Se puede cancelar.
 - **Ficha del proyecto**: la tarjeta muestra la ficha en lugar de la captura; entrar sigue abriendo la web de Notion.

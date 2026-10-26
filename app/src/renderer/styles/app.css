@@ -1488,3 +1488,56 @@ kbd {
   border-color: var(--color-accent);
   box-shadow: 0 0 0 2px var(--color-accent);
 }
+
+/* ---------- Vincular proyecto de Notion ---------- */
+
+.link-results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 120px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.link-result {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+  cursor: default;
+}
+
+.link-result:hover,
+.link-result:focus-visible {
+  background: var(--color-surface-hover);
+}
+
+.link-result svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--color-text-muted);
+}
+
+.link-result-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.link-result-title,
+.link-result-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link-result-meta {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}

@@ -302,6 +302,9 @@ async function notionCardUrl(mesaId: unknown, cardId: unknown): Promise<string |
   return card.serviceId === 'notion' ? card.url : null
 }
 
+/** Longitud máxima de una búsqueda de proyectos. */
+const MAX_PROJECT_QUERY_LENGTH = 200
+
 /** Conexión con Notion y ficha del proyecto (T-003). Las credenciales nunca llegan al renderer. */
 function registerNotionIpc(): void {
   handle(IPC.settingsNotion, () => requireSettings().notionView())
@@ -336,6 +339,12 @@ function registerNotionIpc(): void {
   handle(IPC.notionRefreshProject, async (mesaId, cardId) => {
     const url = await notionCardUrl(mesaId, cardId)
     return url ? requireProjects().refresh(url) : { status: 'not-project' }
+  })
+  handle(IPC.notionSearchProjects, query => {
+    if (typeof query !== 'string' || query.length > MAX_PROJECT_QUERY_LENGTH) {
+      throw new Error('Búsqueda no válida')
+    }
+    return requireProjects().search(query)
   })
 }
 

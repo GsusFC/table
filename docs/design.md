@@ -30,7 +30,8 @@ La app de escritorio de Codex es el punto de partida: ventana sobria, carril lat
 
 - **Inicio:** lista de mesas, más recientes primero, y «Nueva mesa» con nombre.
 - **Lienzo:** abierto, con desplazamiento y zoom. Las tarjetas muestran captura, icono y nombre del servicio, y título.
-- **Añadir URL:** clic derecho en el lienzo abre un menú con «Añadir URL» y «Añadir nota»; «Añadir URL» abre un campo pequeño en el punto del clic. También desde `+` en la barra superior; pegar una URL sobre el lienzo crea la tarjeta directamente.
+- **Añadir URL:** clic derecho en el lienzo abre un menú con «Añadir URL», «Añadir nota» y «Vincular proyecto de Notion»; «Añadir URL» abre un campo pequeño en el punto del clic. También desde `+` en la barra superior; pegar una URL sobre el lienzo crea la tarjeta directamente.
+- **Vincular proyecto de Notion:** diálogo que busca por nombre entre las fichas de proyecto de Notion (solo páginas de bases con los campos de proyecto, con su ruta y fecha de edición) y crea la tarjeta de la elegida en el punto del clic, sin copiar la URL. Si la mesa ya tiene esa ficha, lo avisa. Pide conectar Notion en Ajustes si no lo está. Propuesto por el asistente y aceptado por el usuario el 2026-10-26.
 - **Seleccionar y ordenar:** arrastrar en vacío dibuja una selección (como en Figma); `⇧`/`⌘`+clic añade tarjetas o notas y `⌘A` selecciona todas. El lienzo se mueve con dos dedos, la rueda o `Espacio` + arrastrar. Con dos o más elementos seleccionados aparece una barra abajo: «Ordenar en cuadrícula», alinear a la izquierda y alinear arriba. Pedido por el usuario el 2026-10-26.
 - **Imán:** al arrastrar una tarjeta o nota sola, se alinea con los bordes o centros de las demás (con una guía azul) y, si no hay ninguna cerca, con la rejilla de 24 px de los puntos del fondo. Un grupo se mueve por la rejilla conservando sus distancias. Con `⌥` pulsado se arrastra sin imán.
 - **Notas y conexiones (T-004):**

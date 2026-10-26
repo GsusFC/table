@@ -1,9 +1,11 @@
 import {
+  normalizeNotionId,
   PROJECT_FIELDS,
   PROJECT_TITLE_FIELD,
   type NotionOption,
   type ProjectField,
   type ProjectFieldValue,
+  type ProjectSearchResult,
   type ProjectSnapshot,
 } from '../../shared/notion'
 
@@ -78,6 +80,47 @@ export function parseDataSourceSchema(raw: string): DataSourceSchema {
     throw new UnrecognizedResponseError()
   }
   return schema
+}
+
+/** Resultado de `notion-search` con la base a la que pertenece la página. */
+export interface SearchHit extends ProjectSearchResult {
+  readonly dataSourceUrl: string | null
+}
+
+/** Páginas de la respuesta de `notion-search` (`{ results: [...] }`); descarta lo que no reconoce. */
+export function parseSearchResults(raw: string): SearchHit[] {
+  let parsed: Record<string, unknown> | null
+  try {
+    parsed = asRecord(JSON.parse(raw))
+  } catch {
+    throw new UnrecognizedResponseError()
+  }
+  if (!parsed || !Array.isArray(parsed['results'])) {
+    throw new UnrecognizedResponseError()
+  }
+  const hits: SearchHit[] = []
+  for (const item of parsed['results'].map(asRecord)) {
+    const pageId = typeof item?.['id'] === 'string' ? normalizeNotionId(item['id']) : null
+    if (!item || !pageId || item['type'] !== 'page' || typeof item['title'] !== 'string') {
+      continue
+    }
+    let url: string
+    try {
+      const parsedUrl = new URL(typeof item['url'] === 'string' ? item['url'] : `https://www.notion.so/${pageId}`)
+      url = parsedUrl.protocol === 'https:' ? `${parsedUrl.origin}${parsedUrl.pathname}` : `https://www.notion.so/${pageId}`
+    } catch {
+      url = `https://www.notion.so/${pageId}`
+    }
+    hits.push({
+      pageId,
+      title: item['title'].trim() || 'Sin título',
+      url,
+      path: typeof item['path'] === 'string' ? item['path'] : null,
+      editedAt: typeof item['timestamp'] === 'string' ? item['timestamp'] : null,
+      dataSourceUrl: typeof item['parent_data_source_url'] === 'string' ? item['parent_data_source_url'] : null,
+    })
+  }
+  return hits
 }
 
 /** Verdadero si el esquema tiene `Title` y todos los campos permitidos con su tipo: es una base de proyectos. */

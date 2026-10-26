@@ -25,6 +25,7 @@ import {
   AlignStartHorizontal,
   AlignStartVertical,
   Copy,
+  FileSearch,
   Download,
   LayoutGrid,
   Link,
@@ -59,6 +60,7 @@ import {
   type NotePatch,
   type Point,
 } from '../../shared/model'
+import { notionPageIdFromUrl, type ProjectSearchResult } from '../../shared/notion'
 import type { SurfaceCardState, UnloadResult } from '../../shared/surface'
 import { copyText } from '../lib/clipboard'
 import { errorMessage } from '../lib/errors'
@@ -71,6 +73,7 @@ import { CanvasContext, type CanvasContextValue } from './canvasContext'
 import { CardNode, type CardNodeType } from './CardNode'
 import { ConnectionEdge, ConnectionHandles, type ConnectionEdgeType } from './Connections'
 import { ConfirmDialog } from './Dialog'
+import { LinkProjectDialog } from './LinkProjectDialog'
 import { Menu, type MenuItem } from './Menu'
 import { NoteNode, type NoteNodeType } from './NoteNode'
 
@@ -250,6 +253,8 @@ function CanvasInner({
   const [addField, setAddField] = useState<AddFieldState | null>(null)
   /** Menú contextual del lienzo vacío («Añadir URL», «Añadir nota»), en coordenadas de la ventana. */
   const [paneMenu, setPaneMenu] = useState<Point | null>(null)
+  /** «Vincular proyecto de Notion» abierto: punto del lienzo donde irá la tarjeta. */
+  const [linkProjectAt, setLinkProjectAt] = useState<Point | null>(null)
   const [itemMenu, setItemMenu] = useState<ItemMenuState | null>(null)
   const [confirmRemove, setConfirmRemove] = useState<RemovalState | null>(null)
   const [editingNoteId, setEditingNoteId] = useState<NoteId | null>(null)
@@ -814,8 +819,24 @@ function CanvasInner({
     return [
       { label: 'Añadir URL', icon: Link, onSelect: () => openAddFieldAt(paneMenu.x, paneMenu.y) },
       { label: 'Añadir nota', icon: StickyNote, onSelect: () => addNoteAt(paneMenu.x, paneMenu.y) },
+      {
+        label: 'Vincular proyecto de Notion',
+        icon: FileSearch,
+        onSelect: () => setLinkProjectAt(roundPoint(flow.screenToFlowPosition({ x: paneMenu.x, y: paneMenu.y }))),
+      },
     ]
-  }, [paneMenu, openAddFieldAt, addNoteAt])
+  }, [paneMenu, openAddFieldAt, addNoteAt, flow])
+
+  /** Crea la tarjeta de la ficha elegida, salvo que la mesa ya la tenga. */
+  const linkProject = useCallback(
+    async (project: ProjectSearchResult, position: Point): Promise<void> => {
+      if (mesa.cards.some(card => notionPageIdFromUrl(card.url) === project.pageId)) {
+        throw new Error('Ese proyecto ya está en esta mesa')
+      }
+      await onAddCard(project.url, position)
+    },
+    [mesa.cards, onAddCard],
+  )
 
   const removedId = confirmRemove?.kind === 'card' ? confirmRemove.card.id : confirmRemove?.note.id
   const removedEdgeCount = removedId
@@ -971,6 +992,10 @@ function CanvasInner({
           />
         )}
       </div>
+
+      {linkProjectAt && (
+        <LinkProjectDialog onPick={project => linkProject(project, linkProjectAt)} onClose={() => setLinkProjectAt(null)} />
+      )}
 
       {paneMenu && (
         <Menu anchor={paneMenu} label="Añadir al lienzo" items={paneMenuItems} onClose={closeMenus} />

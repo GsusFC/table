@@ -81,6 +81,7 @@ const api: TableApi = {
   notion: {
     cachedProject: (mesaId, cardId) => ipcRenderer.invoke(IPC.notionCachedProject, mesaId, cardId),
     refreshProject: (mesaId, cardId) => ipcRenderer.invoke(IPC.notionRefreshProject, mesaId, cardId),
+    searchProjects: query => ipcRenderer.invoke(IPC.notionSearchProjects, query),
   },
 }
 

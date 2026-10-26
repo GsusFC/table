@@ -62,6 +62,17 @@ export interface NotionSettingsView {
   readonly userName: string | null
 }
 
+/** Proyecto encontrado al buscar por nombre en Notion («Vincular proyecto»). */
+export interface ProjectSearchResult {
+  readonly pageId: string
+  readonly title: string
+  /** URL de la ficha, sin parámetros; es la URL de la tarjeta que se crea. */
+  readonly url: string
+  /** Ruta en Notion (`Espacio / Base`), para distinguir títulos parecidos. */
+  readonly path: string | null
+  readonly editedAt: string | null
+}
+
 /**
  * Campos permitidos (lista cerrada): nombre en Notion, etiqueta y tipo esperado.
  * Una base es de proyectos si tiene `Title` y todos estos campos con su tipo.

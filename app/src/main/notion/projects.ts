@@ -1,6 +1,6 @@
 import { readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { notionPageIdFromUrl, type ProjectSnapshot, type ProjectState } from '../../shared/notion'
+import { notionPageIdFromUrl, type ProjectSearchResult, type ProjectSnapshot, type ProjectState } from '../../shared/notion'
 import { writeFileAtomic } from '../files'
 import { log } from '../log'
 import type { SettingsStore } from '../settings/settingsStore'
@@ -10,6 +10,7 @@ import {
   isProjectSchema,
   parseDataSourceSchema,
   parseFetchedPage,
+  parseSearchResults,
   sanitizeSnapshot,
   UnrecognizedResponseError,
   type DataSourceSchema,
@@ -22,7 +23,15 @@ export interface ProjectService {
   refresh(url: string): Promise<ProjectState>
   /** Borra las fichas guardadas (al desconectar Notion). */
   clearCache(): Promise<void>
+  /**
+   * Busca fichas de proyecto por nombre. Solo devuelve páginas de bases con el
+   * esquema de proyectos; ningún contenido de la ficha, solo título, URL y ruta.
+   */
+  search(query: string): Promise<ProjectSearchResult[]>
 }
+
+/** Caracteres mínimos para buscar proyectos. */
+const MIN_SEARCH_LENGTH = 2
 
 /** Caché en disco: la ficha y la base de la que se leyó. */
 interface CacheFile {
@@ -34,8 +43,22 @@ export function createProjectService(settings: SettingsStore, mcp: NotionMcp, us
   const cacheDir = join(userData, 'notion-cache')
   /** Lecturas en curso por revisión de la conexión y página: reconectar no reutiliza una lectura vieja. */
   const inflight = new Map<string, Promise<ProjectState>>()
-  /** Esquemas de base ya leídos en esta conexión; deciden si una página es una ficha de proyecto. */
-  let schemas: { revision: number; byUrl: Map<string, Promise<DataSourceSchema>> } = { revision: -1, byUrl: new Map() }
+  /**
+   * Lo aprendido con la conexión actual: esquemas de base leídos (deciden si una
+   * página es una ficha) y bases de proyectos conocidas (acotan la búsqueda).
+   * Se vacía al conectar otra cuenta.
+   */
+  let session: { revision: number; schemas: Map<string, Promise<DataSourceSchema>>; projectSources: Set<string> } = {
+    revision: -1,
+    schemas: new Map(),
+    projectSources: new Set(),
+  }
+  function sessionFor(revision: number): typeof session {
+    if (session.revision !== revision) {
+      session = { revision, schemas: new Map(), projectSources: new Set() }
+    }
+    return session
+  }
 
   const cachePath = (pageId: string): string => join(cacheDir, `${pageId}.json`)
 
@@ -52,15 +75,12 @@ export function createProjectService(settings: SettingsStore, mcp: NotionMcp, us
   }
 
   function schemaOf(dataSourceUrl: string, revision: number): Promise<DataSourceSchema> {
-    if (schemas.revision !== revision) {
-      schemas = { revision, byUrl: new Map() }
-    }
-    let schema = schemas.byUrl.get(dataSourceUrl)
+    const { schemas } = sessionFor(revision)
+    let schema = schemas.get(dataSourceUrl)
     if (!schema) {
-      const byUrl = schemas.byUrl
       schema = mcp.read('notion-fetch', { id: dataSourceUrl }).then(parseDataSourceSchema)
-      schema.catch(() => byUrl.delete(dataSourceUrl))
-      byUrl.set(dataSourceUrl, schema)
+      schema.catch(() => schemas.delete(dataSourceUrl))
+      schemas.set(dataSourceUrl, schema)
     }
     return schema
   }
@@ -81,6 +101,7 @@ export function createProjectService(settings: SettingsStore, mcp: NotionMcp, us
         await rm(cachePath(pageId), { force: true })
         return { status: 'not-project' }
       }
+      sessionFor(revision).projectSources.add(page.dataSourceUrl)
       const snapshot = buildSnapshot(pageId, page, schema, new Date().toISOString())
       const cache: CacheFile = { dataSourceUrl: page.dataSourceUrl, snapshot }
       await writeFileAtomic(cachePath(pageId), JSON.stringify(cache)).catch((error: unknown) => {
@@ -131,6 +152,37 @@ export function createProjectService(settings: SettingsStore, mcp: NotionMcp, us
 
     async clearCache() {
       await rm(cacheDir, { recursive: true, force: true })
+    },
+
+    async search(query) {
+      const text = query.trim()
+      if (text.length < MIN_SEARCH_LENGTH) {
+        return []
+      }
+      if (!settings.notionView().connected) {
+        throw new NotionError('Conecta Notion en Ajustes para buscar proyectos', 'unauthorized')
+      }
+      const revision = settings.revision()
+      const { projectSources } = sessionFor(revision)
+      // Con una base de proyectos ya conocida se busca dentro de ella: resultados más precisos.
+      const known = [...projectSources]
+      const args: Record<string, unknown> = known.length > 0 ? { query: text, data_source_url: known[0] } : { query: text }
+      const hits = parseSearchResults(await mcp.read('notion-search', args))
+      const results: ProjectSearchResult[] = []
+      for (const hit of hits) {
+        if (!hit.dataSourceUrl) {
+          continue
+        }
+        if (!projectSources.has(hit.dataSourceUrl)) {
+          if (!isProjectSchema(await schemaOf(hit.dataSourceUrl, revision))) {
+            continue
+          }
+          projectSources.add(hit.dataSourceUrl)
+        }
+        const { dataSourceUrl: _source, ...result } = hit
+        results.push(result)
+      }
+      return results
     },
   }
   return service

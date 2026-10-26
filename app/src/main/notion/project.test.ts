@@ -6,12 +6,14 @@ import {
   FIXTURE_PROJECTS_SOURCE,
   fixtureDataSourceResponse,
   fixturePageResponse,
+  fixtureSearchResponse,
 } from './fixtures'
 import {
   buildSnapshot,
   isProjectSchema,
   parseDataSourceSchema,
   parseFetchedPage,
+  parseSearchResults,
   sanitizeSnapshot,
   UnrecognizedResponseError,
 } from './project'
@@ -67,6 +69,35 @@ describe('ficha desde notion-fetch', () => {
     expect(() => parseDataSourceSchema(JSON.stringify({ text: '<data-source-state>{roto</data-source-state>' }))).toThrow(
       UnrecognizedResponseError,
     )
+  })
+})
+
+describe('parseSearchResults', () => {
+  it('lee páginas con su base, URL sin parámetros y sin el extracto', () => {
+    const hits = parseSearchResults(
+      fixtureSearchResponse([
+        { id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', title: 'Proyecto sintético', dataSourceUrl: FIXTURE_PROJECTS_SOURCE },
+        { id: 'ffffffff-bbbb-4ccc-8ddd-eeeeeeeeeeee', title: 'Página suelta', dataSourceUrl: null },
+      ]),
+    )
+    expect(hits).toEqual([
+      {
+        pageId: PAGE_ID,
+        title: 'Proyecto sintético',
+        url: `https://app.notion.com/p/${PAGE_ID}`,
+        path: 'Espacio sintético / Base sintética',
+        editedAt: '2026-10-20T10:00:00.000Z',
+        dataSourceUrl: FIXTURE_PROJECTS_SOURCE,
+      },
+      expect.objectContaining({ title: 'Página suelta', dataSourceUrl: null }),
+    ])
+    expect(JSON.stringify(hits)).not.toContain('SECRETO')
+  })
+
+  it('descarta lo que no es página y rechaza otro formato', () => {
+    const raw = JSON.stringify({ results: [{ id: 'x', type: 'page', title: 'Sin ID válido' }, { id: PAGE_ID, type: 'database', title: 'Base' }] })
+    expect(parseSearchResults(raw)).toEqual([])
+    expect(() => parseSearchResults('{"nada":1}')).toThrow(UnrecognizedResponseError)
   })
 })
 

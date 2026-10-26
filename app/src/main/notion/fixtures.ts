@@ -73,3 +73,20 @@ ${JSON.stringify(state)}
 </data-source>`
   return JSON.stringify({ metadata: { type: 'data-source' }, title: 'Base sintética', url: dataSourceUrl, text })
 }
+
+/** Respuesta de `notion-search`: una página por resultado, con su base. */
+export function fixtureSearchResponse(hits: readonly { id: string; title: string; dataSourceUrl: string | null }[]): string {
+  return JSON.stringify({
+    type: 'workspace_search',
+    results: hits.map(hit => ({
+      id: hit.id,
+      title: hit.title,
+      url: `https://app.notion.com/p/${hit.id.replace(/-/g, '')}?pvs=204`,
+      type: 'page',
+      highlight: 'Presupuesto SECRETO-EXTRACTO',
+      timestamp: '2026-10-20T10:00:00.000Z',
+      path: 'Espacio sintético / Base sintética',
+      ...(hit.dataSourceUrl ? { parent_data_source_url: hit.dataSourceUrl } : {}),
+    })),
+  })
+}

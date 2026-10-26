@@ -13,7 +13,7 @@ import type {
   Point,
   Viewport,
 } from './model'
-import type { NotionSettingsView, ProjectSnapshot, ProjectState } from './notion'
+import type { NotionSettingsView, ProjectSearchResult, ProjectSnapshot, ProjectState } from './notion'
 import type { PanelBounds, SurfaceCardState, UnloadResult } from './surface'
 
 export const IPC = {
@@ -53,6 +53,7 @@ export const IPC = {
   settingsDisconnectNotion: 'settings:disconnect-notion',
   notionCachedProject: 'notion:cached-project',
   notionRefreshProject: 'notion:refresh-project',
+  notionSearchProjects: 'notion:search-projects',
 } as const
 
 /**
@@ -127,6 +128,8 @@ export interface TableApi {
   readonly notion: {
     cachedProject(mesaId: MesaId, cardId: CardId): Promise<ProjectSnapshot | null>
     refreshProject(mesaId: MesaId, cardId: CardId): Promise<ProjectState>
+    /** Busca fichas de proyecto por nombre («Vincular proyecto»). */
+    searchProjects(query: string): Promise<ProjectSearchResult[]>
   }
 }
 
