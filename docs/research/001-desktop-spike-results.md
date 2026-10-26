@@ -1,6 +1,6 @@
 # Resultados de T-001 · Navegador de escritorio
 
-Fecha: 2026-10-26. Estado: **incremento A implementado y comprobado con entradas sintéticas; falta la prueba manual. Incremento B en curso: preparado, pendiente de login y edición. Incremento C sin empezar.** No hay conclusión de la tarea.
+Fecha: 2026-10-26. Estado: **incremento A implementado y comprobado automáticamente; prueba manual parcial durante el uso real. Incremento B completado con Figma y Pinterest. Incremento C sin empezar.** No hay conclusión de la tarea.
 
 Ficha de la tarea: [T-001](../tasks/001-desktop-spike.md).
 
@@ -159,7 +159,23 @@ Abierto desde la barra de dirección en la misma partición (`https://es.pintere
 
 **Resultado (confirmado por el usuario):** el login y la navegación por Pinterest funcionan. Al reabrir Table directamente en `es.pinterest.com`, el registro no muestra paso por `accounts.google.com`: la sesión se conservó.
 
-**Hallazgo: copiar imágenes.** El usuario no encontró cómo copiar una imagen. Electron no incluye menú contextual, así que no existía «Copiar imagen». Se añadió un menú contextual mínimo en la web y sus popups: copiar imagen (`copyImageAt`), copiar la dirección de la imagen, copiar enlace y cortar/copiar/pegar en campos editables. No incluye «Guardar imagen»: las descargas siguen bloqueadas. Pendiente de prueba: copiar una imagen de Pinterest y pegarla en Figma.
+**Hallazgo: copiar imágenes.** El usuario no encontró cómo copiar una imagen. Electron no incluye menú contextual, así que no existía «Copiar imagen». Se añadió un menú contextual mínimo en la web y sus popups: copiar imagen (`copyImageAt`), copiar la dirección de la imagen, copiar enlace y cortar/copiar/pegar en campos editables. No incluye «Guardar imagen»: las descargas siguen bloqueadas.
+
+Comprobado: dos imágenes copiadas desde `i.pinimg.com` (`image-copied` en el registro) se pegaron en la app de escritorio de Figma. Resolución de la imagen pegada sin verificar.
+
+### Conclusión del incremento B
+
+En este equipo, con Electron 44.9.3 y el user agent sin modificar:
+
+| Capacidad | Figma | Pinterest |
+| --- | --- | --- |
+| Login (Google) | Funciona; requiere popup como ventana hija | Funciona; sin popup |
+| Uso real | Edición guardada (frame pegado) | Navegación y copia de imágenes a Figma |
+| Sesión tras reiniciar | Se conserva | Se conserva |
+| Copiar y pegar | Texto en ambos sentidos y capas | Imágenes con menú contextual |
+| Permisos solicitados | `persistent-storage` | `storage-access` (`recaptcha.net`) |
+
+Lo que cambió respecto al incremento A para que funcionara: popups como ventana hija, permisos preguntados al usuario y menú contextual. Las decisiones de permisos no persisten entre reinicios: Figma vuelve a pedir `persistent-storage` cada vez.
 
 ## Incremento C · Conservación, descarga y memoria
 
