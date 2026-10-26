@@ -1,6 +1,6 @@
 # Fases y estado
 
-Fecha: 2026-10-26. **Estado actual: Fase 1 en curso. [T-002](tasks/002-mesa-y-enlaces.md) completada: app con mesas libres, «Añadir URL», webs integradas, ordenar con imán y descarga automática.**
+Fecha: 2026-10-27. **Estado actual: Fase 1 cerrada ([D-018](decisions.md)). Fase 2 en curso: [T-007](tasks/007-terminal-universal.md), panel de agentes con sesiones de terminal.**
 
 Los hitos preservan el orden acordado. Los hallazgos de una prueba pueden cambiar una propuesta técnica sin ampliar la fase entera.
 
