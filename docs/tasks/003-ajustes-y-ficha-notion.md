@@ -20,9 +20,9 @@ La primera versión usaba el token de una integración interna pegado en Ajustes
 ## Alcance
 
 - **Ajustes** (configuración global, fuera de las mesas y de Git): botón en el carril lateral → diálogo con «Conectar con Notion» y, una vez conectado, quién está conectado y «Desconectar».
-- **Vincular proyecto de Notion** (añadido el 2026-10-26 a petición del usuario): clic derecho en el lienzo → buscar por nombre → la tarjeta de la ficha elegida se crea sin copiar la URL. Usa `notion-search` y solo muestra páginas de bases con el esquema de proyectos; una vez conocida la base, busca dentro de ella.
   - Credenciales OAuth cifradas con el llavero del sistema (`safeStorage`, Keychain en macOS). Nunca se registran ni llegan al renderer.
   - El código de autorización llega a un puerto local de un solo uso en `127.0.0.1`; se comprueba `state`. Se puede cancelar.
+- **Vincular proyecto de Notion** (añadido el 2026-10-26 a petición del usuario): clic derecho en el lienzo → buscar por nombre → la tarjeta de la ficha elegida se crea sin copiar la URL. Usa `notion-search` y solo muestra páginas de bases con el esquema de proyectos; una vez conocida la base, busca dentro de ella.
 - **Ficha del proyecto**: la tarjeta muestra la ficha en lugar de la captura; entrar sigue abriendo la web de Notion.
 - **Lista de campos permitidos**, comprobada por nombre y tipo en el esquema de la base: `Title`, `Status`, `Services`, `Start Date`, `Due Date`.
 - **Caché fechada** en local; se borra al desconectar.
@@ -45,5 +45,6 @@ La primera versión usaba el token de una integración interna pegado en Ajustes
 ## Comprobaciones (2026-10-26)
 
 - Tests: lectura del formato de `notion-fetch` con respuestas sintéticas (fixtures en `app/src/main/notion/fixtures.ts`), lista cerrada, esquema de proyectos, tipos inesperados, formatos no reconocidos y caché alterada.
-- Smoke contra un MCP falso local: conexión cifrada, ficha con los 4 campos y sin datos excluidos, página de otra base como web, ficha en el lienzo, caché sin conexión y desconexión que borra la caché.
+- Smoke contra un MCP falso local: conexión cifrada, «Vincular proyecto» desde el menú del lienzo (búsqueda que solo devuelve fichas de proyecto y sin extractos, tarjeta creada con su ficha), ficha con los 4 campos y sin datos excluidos, página de otra base como web, caché sin conexión y desconexión que borra la caché.
+- Contra el Notion real del usuario: lectura de dos fichas (estado con color, servicios y fechas, sin campos excluidos) y búsqueda acotada a la base de proyectos, que también devuelve subpáginas de las fichas; el filtro por esquema las descarta.
 - Revisión separada de Codex sobre la versión con token: 6 hallazgos, 5 corregidos (siguen aplicando: escrituras de ajustes en cola, lecturas atadas a la conexión vigente, caché tardía ignorada, caché reconstruida con la lista cerrada) y 1 límite documentado: las capturas de páginas de Notion pueden mostrar `Budget` y no son aptas para agentes ([contexto de Notion](../notion-context.md)).
