@@ -65,6 +65,13 @@ export interface MesaSummary {
   readonly cardCount: number
 }
 
+/** Resultado de listar: mesas legibles y cuántos archivos no se pudieron abrir. */
+export interface MesaListing {
+  readonly mesas: readonly MesaSummary[]
+  /** Archivos dañados o de otra versión de esquema; se conservan sin tocar. */
+  readonly unreadable: number
+}
+
 /** Cambios admitidos sobre una tarjeta desde la interfaz. */
 export interface CardPatch {
   readonly position?: Point

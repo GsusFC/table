@@ -1,4 +1,4 @@
-import type { Card, CardId, CardPatch, Mesa, MesaId, MesaSummary, Point, Viewport } from './model'
+import type { Card, CardId, CardPatch, Mesa, MesaId, MesaListing, Point, Viewport } from './model'
 import type { PanelBounds, SurfaceCardState, UnloadResult } from './surface'
 
 export const IPC = {
@@ -21,6 +21,12 @@ export const IPC = {
   surfaceState: 'surface:state',
   /** main → renderer: la tarjeta cambió en disco (título, captura). */
   cardChanged: 'cards:changed',
+  /** main → renderer: falló un guardado que hizo el proceso principal. */
+  persistenceError: 'app:persistence-error',
+  /** main → renderer: guarda lo pendiente antes de cerrar; el renderer responde `appFlushDone` con el mismo id. */
+  appFlushRequest: 'app:flush-request',
+  /** renderer → main */
+  appFlushDone: 'app:flush-done',
 } as const
 
 /**
@@ -32,7 +38,7 @@ export const CAPTURE_PROTOCOL = 'table-capture'
 export interface TableApi {
   readonly platform: string
   readonly mesas: {
-    list(): Promise<MesaSummary[]>
+    list(): Promise<MesaListing>
     create(name: string): Promise<Mesa>
     get(id: MesaId): Promise<Mesa>
     rename(id: MesaId, name: string): Promise<Mesa>
@@ -62,4 +68,11 @@ export interface TableApi {
     onState(listener: (state: SurfaceCardState) => void): () => void
   }
   onCardChanged(listener: (mesaId: MesaId, card: Card) => void): () => void
+  onPersistenceError(listener: (message: string) => void): () => void
+  /**
+   * Antes de cerrar la ventana, el proceso principal pide guardar lo pendiente
+   * (p. ej. la vista del lienzo con retardo). Los manejadores se esperan con un
+   * tiempo límite.
+   */
+  onFlushRequest(handler: () => Promise<void>): () => void
 }

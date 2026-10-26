@@ -1,4 +1,4 @@
-import type { Card, CardId, CardPatch, Mesa, MesaId, MesaSummary, Point, Viewport } from '../../shared/model'
+import type { Card, CardId, CardPatch, Mesa, MesaId, MesaListing, Point, Viewport } from '../../shared/model'
 
 /**
  * Guardado local de mesas (D-015). Independiente de Electron: recibe la
@@ -9,14 +9,18 @@ import type { Card, CardId, CardPatch, Mesa, MesaId, MesaSummary, Point, Viewpor
  *   <baseDir>/captures/<mesaId>/<cardId>.jpg
  *
  * Escrituras atómicas (archivo temporal + rename). Un archivo con otra
- * versión de esquema o JSON inválido no se sobrescribe: se ignora en `list`
- * con un aviso y `get` lanza error.
+ * versión de esquema, JSON inválido o forma inválida (URL no http(s),
+ * geometría o IDs incorrectos) no se sobrescribe: `list` lo cuenta como
+ * ilegible y `get` lanza error.
  *
  * Implementación: tarea paralela «guardado» de T-002.
  */
 export interface MesaStore {
-  /** Más recientes primero (`updatedAt`). */
-  list(): Promise<MesaSummary[]>
+  /**
+   * Más recientes primero (`updatedAt`). Los archivos ilegibles se cuentan en
+   * `unreadable` y no se tocan.
+   */
+  list(): Promise<MesaListing>
   /** `name` ya validado con `parseMesaName`. */
   create(name: string): Promise<Mesa>
   get(id: MesaId): Promise<Mesa>
@@ -37,4 +41,7 @@ export interface MesaStore {
   saveCapture(mesaId: MesaId, cardId: CardId, jpeg: Buffer): Promise<Card>
   /** Ruta absoluta de la captura, o null si no existe. */
   capturePath(mesaId: MesaId, cardId: CardId): string | null
+
+  /** Espera a que terminen todas las escrituras en curso (cierre de la app). */
+  flush(): Promise<void>
 }
