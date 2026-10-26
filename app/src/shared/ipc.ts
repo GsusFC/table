@@ -13,6 +13,7 @@ import type {
   Point,
   Viewport,
 } from './model'
+import type { FigmaFileFrames, FigmaSettingsView, FrameThumbnail } from './figma'
 import type { NotionSettingsView, ProjectSearchResult, ProjectSnapshot, ProjectState } from './notion'
 import type { PanelBounds, SurfaceCardState, UnloadResult } from './surface'
 
@@ -54,6 +55,12 @@ export const IPC = {
   notionCachedProject: 'notion:cached-project',
   notionRefreshProject: 'notion:refresh-project',
   notionSearchProjects: 'notion:search-projects',
+  settingsFigma: 'settings:figma',
+  settingsConnectFigma: 'settings:connect-figma',
+  settingsDisconnectFigma: 'settings:disconnect-figma',
+  figmaListFrames: 'figma:list-frames',
+  figmaFetchThumbnails: 'figma:fetch-thumbnails',
+  figmaThumbnail: 'figma:thumbnail',
 } as const
 
 /**
@@ -123,6 +130,11 @@ export interface TableApi {
     cancelConnectNotion(): Promise<void>
     /** Olvida la conexión y las fichas guardadas. */
     disconnectNotion(): Promise<NotionSettingsView>
+    figma(): Promise<FigmaSettingsView>
+    /** Comprueba el token personal con Figma y lo guarda cifrado. */
+    connectFigma(token: string): Promise<FigmaSettingsView>
+    /** Olvida el token y las miniaturas guardadas. */
+    disconnectFigma(): Promise<FigmaSettingsView>
   }
   /** Ficha del proyecto de una tarjeta de Notion; la URL la toma el proceso principal de la mesa guardada. */
   readonly notion: {
@@ -130,6 +142,15 @@ export interface TableApi {
     refreshProject(mesaId: MesaId, cardId: CardId): Promise<ProjectState>
     /** Busca fichas de proyecto por nombre («Vincular proyecto»). */
     searchProjects(query: string): Promise<ProjectSearchResult[]>
+  }
+  /** Frames de Figma (T-005); las URLs las toma el proceso principal de la mesa guardada. */
+  readonly figma: {
+    /** Páginas y frames del archivo de una tarjeta de Figma. */
+    listFrames(mesaId: MesaId, cardId: CardId): Promise<FigmaFileFrames>
+    /** Pide y guarda las miniaturas de esas tarjetas de frame, en lote. */
+    fetchThumbnails(mesaId: MesaId, cardIds: readonly CardId[]): Promise<void>
+    /** Miniatura guardada de una tarjeta de frame, o null. */
+    thumbnail(mesaId: MesaId, cardId: CardId): Promise<FrameThumbnail | null>
   }
 }
 

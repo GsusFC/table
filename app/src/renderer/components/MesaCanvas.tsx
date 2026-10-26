@@ -26,12 +26,14 @@ import {
   AlignStartVertical,
   Copy,
   FileSearch,
+  Frame,
   Download,
   LayoutGrid,
   Link,
   LogIn,
   PencilLine,
   Plus,
+  RefreshCw,
   StickyNote,
   Trash2,
 } from 'lucide-react'
@@ -60,10 +62,12 @@ import {
   type NotePatch,
   type Point,
 } from '../../shared/model'
+import { figmaFileKey, figmaFrameUrl, figmaNodeId, type FigmaFrame } from '../../shared/figma'
 import { notionPageIdFromUrl, type ProjectSearchResult } from '../../shared/notion'
 import type { SurfaceCardState, UnloadResult } from '../../shared/surface'
 import { copyText } from '../lib/clipboard'
 import { errorMessage } from '../lib/errors'
+import { notifyFigmaThumbnailsChanged } from '../lib/figmaThumbnails'
 import { displayHost } from '../lib/format'
 import { cardStatus } from '../lib/status'
 import { alignEdge, arrangeInGrid, magnetSnap, NO_GUIDES, snapToGrid, type Guides, type Rect } from '../lib/layout'
@@ -73,6 +77,7 @@ import { CanvasContext, type CanvasContextValue } from './canvasContext'
 import { CardNode, type CardNodeType } from './CardNode'
 import { ConnectionEdge, ConnectionHandles, type ConnectionEdgeType } from './Connections'
 import { ConfirmDialog } from './Dialog'
+import { FramesDialog } from './FramesDialog'
 import { LinkProjectDialog } from './LinkProjectDialog'
 import { Menu, type MenuItem } from './Menu'
 import { NoteNode, type NoteNodeType } from './NoteNode'
@@ -114,6 +119,11 @@ const ConnectableCardNode = memo(function ConnectableCardNode(props: NodeProps<C
 
 /** Margen alrededor de un elemento, en px del lienzo, que también acepta soltar una conexión (sus asas sobresalen). */
 const CONNECT_DROP_MARGIN = 16
+/** Frames añadidos desde un archivo: cuadrícula a su derecha. */
+const FRAME_GRID_COLUMNS = 3
+const FRAME_GRID_GAP = 24
+/** Tarjetas por petición de miniaturas (el proceso principal acepta hasta 200). */
+const THUMBNAIL_BATCH = 50
 
 const NODE_TYPES: NodeTypes = { card: ConnectableCardNode, note: NoteNode }
 const EDGE_TYPES: EdgeTypes = { connection: ConnectionEdge }
@@ -255,6 +265,8 @@ function CanvasInner({
   const [paneMenu, setPaneMenu] = useState<Point | null>(null)
   /** «Vincular proyecto de Notion» abierto: punto del lienzo donde irá la tarjeta. */
   const [linkProjectAt, setLinkProjectAt] = useState<Point | null>(null)
+  /** «Añadir frames» abierto para esta tarjeta de archivo de Figma. */
+  const [framesFor, setFramesFor] = useState<Card | null>(null)
   const [itemMenu, setItemMenu] = useState<ItemMenuState | null>(null)
   const [confirmRemove, setConfirmRemove] = useState<RemovalState | null>(null)
   const [editingNoteId, setEditingNoteId] = useState<NoteId | null>(null)
@@ -768,6 +780,58 @@ function CanvasInner({
     [mesa.id, states, menuCard?.id, editingNoteId, onEnter, resizeEnd, changeNoteText, stopEditingNote],
   )
 
+  /** Pide a Figma las miniaturas de esas tarjetas de frame y avisa a las tarjetas. */
+  const fetchThumbnails = useCallback(
+    (cardIds: readonly CardId[]) => {
+      // Lotes que el proceso principal acepta; uno tras otro para no saturar la API de Figma.
+      const batches: CardId[][] = []
+      for (let start = 0; start < cardIds.length; start += THUMBNAIL_BATCH) {
+        batches.push(cardIds.slice(start, start + THUMBNAIL_BATCH))
+      }
+      void batches
+        .reduce<Promise<void>>((previous, batch) => previous.then(() => window.table.figma.fetchThumbnails(mesa.id, batch)), Promise.resolve())
+        .then(notifyFigmaThumbnailsChanged, (error: unknown) => {
+          notifyFigmaThumbnailsChanged()
+          notify(`No se pudieron traer las miniaturas: ${errorMessage(error)}`)
+        })
+    },
+    [mesa.id, notify],
+  )
+
+  /** Crea las tarjetas de los frames elegidos en cuadrícula a la derecha del archivo. */
+  const addFrames = useCallback(
+    async (file: Card, frames: readonly { frame: FigmaFrame }[]): Promise<void> => {
+      const created: CardId[] = []
+      for (const [index, { frame }] of frames.entries()) {
+        const column = index % FRAME_GRID_COLUMNS
+        const row = Math.floor(index / FRAME_GRID_COLUMNS)
+        const position = roundPoint({
+          x: file.position.x + file.size.width + FRAME_GRID_GAP + column * (DEFAULT_CARD_SIZE.width + FRAME_GRID_GAP),
+          y: file.position.y + row * (DEFAULT_CARD_SIZE.height + FRAME_GRID_GAP),
+        })
+        created.push((await onAddCard(figmaFrameUrl(file.url, frame.nodeId), position)).id)
+      }
+      fetchThumbnails(created)
+    },
+    [onAddCard, fetchThumbnails],
+  )
+
+  /** Frames del archivo de esa tarjeta que ya están en la mesa (IDs de nodo). */
+  const framesInMesa = useCallback(
+    (file: Card): ReadonlySet<string> => {
+      const key = figmaFileKey(file.url)
+      const ids = new Set<string>()
+      for (const card of mesa.cards) {
+        const nodeId = figmaNodeId(card.url)
+        if (key && nodeId && card.id !== file.id && figmaFileKey(card.url) === key) {
+          ids.add(nodeId)
+        }
+      }
+      return ids
+    },
+    [mesa.cards],
+  )
+
   const menuItems = useMemo((): MenuItem[] => {
     if (menuNote) {
       return [
@@ -809,8 +873,14 @@ function CanvasInner({
       },
       { label: 'Eliminar', icon: Trash2, danger: true, onSelect: () => setConfirmRemove({ kind: 'card', card: menuCard }) },
     )
+    // Figma: un archivo ofrece sus frames; un frame, actualizar su miniatura.
+    if (menuCard.serviceId === 'figma' && figmaFileKey(menuCard.url)) {
+      items.splice(1, 0, figmaNodeId(menuCard.url)
+        ? { label: 'Actualizar miniatura', icon: RefreshCw, onSelect: () => fetchThumbnails([menuCard.id]) }
+        : { label: 'Añadir frames…', icon: Frame, onSelect: () => setFramesFor(menuCard) })
+    }
     return items
-  }, [menuCard, menuNote, states, onEnter, notify, requestRemoveNote])
+  }, [menuCard, menuNote, states, onEnter, notify, requestRemoveNote, fetchThumbnails])
 
   const paneMenuItems = useMemo((): MenuItem[] => {
     if (!paneMenu) {
@@ -992,6 +1062,16 @@ function CanvasInner({
           />
         )}
       </div>
+
+      {framesFor && (
+        <FramesDialog
+          mesaId={mesa.id}
+          cardId={framesFor.id}
+          existing={framesInMesa(framesFor)}
+          onAdd={frames => addFrames(framesFor, frames)}
+          onClose={() => setFramesFor(null)}
+        />
+      )}
 
       {linkProjectAt && (
         <LinkProjectDialog onPick={project => linkProject(project, linkProjectAt)} onClose={() => setLinkProjectAt(null)} />

@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type KeyboardEvent } from 'react'
+import type { FigmaSettingsView } from '../../shared/figma'
 import { PROJECT_FIELDS, type NotionSettingsView } from '../../shared/notion'
 import { errorMessage } from '../lib/errors'
+import { notifyFigmaThumbnailsChanged } from '../lib/figmaThumbnails'
 import { notifyNotionSettingsChanged } from '../lib/notionSettings'
 import { Dialog } from './Dialog'
 
@@ -10,7 +12,7 @@ interface SettingsDialogProps {
   readonly onClose: () => void
 }
 
-/** Ajustes globales: conexión con Notion con la cuenta de cada persona. */
+/** Ajustes globales: conexión con Notion y con Figma, con la cuenta de cada persona. */
 export function SettingsDialog({ onClose }: SettingsDialogProps) {
   const [view, setView] = useState<NotionSettingsView | null>(null)
   const [busy, setBusy] = useState<'connect' | 'disconnect' | null>(null)
@@ -105,6 +107,95 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
           </p>
         )}
       </section>
+      <FigmaSettings />
     </Dialog>
+  )
+}
+
+/** Figma: token personal pegado una vez (Figma no permite conectar con un botón a apps como Table). */
+function FigmaSettings() {
+  const [view, setView] = useState<FigmaSettingsView | null>(null)
+  const [token, setToken] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    api.settings.figma().then(setView, (caught: unknown) => setError(errorMessage(caught)))
+  }, [])
+
+  const run = (task: () => Promise<FigmaSettingsView>): void => {
+    if (busy) {
+      return
+    }
+    setBusy(true)
+    setError(null)
+    task().then(
+      next => {
+        setBusy(false)
+        setView(next)
+        setToken('')
+        notifyFigmaThumbnailsChanged()
+      },
+      (caught: unknown) => {
+        setBusy(false)
+        setError(errorMessage(caught))
+      },
+    )
+  }
+
+  const save = (): void => run(() => api.settings.connectFigma(token))
+  // Enter guarda el token en lugar de cerrar Ajustes.
+  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      if (token.trim()) {
+        save()
+      }
+    }
+  }
+
+  return (
+    <section className="settings-section" aria-labelledby="settings-figma">
+      <h3 id="settings-figma" className="settings-heading">
+        Figma
+      </h3>
+      <p className="settings-help">
+        Para añadir frames con miniatura. Crea un token en Figma → Settings → Security → Personal access tokens con
+        dos permisos de solo lectura: contenido de archivos (<code>file_content:read</code>) y tu usuario
+        (<code>current_user:read</code>), y pégalo aquí. Se guarda cifrado en el llavero de este Mac.
+      </p>
+      {view === null ? (
+        <p className="settings-help">Cargando…</p>
+      ) : view.connected ? (
+        <div className="settings-row">
+          <span className="settings-value">Conectado{view.handle ? ` como ${view.handle}` : ''}</span>
+          <button type="button" className="button" onClick={() => run(api.settings.disconnectFigma)} disabled={busy}>
+            Quitar
+          </button>
+        </div>
+      ) : (
+        <div className="settings-row">
+          <input
+            className="input"
+            type="password"
+            value={token}
+            onChange={event => setToken(event.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="figd_…"
+            aria-label="Token personal de Figma"
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <button type="button" className="button" onClick={save} disabled={busy || !token.trim()}>
+            {busy ? 'Comprobando…' : 'Guardar'}
+          </button>
+        </div>
+      )}
+      {error && (
+        <p className="field-error" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
   )
 }

@@ -77,11 +77,19 @@ const api: TableApi = {
     connectNotion: () => ipcRenderer.invoke(IPC.settingsConnectNotion),
     cancelConnectNotion: () => ipcRenderer.invoke(IPC.settingsCancelConnectNotion),
     disconnectNotion: () => ipcRenderer.invoke(IPC.settingsDisconnectNotion),
+    figma: () => ipcRenderer.invoke(IPC.settingsFigma),
+    connectFigma: token => ipcRenderer.invoke(IPC.settingsConnectFigma, token),
+    disconnectFigma: () => ipcRenderer.invoke(IPC.settingsDisconnectFigma),
   },
   notion: {
     cachedProject: (mesaId, cardId) => ipcRenderer.invoke(IPC.notionCachedProject, mesaId, cardId),
     refreshProject: (mesaId, cardId) => ipcRenderer.invoke(IPC.notionRefreshProject, mesaId, cardId),
     searchProjects: query => ipcRenderer.invoke(IPC.notionSearchProjects, query),
+  },
+  figma: {
+    listFrames: (mesaId, cardId) => ipcRenderer.invoke(IPC.figmaListFrames, mesaId, cardId),
+    fetchThumbnails: (mesaId, cardIds) => ipcRenderer.invoke(IPC.figmaFetchThumbnails, mesaId, cardIds),
+    thumbnail: (mesaId, cardId) => ipcRenderer.invoke(IPC.figmaThumbnail, mesaId, cardId),
   },
 }
 

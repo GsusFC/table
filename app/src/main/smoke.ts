@@ -46,6 +46,8 @@ export const smokeHooks = {
   confirmCloseWithUnsaved: (): boolean => true,
   /** Servidor MCP local con fichas sintéticas que sustituye al MCP de Notion. */
   notionMcpUrl: undefined as string | undefined,
+  /** API de Figma falsa en local, con archivos y miniaturas sintéticos. */
+  figmaApiBase: undefined as string | undefined,
 }
 
 /** Chromium solo respeta `beforeunload` si la página recibió interacción del usuario. */
@@ -148,6 +150,59 @@ async function startNotionMcpServer(): Promise<{ server: Server; url: string }> 
   await promise
   const { port } = server.address() as AddressInfo
   return { server, url: `http://127.0.0.1:${port}/mcp` }
+}
+
+const FIGMA_TOKEN = `figd_${'s'.repeat(40)}`
+const FIGMA_FILE = 'FAKEKEY00003'
+/** PNG de 1×1 px: basta para comprobar que la miniatura se guarda y se ve. */
+const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+
+/** API de Figma falsa: un archivo con una página, dos frames y un texto suelto, y sus imágenes. */
+async function startFigmaServer(): Promise<{ server: Server; url: string }> {
+  let base = ''
+  const server = createServer((request, response) => {
+    const url = new URL(request.url ?? '/', base)
+    const reply = (status: number, body: unknown): void => {
+      response.writeHead(status, { 'content-type': 'application/json' })
+      response.end(JSON.stringify(body))
+    }
+    if (url.pathname.startsWith('/render/')) {
+      response.writeHead(200, { 'content-type': 'image/png' })
+      response.end(TINY_PNG)
+    } else if (request.headers['x-figma-token'] !== FIGMA_TOKEN) {
+      reply(403, { status: 403, err: 'Invalid token' })
+    } else if (url.pathname === '/v1/me') {
+      reply(200, { handle: 'persona-sintetica' })
+    } else if (url.pathname === `/v1/files/${FIGMA_FILE}`) {
+      reply(200, {
+        name: 'Archivo sintético',
+        document: {
+          children: [
+            {
+              id: '0:1',
+              name: 'Página 1',
+              type: 'CANVAS',
+              children: [
+                { id: '1:2', name: 'Portada', type: 'FRAME' },
+                { id: '1:3', name: 'Detalle', type: 'FRAME' },
+                { id: '1:4', name: 'Texto suelto', type: 'TEXT' },
+              ],
+            },
+          ],
+        },
+      })
+    } else if (url.pathname === `/v1/images/${FIGMA_FILE}`) {
+      const ids = (url.searchParams.get('ids') ?? '').split(',')
+      reply(200, { err: null, images: Object.fromEntries(ids.map(id => [id, `${base}/render/${id.replace(':', '-')}.png`])) })
+    } else {
+      reply(404, { status: 404, err: 'Not found' })
+    }
+  })
+  const { promise, resolve } = Promise.withResolvers<void>()
+  server.listen(0, '127.0.0.1', resolve)
+  await promise
+  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  return { server, url: base }
 }
 
 export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, settings: SettingsStore): Promise<void> {
@@ -582,6 +637,93 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
     await inUi(`window.table.surface.unload(${JSON.stringify(guardedCard.id)})`)
     smokeHooks.confirmDiscard = () => false
 
+    // T-005: las tarjetas del mismo archivo de Figma comparten un único editor.
+    const figmaOrigin = fixtureUrl.slice(0, -1)
+    const figmaMesa = await inUi<Mesa>(`window.table.mesas.create('Mesa de Figma')`)
+    const [fileCard, frameCard, otherFileCard] = await inUi<Card[]>(`Promise.all([
+      window.table.cards.add(${JSON.stringify(figmaMesa.id)}, ${JSON.stringify(`${figmaOrigin}/design/FAKEKEY00001/Archivo`)}, { x: 0, y: 0 }),
+      window.table.cards.add(${JSON.stringify(figmaMesa.id)}, ${JSON.stringify(`${figmaOrigin}/design/FAKEKEY00001/Archivo?node-id=1-2`)}, { x: 380, y: 0 }),
+      window.table.cards.add(${JSON.stringify(figmaMesa.id)}, ${JSON.stringify(`${figmaOrigin}/design/FAKEKEY00002/Otro`)}, { x: 760, y: 0 }),
+    ])`)
+    await inUi(`window.table.surface.openMesa(${JSON.stringify(figmaMesa.id)})`)
+    // Último estado emitido de cada tarjeta, visto desde la interfaz.
+    await inUi(`(() => {
+      window.__figmaStates = {}
+      window.__stopFigmaStates = window.table.surface.onState(state => { window.__figmaStates[state.cardId] = state })
+    })()`)
+    const enterFigma = async (cardId: string): Promise<void> => {
+      await inUi(`window.table.surface.enter(${JSON.stringify(figmaMesa.id)}, ${JSON.stringify(cardId)})`)
+      await waitFor(() => surface.getStates().find(state => state.cardId === cardId), state => state?.status === 'ready' && state.entered, 'web de Figma cargada')
+    }
+    const contentsWith = (text: string): WebContents[] =>
+      webContents.getAllWebContents().filter(contents => !contents.isDestroyed() && contents.getURL().includes(text))
+    await enterFigma(fileCard!.id)
+    const fileContents = contentsWith('FAKEKEY00001')[0]
+    await inUi('window.table.surface.exit()')
+    await enterFigma(frameCard!.id)
+    const frameState = surface.getStates().find(state => state.cardId === frameCard!.id)
+    const fileEmitted = await inUi<{ status: string; entered: boolean } | undefined>(`window.__figmaStates[${JSON.stringify(fileCard!.id)}]`)
+    const shared = contentsWith('FAKEKEY00001')
+    record(
+      'figma: entrar en un frame reutiliza el editor cargado del archivo y lo lleva al frame',
+      !!frameState?.currentUrl?.includes('node-id=1-2') &&
+        fileEmitted?.status === 'unloaded' &&
+        fileEmitted.entered === false &&
+        !surface.getStates().some(state => state.cardId === fileCard!.id) &&
+        shared.length === 1 &&
+        shared[0] === fileContents,
+      { currentUrl: frameState?.currentUrl, file: fileEmitted?.status, editors: shared.length },
+    )
+    await enterFigma(otherFileCard!.id)
+    const otherContents = contentsWith('FAKEKEY00002')
+    record(
+      'figma: otro archivo carga su propio editor',
+      otherContents.length === 1 && !otherContents.includes(fileContents!) && contentsWith('FAKEKEY00001').length === 1,
+      { loaded: surface.getStates().filter(state => state.status !== 'unloaded').length },
+    )
+    // Si el editor frena la navegación con `beforeunload`, no se cede ni se descarta
+    // nada sin preguntar: la tarjeta que lo tiene sigue siendo la dueña y se muestra ella.
+    await enterFigma(frameCard!.id)
+    const guardedEditor = contentsWith('FAKEKEY00001')[0]!
+    await guardedEditor.executeJavaScript(`void (window.onbeforeunload = e => { e.preventDefault(); e.returnValue = '' })`, true)
+    activate(guardedEditor)
+    await delay(300)
+    prompts = 0
+    smokeHooks.confirmDiscard = () => {
+      prompts += 1
+      return true
+    }
+    await inUi(`window.table.surface.enter(${JSON.stringify(figmaMesa.id)}, ${JSON.stringify(fileCard!.id)})`)
+    const keptOwner = surface.getStates().find(state => state.cardId === frameCard!.id)
+    record(
+      'figma: si el editor avisa de cambios, sigue en su frame con su tarjeta y sin preguntar',
+      prompts === 0 &&
+        keptOwner?.entered === true &&
+        keptOwner.status === 'ready' &&
+        !!keptOwner.currentUrl?.includes('node-id=1-2') &&
+        guardedEditor.getURL().includes('node-id=1-2') &&
+        !surface.getStates().some(state => state.cardId === fileCard!.id),
+      { prompts, owner: keptOwner?.status, url: keptOwner?.currentUrl },
+    )
+    smokeHooks.confirmDiscard = () => false
+    await guardedEditor.executeJavaScript(`void (window.onbeforeunload = null)`, true)
+    await enterFigma(fileCard!.id)
+    const retried = surface.getStates().find(state => state.cardId === fileCard!.id)
+    record(
+      'figma: volver a entrar reintenta y cede el editor',
+      !retried?.currentUrl?.includes('node-id') &&
+        !surface.getStates().some(state => state.cardId === frameCard!.id) &&
+        contentsWith('FAKEKEY00001').length === 1 &&
+        contentsWith('FAKEKEY00001')[0] === guardedEditor,
+      { url: retried?.currentUrl },
+    )
+    await inUi(`window.__stopFigmaStates()`)
+    await inUi(`window.table.surface.exit()`)
+    for (const card of [fileCard!, frameCard!, otherFileCard!]) {
+      await inUi(`window.table.surface.unload(${JSON.stringify(card.id)})`)
+    }
+    await inUi(`window.table.mesas.remove(${JSON.stringify(figmaMesa.id)})`)
+
     // Conexión y ficha de Notion (T-003) contra un MCP falso con datos sintéticos. La
     // autorización en el navegador no se puede automatizar: se guarda una conexión falsa.
     const notionServer = await startNotionMcpServer()
@@ -670,6 +812,71 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
     } finally {
       smokeHooks.notionMcpUrl = undefined
       notionServer.server.close()
+    }
+
+    // Token de Figma y frames con miniatura (T-005) contra una API falsa.
+    const figmaServer = await startFigmaServer()
+    smokeHooks.figmaApiBase = figmaServer.url
+    try {
+      const rejected = await inUi<boolean>(`window.table.settings.connectFigma('figd_${'x'.repeat(40)}').then(() => false, () => true)`)
+      const figmaView = await inUi<{ connected: boolean; handle: string | null }>(`window.table.settings.connectFigma(${JSON.stringify(FIGMA_TOKEN)})`)
+      const settingsFile = readFileSync(join(app.getPath('userData'), 'settings.json'), 'utf8')
+      record(
+        'figma: el token se comprueba, se guarda cifrado y no vuelve al renderer',
+        rejected && figmaView.connected && figmaView.handle === 'persona-sintetica' && !settingsFile.includes(FIGMA_TOKEN),
+      )
+
+      const figmaMesa = await inUi<Mesa>(`window.table.mesas.create('Mesa de Figma')`)
+      const fileCard = await inUi<Card>(
+        `window.table.cards.add(${JSON.stringify(figmaMesa.id)}, 'https://www.figma.com/design/${FIGMA_FILE}/Archivo', { x: 0, y: 0 })`,
+      )
+      ui.reload()
+      await waitFor(() => inUi<boolean>(`[...document.querySelectorAll('.mesa-row-open')].some(b => b.textContent.includes('Mesa de Figma'))`), Boolean, 'mesa de Figma en el inicio')
+      await inUi(`[...document.querySelectorAll('.mesa-row-open')].find(b => b.textContent.includes('Mesa de Figma')).click()`)
+      await waitFor(() => inUi<boolean>(`!!document.querySelector(${JSON.stringify(`.react-flow__node[data-id="${fileCard.id}"]`)})`), Boolean, 'tarjeta del archivo')
+      await inUi(`(() => {
+        const node = document.querySelector(${JSON.stringify(`.react-flow__node[data-id="${fileCard.id}"]`)})
+        const r = node.getBoundingClientRect()
+        node.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 40, clientY: r.top + 40, button: 2 }))
+      })()`)
+      await clickMenuItem('Añadir frames')
+      const listed = await waitFor(
+        () => inUi<string[]>(`[...document.querySelectorAll('.frames-item-name')].map(item => item.textContent)`),
+        names => names.length > 0,
+        'frames del archivo',
+      )
+      await inUi(`document.querySelectorAll('.frames-item input').forEach(input => input.click())`)
+      await shot('14-anadir-frames')
+      await inUi(`document.querySelector('dialog button[type="submit"]').click()`)
+      const withFrames = await waitFor(
+        () => inUi<Mesa>(`window.table.mesas.get(${JSON.stringify(figmaMesa.id)})`),
+        current => current.cards.length === 3,
+        'tarjetas de frame',
+      )
+      const thumbnails = await waitFor(
+        () => inUi<number>(`document.querySelectorAll('img.card-thumbnail').length`),
+        count => count === 2,
+        'miniaturas de frame',
+      ).catch(() => 0)
+      const loaded = await inUi<boolean>(`[...document.querySelectorAll('img.card-thumbnail')].every(img => img.complete && img.naturalWidth > 0)`)
+      record(
+        'figma: «Añadir frames» lista los frames, crea sus tarjetas y muestra la miniatura',
+        listed.join() === 'Portada,Detalle' &&
+          withFrames.cards.filter(card => card.url.includes('node-id=1-2') || card.url.includes('node-id=1-3')).length === 2 &&
+          thumbnails === 2 &&
+          loaded,
+        { listed, thumbnails },
+      )
+      await shot('15-frames')
+
+      const frameCard = withFrames.cards.find(card => card.url.includes('node-id=1-2'))!
+      await inUi(`window.table.settings.disconnectFigma()`)
+      const afterDisconnect = await inUi<unknown>(`window.table.figma.thumbnail(${JSON.stringify(figmaMesa.id)}, ${JSON.stringify(frameCard.id)})`)
+      record('figma: al quitar el token se borran las miniaturas', afterDisconnect === null)
+      await inUi(`window.table.mesas.remove(${JSON.stringify(figmaMesa.id)})`)
+    } finally {
+      smokeHooks.figmaApiBase = undefined
+      figmaServer.server.close()
     }
 
     await inUi(`window.table.surface.openMesa(null)`)

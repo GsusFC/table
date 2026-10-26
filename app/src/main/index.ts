@@ -16,6 +16,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { figmaFileKey } from '../shared/figma'
 import { CAPTURE_PROTOCOL, IPC, type PersistenceError } from '../shared/ipc'
 import type { MesaId } from '../shared/model'
 import { recognizeService } from '../shared/services'
@@ -32,6 +33,8 @@ import {
 import { log } from './log'
 import { authorizeNotion, createNotionMcp, NOTION_MCP_URL } from './notion/mcp'
 import { createProjectService, type ProjectService } from './notion/projects'
+import { createFigmaClient } from './figma/client'
+import { createFrameService, FIGMA_THUMB_PROTOCOL, type FrameService } from './figma/frames'
 import { createSettingsStore, type SettingsStore } from './settings/settingsStore'
 import { runMeasure } from './measure'
 import { runSmoke, smokeHooks } from './smoke'
@@ -50,7 +53,10 @@ if (smokeMode) {
   app.setPath('userData', mkdtempSync(join(tmpdir(), 'table-smoke-')))
 }
 
-protocol.registerSchemesAsPrivileged([{ scheme: CAPTURE_PROTOCOL, privileges: { standard: true, secure: true } }])
+protocol.registerSchemesAsPrivileged([
+  { scheme: CAPTURE_PROTOCOL, privileges: { standard: true, secure: true } },
+  { scheme: FIGMA_THUMB_PROTOCOL, privileges: { standard: true, secure: true } },
+])
 
 // Una sola instancia: dos procesos sobre el mismo almacén podrían pisarse cambios.
 const hasInstanceLock = app.requestSingleInstanceLock()
@@ -65,6 +71,7 @@ let surface: SurfaceManager | null = null
 let store: MesaStore | null = null
 let settings: SettingsStore | null = null
 let projects: ProjectService | null = null
+let frames: FrameService | null = null
 /** Autorización con Notion en curso (navegador abierto); se puede cancelar. */
 let connectingNotion: AbortController | null = null
 /** Escrituras iniciadas por el proceso principal (capturas, títulos); se esperan al cerrar. */
@@ -348,6 +355,88 @@ function registerNotionIpc(): void {
   })
 }
 
+function requireFrames(): FrameService {
+  if (!frames) {
+    throw new Error('Figma no está listo')
+  }
+  return frames
+}
+
+/** URLs guardadas de tarjetas de Figma de una mesa; el renderer solo aporta IDs. */
+async function figmaCardUrls(mesaId: unknown, cardIds: readonly unknown[]): Promise<string[]> {
+  const mesa = await requireStore().get(parseId(mesaId))
+  return cardIds.map(cardId => {
+    const parsed = parseId(cardId)
+    const card = mesa.cards.find(candidate => candidate.id === parsed)
+    if (!card || card.serviceId !== 'figma') {
+      throw new Error('La tarjeta no es de Figma')
+    }
+    return card.url
+  })
+}
+
+/** Los tokens personales de Figma empiezan por `figd_`. */
+function parseFigmaToken(value: unknown): string {
+  const token = typeof value === 'string' ? value.trim() : ''
+  if (!/^figd_[A-Za-z0-9_-]{20,200}$/.test(token)) {
+    throw new Error('Pega el token personal completo de Figma (empieza por figd_)')
+  }
+  return token
+}
+
+/** Lote máximo de miniaturas por petición del renderer. */
+const MAX_THUMBNAIL_BATCH = 200
+
+/** Token de Figma y frames (T-005). El token nunca llega al renderer. */
+function registerFigmaIpc(): void {
+  handle(IPC.settingsFigma, () => requireSettings().figmaView())
+  handle(IPC.settingsConnectFigma, async token => {
+    const valid = parseFigmaToken(token)
+    // Se comprueba con Figma antes de guardarlo.
+    const me = await createFigmaClient(valid, smokeMode ? smokeHooks.figmaApiBase : undefined).me()
+    await requireSettings().connectFigma(valid, me.handle)
+    log('settings-figma', { action: 'connected' })
+    return requireSettings().figmaView()
+  })
+  handle(IPC.settingsDisconnectFigma, async () => {
+    await requireSettings().disconnectFigma()
+    await requireFrames().clearCache()
+    log('settings-figma', { action: 'disconnected' })
+    return requireSettings().figmaView()
+  })
+  handle(IPC.figmaListFrames, async (mesaId, cardId) => {
+    const [url] = await figmaCardUrls(mesaId, [cardId])
+    return requireFrames().listFrames(url!)
+  })
+  handle(IPC.figmaFetchThumbnails, async (mesaId, cardIds) => {
+    if (!Array.isArray(cardIds) || cardIds.length > MAX_THUMBNAIL_BATCH) {
+      throw new Error('Lote de miniaturas no válido')
+    }
+    await requireFrames().fetchThumbnails(await figmaCardUrls(mesaId, cardIds))
+  })
+  handle(IPC.figmaThumbnail, async (mesaId, cardId) => {
+    const [url] = await figmaCardUrls(mesaId, [cardId])
+    return requireFrames().thumbnail(url!)
+  })
+}
+
+/** `table-figma://thumb/<archivo>/<nodo>`: miniaturas de frames guardadas, solo lectura. */
+function registerFigmaProtocol(): void {
+  protocol.handle(FIGMA_THUMB_PROTOCOL, async request => {
+    try {
+      const url = new URL(request.url)
+      const [fileKey, nodeFile, ...rest] = url.pathname.replace(/^\//, '').split('/')
+      const image =
+        url.hostname === 'thumb' && fileKey && nodeFile && rest.length === 0
+          ? await requireFrames().readThumbnail(fileKey, nodeFile)
+          : null
+      return image ? new Response(new Uint8Array(image), { headers: { 'content-type': 'image/jpeg' } }) : new Response(null, { status: 404 })
+    } catch {
+      return new Response(null, { status: 400 })
+    }
+  })
+}
+
 /** `table-capture://<mesaId>/<cardId>`: capturas guardadas, solo lectura. */
 function registerCaptureProtocol(): void {
   protocol.handle(CAPTURE_PROTOCOL, request => {
@@ -427,6 +516,8 @@ function createWindow(): BrowserWindow {
         card => sendToRenderer(IPC.cardChanged, mesaId, card),
       )
     },
+    // El smoke sirve archivos de Figma falsos desde 127.0.0.1.
+    shareKey: url => figmaFileKey(url, smokeMode ? ['figma.com', '127.0.0.1'] : undefined),
     ...(smokeMode ? { confirmDiscard: (origin: string, reason: 'quit' | 'unload') => smokeHooks.confirmDiscard(origin, reason) } : {}),
   })
   surface = manager
@@ -509,10 +600,19 @@ void app.whenReady().then(async () => {
   // El smoke usa un servidor MCP local con fichas sintéticas en lugar del de Notion.
   const notionMcp = createNotionMcp(settings, () => (smokeMode && smokeHooks.notionMcpUrl) || NOTION_MCP_URL)
   projects = createProjectService(settings, notionMcp, app.getPath('userData'))
+  // En el smoke, los archivos «de Figma» se sirven en local con una API falsa.
+  frames = createFrameService(
+    settings,
+    app.getPath('userData'),
+    smokeMode ? ['figma.com', '127.0.0.1'] : undefined,
+    smokeMode ? () => smokeHooks.figmaApiBase : undefined,
+  )
   Menu.setApplicationMenu(buildMenu())
   registerCaptureProtocol()
+  registerFigmaProtocol()
   registerIpc()
   registerNotionIpc()
+  registerFigmaIpc()
   const window = createWindow()
   mainWindow = window
   log('app-ready', { electron: process.versions.electron, chrome: process.versions.chrome })

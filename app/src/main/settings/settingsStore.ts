@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import type { FigmaSettingsView } from '../../shared/figma'
 import type { NotionSettingsView } from '../../shared/notion'
 import { writeFileAtomic } from '../files'
 
@@ -15,6 +16,12 @@ interface SettingsFile {
     readonly connection: string | null
     readonly workspaceName: string | null
     readonly userName: string | null
+  }
+  readonly figma: {
+    /** Token personal de Figma, cifrado, en base64. */
+    readonly token: string | null
+    /** Usuario de Figma del token, para mostrar quién está conectado. */
+    readonly handle: string | null
   }
 }
 
@@ -47,9 +54,18 @@ export interface SettingsStore {
   /** Sustituye las credenciales de la conexión actual (tokens renovados) sin cambiar la revisión. */
   updateNotionConnection(connection: NotionConnection): Promise<void>
   disconnectNotion(): Promise<void>
+  figmaView(): FigmaSettingsView
+  /** Token descifrado, o null. Solo para el cliente de Figma del proceso principal. */
+  figmaToken(): string | null
+  connectFigma(token: string, handle: string | null): Promise<void>
+  disconnectFigma(): Promise<void>
 }
 
-const EMPTY: SettingsFile = { version: 2, notion: { connection: null, workspaceName: null, userName: null } }
+const EMPTY: SettingsFile = {
+  version: 2,
+  notion: { connection: null, workspaceName: null, userName: null },
+  figma: { token: null, handle: null },
+}
 
 export function createSettingsStore(userData: string, box: SecretBox): SettingsStore {
   const path = join(userData, 'settings.json')
@@ -71,11 +87,23 @@ export function createSettingsStore(userData: string, box: SecretBox): SettingsS
     return write
   }
 
-  function seal(connection: NotionConnection): string {
+  function seal(plain: string): string {
     if (!box.isAvailable()) {
-      throw new Error('El llavero del sistema no está disponible; no se guarda la conexión con Notion')
+      throw new Error('El llavero del sistema no está disponible; no se guarda la credencial')
     }
-    return box.encrypt(JSON.stringify(connection)).toString('base64')
+    return box.encrypt(plain).toString('base64')
+  }
+
+  function unseal(sealed: string | null): string | null {
+    if (!sealed || !box.isAvailable()) {
+      return null
+    }
+    try {
+      return box.decrypt(Buffer.from(sealed, 'base64'))
+    } catch {
+      // Llavero distinto (otro equipo o copia de datos): hay que volver a conectar.
+      return null
+    }
   }
 
   return {
@@ -89,31 +117,48 @@ export function createSettingsStore(userData: string, box: SecretBox): SettingsS
     },
 
     notionConnection() {
-      if (!settings.notion.connection || !box.isAvailable()) {
+      const plain = unseal(settings.notion.connection)
+      if (!plain) {
         return null
       }
       try {
-        const parsed = JSON.parse(box.decrypt(Buffer.from(settings.notion.connection, 'base64'))) as Partial<NotionConnection>
+        const parsed = JSON.parse(plain) as Partial<NotionConnection>
         return { client: parsed.client, tokens: parsed.tokens }
       } catch {
-        // Llavero distinto (otro equipo o copia de datos): hay que volver a conectar.
         return null
       }
     },
 
     async connectNotion(connection, identity) {
-      const sealed = seal(connection)
+      const sealed = seal(JSON.stringify(connection))
       await update(current => ({ ...current, notion: { connection: sealed, ...identity } }), true)
     },
 
     async updateNotionConnection(connection) {
-      const sealed = seal(connection)
+      const sealed = seal(JSON.stringify(connection))
       // Solo si sigue conectado: una renovación tardía no resucita una conexión quitada.
       await update(current => (current.notion.connection ? { ...current, notion: { ...current.notion, connection: sealed } } : current), false)
     },
 
     async disconnectNotion() {
       await update(current => ({ ...current, notion: EMPTY.notion }), true)
+    },
+
+    figmaView() {
+      return { connected: settings.figma.token !== null, handle: settings.figma.handle }
+    },
+
+    figmaToken() {
+      return unseal(settings.figma.token)
+    },
+
+    async connectFigma(token, handle) {
+      const sealed = seal(token)
+      await update(current => ({ ...current, figma: { token: sealed, handle } }), false)
+    },
+
+    async disconnectFigma() {
+      await update(current => ({ ...current, figma: EMPTY.figma }), false)
     },
   }
 }
@@ -132,12 +177,18 @@ function load(path: string): SettingsFile {
     if (parsed?.version !== 2 || !notion) {
       return EMPTY
     }
+    const figma = parsed.figma
     return {
       version: 2,
       notion: {
         connection: typeof notion.connection === 'string' ? notion.connection : null,
         workspaceName: typeof notion.workspaceName === 'string' ? notion.workspaceName : null,
         userName: typeof notion.userName === 'string' ? notion.userName : null,
+      },
+      // Ajustes guardados antes de añadir Figma no tienen esta parte.
+      figma: {
+        token: typeof figma?.token === 'string' ? figma.token : null,
+        handle: typeof figma?.handle === 'string' ? figma.handle : null,
       },
     }
   } catch {

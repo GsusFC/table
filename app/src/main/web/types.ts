@@ -50,6 +50,12 @@ export interface SurfaceCallbacks {
   /** Título de página observado. */
   onTitle(mesaId: MesaId, cardId: CardId, title: string): void
   /**
+   * Clave para compartir una web cargada entre tarjetas (T-005): las tarjetas
+   * cuya URL da la misma clave no nula usan un único editor. Al entrar en una
+   * sin web cargada, se le cede la de otra tarjeta de la mesa con su clave.
+   */
+  shareKey(url: string): string | null
+  /**
    * Decide si descartar el trabajo que una página o un popup declara
    * pendiente. Por defecto, diálogo al usuario; el smoke lo sustituye.
    */

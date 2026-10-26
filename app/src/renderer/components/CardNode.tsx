@@ -1,10 +1,12 @@
 import { NodeResizer, type Node, type NodeProps } from '@xyflow/react'
 import { Ellipsis, TriangleAlert } from 'lucide-react'
 import { memo, useState } from 'react'
+import { figmaNodeId } from '../../shared/figma'
 import { CAPTURE_PROTOCOL } from '../../shared/ipc'
 import type { Card } from '../../shared/model'
 import { serviceById } from '../../shared/services'
 import { absoluteDate, displayHost, relativeDate } from '../lib/format'
+import { useFrameThumbnail } from '../lib/figmaThumbnails'
 import { cardStatus } from '../lib/status'
 import { useCanvas } from './canvasContext'
 import { ProjectFace, ProjectSource, useProjectView } from './ProjectFace'
@@ -18,7 +20,8 @@ export const CARD_MAX_DIMENSION = 4000
 
 /**
  * Tarjeta web en el lienzo: captura, servicio, título y estado de su web. Si es
- * una ficha de la base de proyectos de Notion, muestra la ficha en lugar de la captura.
+ * una ficha de la base de proyectos de Notion, muestra la ficha; si es un frame
+ * de Figma con miniatura, la miniatura.
  */
 export const CardNode = memo(function CardNode({ id, data, selected }: NodeProps<CardNodeType>) {
   const canvas = useCanvas()
@@ -28,7 +31,8 @@ export const CardNode = memo(function CardNode({ id, data, selected }: NodeProps
   const status = cardStatus(state)
   const host = displayHost(state?.currentUrl ?? card.url)
   const project = useProjectView(canvas.mesaId, card.id, service.id === 'notion')
-  const title = project.snapshot?.title || ((status.loaded ? state?.title : null) ?? card.title ?? host)
+  const frame = useFrameThumbnail(canvas.mesaId, card.id, service.id === 'figma' && figmaNodeId(card.url) !== null)
+  const title = project.snapshot?.title || frame?.name || ((status.loaded ? state?.title : null) ?? card.title ?? host)
 
   const captureSrc = card.capturedAt
     ? `${CAPTURE_PROTOCOL}://${canvas.mesaId}/${card.id}?v=${encodeURIComponent(card.capturedAt)}`
@@ -75,6 +79,8 @@ export const CardNode = memo(function CardNode({ id, data, selected }: NodeProps
         <div className={project.snapshot ? 'card-preview card-preview-project' : 'card-preview'}>
           {project.snapshot ? (
             <ProjectFace view={project} />
+          ) : frame ? (
+            <img className="card-capture card-thumbnail" src={frame.src} alt="" draggable={false} />
           ) : showCapture ? (
             <img
               className="card-capture"
@@ -105,6 +111,10 @@ export const CardNode = memo(function CardNode({ id, data, selected }: NodeProps
             <span className="card-meta">
               {project.snapshot ? (
                 <ProjectSource snapshot={project.snapshot} problem={project.problem} />
+              ) : frame ? (
+                <time dateTime={frame.fetchedAt} title={absoluteDate(frame.fetchedAt)}>
+                  {frame.pageName ? `${frame.pageName} · ` : ''}miniatura {relativeDate(frame.fetchedAt)}
+                </time>
               ) : !status.loaded && card.capturedAt ? (
                 <time dateTime={card.capturedAt} title={absoluteDate(card.capturedAt)}>
                   Captura {relativeDate(card.capturedAt)}

@@ -11,6 +11,10 @@ const CAPTURE_MAX_WIDTH = 1280
 const CAPTURE_JPEG_QUALITY = 72
 /** Chromium cancela la carga anterior al navegar: no es un fallo. */
 const ERR_ABORTED = -3
+/** Espera, sin respuesta de la página, antes de volver a pedir un cierre. */
+const CLOSE_SETTLE_MS = 3_000
+/** Peticiones de cierre sin respuesta antes de darla por conservada. */
+const CLOSE_ATTEMPTS = 3
 
 /** `auto`: descarga automática por límite de webs cargadas; nunca descarta cambios. */
 type CloseReason = 'quit' | 'unload' | 'auto'
@@ -32,7 +36,11 @@ const MAX_LOADED_WEBS = ((): number => {
 /** Web cargada de una tarjeta: su vista, la mesa a la que pertenece y su estado. */
 interface LoadedCard {
   readonly mesaId: MesaId
-  readonly cardId: CardId
+  /**
+   * Tarjeta dueña de la vista. Cambia si la vista se cede a otra tarjeta del
+   * mismo archivo (T-005); las escuchas lo leen al dispararse.
+   */
+  cardId: CardId
   readonly view: WebContentsView
   /**
    * Popups abiertos desde esta web (y desde sus popups); se cierran al
@@ -45,6 +53,12 @@ interface LoadedCard {
   loadStartedAt: number | null
   /** Último momento en que se entró o salió de esta web; para elegir cuál descargar. */
   lastUsedAt: number
+  /**
+   * Cierre de la vista en curso: su destrucción la gestiona quien cierra. Si
+   * la vista desaparece sin él (un cierre que se dio por conservado y llegó
+   * tarde), se retira del registro al momento.
+   */
+  closing: boolean
 }
 
 function toRectangle(bounds: PanelBounds): Rectangle {
@@ -120,6 +134,11 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
    * desaparece y devuelve cómo dejar de escuchar. Si la página avisa de
    * trabajo pendiente, decide el usuario; Table no descarta cambios por su
    * cuenta. `true` si quedó cerrado.
+   *
+   * Chromium puede ignorar un cierre pedido justo después de otro que la página
+   * frenó con `beforeunload`: ni avisa ni cierra. Si no pasa nada en
+   * CLOSE_SETTLE_MS se vuelve a pedir; tras CLOSE_ATTEMPTS sin respuesta se da
+   * por conservada (nunca se descarta sin respuesta) para no bloquear la cola.
    */
   function closeGuarded(
     contents: WebContents,
@@ -128,7 +147,16 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
     watchGone: (onGone: () => void) => () => void,
   ): Promise<boolean> {
     const { promise, resolve } = Promise.withResolvers<boolean>()
+    let attempts = 1
+    let timer: NodeJS.Timeout | null = null
+    const stopRetrying = (): void => {
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+    }
     const onPreventUnload = (event: Electron.Event): void => {
+      stopRetrying()
       const origin = originOf(contents.getURL())
       const discard = confirmDiscard(origin, reason)
       log('unload-prevented', { origin, reason, discard })
@@ -141,12 +169,30 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
       resolve(false)
     }
     const stopWatching = watchGone(() => {
+      stopRetrying()
       if (!contents.isDestroyed()) {
         contents.removeListener('will-prevent-unload', onPreventUnload)
       }
       resolve(true)
     })
+    const retry = (): void => {
+      timer = null
+      if (contents.isDestroyed()) {
+        return
+      }
+      if (attempts >= CLOSE_ATTEMPTS) {
+        log('unload-stalled', { origin: originOf(contents.getURL()), reason })
+        contents.removeListener('will-prevent-unload', onPreventUnload)
+        stopWatching()
+        resolve(false)
+        return
+      }
+      attempts += 1
+      timer = setTimeout(retry, CLOSE_SETTLE_MS)
+      close()
+    }
     contents.on('will-prevent-unload', onPreventUnload)
+    timer = setTimeout(retry, CLOSE_SETTLE_MS)
     close()
     return promise
   }
@@ -180,6 +226,7 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
       },
       loadStartedAt: null,
       lastUsedAt: performance.now(),
+      closing: false,
     }
     attachListeners(card)
     cards.set(cardId, card)
@@ -246,14 +293,132 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
       }
       update(card, { status: 'failed', entered: false, error: `El proceso de la web terminó: ${details.reason}` })
     })
+    contents.once('destroyed', () => onViewGone(card))
   }
 
-  function startLoad(card: LoadedCard, url: string): void {
+  /**
+   * La vista desapareció sin un cierre en curso: la tarjeta queda descargada
+   * y no se vuelve a usar una vista destruida.
+   */
+  function onViewGone(card: LoadedCard): void {
+    if (card.closing || cards.get(card.cardId) !== card) {
+      return
+    }
+    const origin = cardOrigin(card)
+    const wasActive = active === card
+    detach(card)
+    if (wasActive && !window.isDestroyed()) {
+      window.webContents.focus()
+    }
+    card.loadStartedAt = null
+    update(card, { status: 'unloaded', entered: false, currentUrl: null, error: null })
+    log('surface-gone', { origin })
+  }
+
+  /** Estado y registro de una carga que empieza; la navegación la inicia quien llama. */
+  function markLoadStarted(card: LoadedCard, url: string): void {
     card.loadStartedAt = performance.now()
     update(card, { status: 'loading', currentUrl: url, error: null, loadMs: null })
     log('surface-load', { origin: originOf(url) })
+  }
+
+  function startLoad(card: LoadedCard, url: string): void {
+    markLoadStarted(card, url)
     // Los fallos se notifican con `did-fail-load`.
     card.view.webContents.loadURL(url).catch(() => undefined)
+  }
+
+  /**
+   * Web viva de otra tarjeta de la mesa cuya URL comparte clave con `url`
+   * (mismo archivo de Figma); la usada más recientemente, o null.
+   */
+  function findDonor(mesaId: MesaId, url: string): LoadedCard | null {
+    const key = callbacks.shareKey(url)
+    if (key === null) {
+      return null
+    }
+    let donor: LoadedCard | null = null
+    for (const candidate of cards.values()) {
+      const candidateUrl = candidate.state.currentUrl
+      if (
+        candidate.mesaId === mesaId &&
+        candidateUrl !== null &&
+        isAlive(candidate) &&
+        callbacks.shareKey(candidateUrl) === key &&
+        (!donor || candidate.lastUsedAt > donor.lastUsedAt)
+      ) {
+        donor = candidate
+      }
+    }
+    return donor
+  }
+
+  /**
+   * Cede la vista de `donor`, con sus popups y escuchas, a `cardId`: sigue
+   * siendo una sola web cargada. La tarjeta donante queda descargada. Las
+   * escuchas leen `card.cardId` al dispararse, así que desde aquí informan
+   * (estado y título) solo de la nueva tarjeta.
+   */
+  function transfer(donor: LoadedCard, cardId: CardId): LoadedCard {
+    const donorId = donor.cardId
+    cards.delete(donorId)
+    callbacks.onState({ ...donor.state, cardId: donorId, status: 'unloaded', entered: false, currentUrl: null, error: null })
+    donor.cardId = cardId
+    donor.state = { ...donor.state, cardId, entered: false }
+    cards.set(cardId, donor)
+    callbacks.onState(donor.state)
+    log('surface-shared', { origin: cardOrigin(donor) })
+    return donor
+  }
+
+  /**
+   * Comparte con `cardId` la web de `donor` y la lleva a `url`. La cesión solo
+   * se hace si la navegación sigue adelante: `did-start-navigation` llega
+   * después de `beforeunload`, y en ese momento (antes de cualquier evento de
+   * la nueva carga) la vista pasa a `cardId`. Si la página frena la
+   * navegación con `beforeunload` (o se cancela por otro motivo), no se
+   * descarta nada: `donor` sigue siendo la dueña, con su página y su estado,
+   * y se muestra ella; volver a entrar en `cardId` lo intenta de nuevo.
+   * Devuelve la tarjeta que se muestra, o null si la vista ya no existe.
+   */
+  async function shareView(donor: LoadedCard, cardId: CardId, url: string): Promise<LoadedCard | null> {
+    if (donor.state.currentUrl === url) {
+      return transfer(donor, cardId)
+    }
+    const contents = donor.view.webContents
+    const { status, error } = donor.state
+    const { promise, resolve } = Promise.withResolvers<boolean>()
+    const onStartNavigation = (details: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>): void => {
+      // Sin iniciador: la navegación de `loadURL`, no una de la propia página.
+      if (!details.isMainFrame || details.initiator) {
+        return
+      }
+      contents.removeListener('did-start-navigation', onStartNavigation)
+      markLoadStarted(transfer(donor, cardId), url)
+      resolve(true)
+    }
+    contents.on('did-start-navigation', onStartNavigation)
+    // Sin `preventDefault` en `will-prevent-unload`, Electron cancela la navegación
+    // y `loadURL` termina sin haberla empezado.
+    void contents
+      .loadURL(url)
+      .catch(() => undefined)
+      .finally(() => {
+        if (!contents.isDestroyed()) {
+          contents.removeListener('did-start-navigation', onStartNavigation)
+        }
+        resolve(false)
+      })
+    if (await promise) {
+      return donor
+    }
+    if (!isAlive(donor) || cards.get(donor.cardId) !== donor) {
+      return null
+    }
+    // `did-start-loading` ya se emitió para la navegación cancelada.
+    update(donor, { status, error })
+    log('surface-navigation-kept', { origin: cardOrigin(donor) })
+    return donor
   }
 
   /** Retira la vista de la ventana y del registro. Los popups se tratan aparte. */
@@ -270,6 +435,7 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
   /** Cierre sin `beforeunload`: solo para vistas cuyo proceso ya no existe. */
   function forceClose(card: LoadedCard): void {
     const contents = card.view.webContents
+    card.closing = true
     if (!contents.isDestroyed()) {
       contents.close()
     }
@@ -322,6 +488,7 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
       return true
     }
     const contents = card.view.webContents
+    card.closing = true
     const closed = await closeGuarded(
       contents,
       reason,
@@ -330,7 +497,9 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
         contents.once('destroyed', onGone)
         return () => contents.removeListener('destroyed', onGone)
       },
-    )
+    ).finally(() => {
+      card.closing = false
+    })
     if (closed) {
       detach(card)
     }
@@ -431,7 +600,8 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
     if (active && active !== card) {
       await exitActive()
     }
-    if (card && card.state.status === 'failed') {
+    // Una vista destruida o caída nunca se reutiliza.
+    if (card && (card.state.status === 'failed' || !isAlive(card))) {
       if (isAlive(card)) {
         // Fallo de carga con el proceso vivo: se reintenta en la misma vista.
         startLoad(card, url)
@@ -444,8 +614,15 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
       }
     }
     if (!card) {
-      card = createCard(mesaId, cardId)
-      startLoad(card, url)
+      // Tarjetas del mismo archivo de Figma comparten un único editor (T-005).
+      const donor = findDonor(mesaId, url)
+      const shared = donor ? await shareView(donor, cardId, url) : null
+      if (shared) {
+        card = shared
+      } else {
+        card = createCard(mesaId, cardId)
+        startLoad(card, url)
+      }
     }
     active = card
     card.lastUsedAt = performance.now()
