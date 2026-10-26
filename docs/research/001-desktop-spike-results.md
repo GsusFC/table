@@ -148,7 +148,16 @@ Pegar el frame es la primera edición real hecha desde Table. Falta comprobar qu
 
 Resultado para Figma: autenticación, edición guardada y sesión persistente tras reiniciar comprobadas en el entorno descrito.
 
-Pendiente: Pinterest.
+### Pinterest (2026-10-26)
+
+Abierto desde la barra de dirección en la misma partición (`https://es.pinterest.com`). Registro de la primera sesión:
+
+- Consultas denegadas: `notifications` y `background-sync` en `es.pinterest.com`, y `background-sync` en `accounts.google.com`.
+- Solicitud concedida por el usuario: `storage-access` para `www.recaptcha.net`.
+- No se abrió ningún popup: el paso por `accounts.google.com` ocurrió dentro de la página. `[INFERENCIA]` Login con Google integrado en la página o por redirección.
+- Cierre limpio (código 0).
+
+Pendiente: confirmación del usuario sobre el login y la navegación, y persistencia de la sesión al reabrir.
 
 ## Incremento C · Conservación, descarga y memoria
 
