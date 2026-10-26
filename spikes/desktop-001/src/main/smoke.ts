@@ -15,6 +15,13 @@ window.__keys = [];
 addEventListener('keydown', e => __keys.push({ key: e.key, meta: e.metaKey, shift: e.shiftKey, ctrl: e.ctrlKey }), true);
 </script></body></html>`
 
+/** Página sintética que declara trabajo pendiente con `beforeunload`. */
+const GUARDED_HTML = `<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><title>Fixture con cambios</title></head>
+<body><input id="field" autofocus>
+<script>addEventListener('beforeunload', e => { e.preventDefault(); e.returnValue = '' })</script>
+</body></html>`
+
 const TOTAL_TIMEOUT_MS = 60_000
 const BOUNDS_TOLERANCE_PX = 1
 
@@ -40,9 +47,9 @@ async function waitFor(predicate: () => boolean, label: string, timeoutMs = 10_0
 }
 
 async function startFixtureServer(): Promise<{ server: Server; url: string }> {
-  const server = createServer((_request, response) => {
+  const server = createServer((request, response) => {
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-    response.end(FIXTURE_HTML)
+    response.end(request.url === '/guarded' ? GUARDED_HTML : FIXTURE_HTML)
   })
   const { promise, resolve } = Promise.withResolvers<void>()
   server.listen(0, '127.0.0.1', resolve)
@@ -197,6 +204,59 @@ export async function runSmoke(window: BrowserWindow, surface: WebSurface): Prom
     await delay(300)
     record('popup: no abre esquemas no web', blockedPopup && BrowserWindow.getAllWindows().length === windowsBefore, {
       lastPopup: surface.getState().lastPopup,
+    })
+
+    // Incremento C: descarga, recarga y aviso de trabajo pendiente.
+    const unloadResult = await inUi<string>('window.tableSpike.unload()')
+    const afterUnload = surface.getState()
+    record(
+      'descarga: cierra la web y conserva URL y captura',
+      unloadResult === 'unloaded' &&
+        surface.getView() === null &&
+        afterUnload.status === 'unloaded' &&
+        afterUnload.url === fixtureUrl &&
+        afterUnload.captureDataUrl !== null,
+      { status: afterUnload.status },
+    )
+    await inUi(`window.tableSpike.open(${JSON.stringify(fixtureUrl)})`)
+    await waitFor(() => surface.getState().status === 'ready', 'recarga')
+    record('recarga: vuelve a cargar y mide la duración', typeof surface.getState().loadMs === 'number', {
+      loadMs: surface.getState().loadMs,
+    })
+
+    await inUi(`window.tableSpike.open(${JSON.stringify(`${fixtureUrl}guarded`)})`)
+    await waitFor(() => surface.getState().status === 'ready', 'carga de la página con cambios')
+    const guarded = surface.getView()?.webContents
+    if (!guarded) {
+      throw new Error('No se creó la vista de la página con cambios')
+    }
+    await inUi('window.tableSpike.enter()')
+    await waitFor(() => surface.getState().entered, 'entrar en la página con cambios')
+    // Chromium solo respeta `beforeunload` si la página recibió interacción del usuario.
+    guarded.sendInputEvent({ type: 'mouseDown', x: 20, y: 20, button: 'left', clickCount: 1 })
+    guarded.sendInputEvent({ type: 'mouseUp', x: 20, y: 20, button: 'left', clickCount: 1 })
+    sendKey(guarded, 'a')
+    await delay(200)
+
+    let prompts = 0
+    surface.confirmDiscard = () => {
+      prompts += 1
+      return false
+    }
+    const kept = await inUi<string>('window.tableSpike.unload()')
+    record(
+      'aviso: si la página declara cambios y el usuario mantiene, no se descarga',
+      kept === 'kept' && prompts === 1 && surface.getView()?.webContents.isDestroyed() === false,
+      { kept, prompts },
+    )
+    surface.confirmDiscard = () => {
+      prompts += 1
+      return true
+    }
+    const discarded = await inUi<string>('window.tableSpike.unload()')
+    record('aviso: si el usuario acepta descartar, se descarga', discarded === 'unloaded' && prompts === 2, {
+      discarded,
+      prompts,
     })
   } catch (error) {
     record('ejecución', false, error instanceof Error ? error.message : String(error))

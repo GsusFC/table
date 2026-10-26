@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { IPC } from '../shared/ipc'
 import { parseBounds, parseHttpUrl, parseZoomFactor } from '../shared/validate'
+import { runCycles } from './cycles'
 import { log } from './log'
 import { runSmoke } from './smoke'
 import { WebSurface } from './webSurface'
@@ -68,6 +69,7 @@ function registerIpc(): void {
   handle(IPC.open, payload => requireSurface().open(parseHttpUrl(payload)))
   handle(IPC.enter, () => requireSurface().enter())
   handle(IPC.exit, () => requireSurface().exit())
+  handle(IPC.unload, () => requireSurface().unload())
   handle(IPC.setZoom, payload => requireSurface().setZoom(parseZoomFactor(payload)))
   handle(IPC.getState, () => requireSurface().getState())
 
@@ -139,7 +141,7 @@ function createWindow(): BrowserWindow {
       return
     }
     event.preventDefault()
-    void webSurface.closeRespectingUnload().then(closed => {
+    void webSurface.closeForQuit().then(closed => {
       if (closed && !window.isDestroyed()) {
         window.close()
       }
@@ -172,18 +174,34 @@ void app.whenReady().then(async () => {
   mainWindow = window
   log('app-ready', { electron: process.versions.electron, chrome: process.versions.chrome })
 
-  if (smokeMode && surface) {
+  if (!surface) {
+    return
+  }
+  if (smokeMode) {
     await runSmoke(window, surface)
     return
   }
 
   // Dirección del piloto configurada fuera del repositorio.
-  const startUrl = process.env['TABLE_SPIKE_START_URL']
-  if (startUrl) {
-    try {
-      surface?.open(parseHttpUrl(startUrl))
-    } catch (error) {
-      log('start-url-rejected', { message: error instanceof Error ? error.message : String(error) })
-    }
+  const rawStartUrl = process.env['TABLE_SPIKE_START_URL']
+  if (!rawStartUrl) {
+    return
   }
+  let startUrl: string
+  try {
+    startUrl = parseHttpUrl(rawStartUrl)
+  } catch (error) {
+    log('start-url-rejected', { message: error instanceof Error ? error.message : String(error) })
+    return
+  }
+
+  const cycles = Number.parseInt(process.env['TABLE_SPIKE_CYCLES'] ?? '0', 10)
+  if (cycles > 0) {
+    const activeSeconds = Number.parseInt(process.env['TABLE_SPIKE_ACTIVE_SECONDS'] ?? '5', 10)
+    await runCycles(window, surface, startUrl, { cycles, activeMs: activeSeconds * 1000 })
+    return
+  }
+  await surface.open(startUrl).catch((error: unknown) => {
+    log('start-url-failed', { message: error instanceof Error ? error.message : String(error) })
+  })
 })

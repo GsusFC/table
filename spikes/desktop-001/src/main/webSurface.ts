@@ -10,7 +10,7 @@ import {
   type Rectangle,
   type WebContents,
 } from 'electron'
-import type { SurfaceBounds, SurfaceState } from '../shared/ipc'
+import type { SurfaceBounds, SurfaceState, UnloadResult } from '../shared/ipc'
 import { isExitShortcut } from '../shared/shortcut'
 import { isHttpUrl } from '../shared/validate'
 import { log, originOf } from './log'
@@ -28,17 +28,21 @@ const INITIAL_STATE: SurfaceState = {
   title: null,
   zoomFactor: 1,
   captureDataUrl: null,
+  capturedAt: null,
+  loadMs: null,
   error: null,
   lastPopup: null,
 }
 
 let sessionConfigured = false
 
+export type PermissionPrompt = (origin: string, permission: string) => Promise<boolean>
+
 /**
- * Incremento B: cada permiso se pregunta al usuario y la decisión se recuerda
- * por origen hasta cerrar Table. Las descargas siguen bloqueadas.
+ * Incremento B: cada permiso se pregunta y la decisión se recuerda por origen
+ * hasta cerrar Table. Las descargas siguen bloqueadas.
  */
-function configureSurfaceSession(window: BrowserWindow): void {
+function configureSurfaceSession(prompt: PermissionPrompt): void {
   if (sessionConfigured) {
     return
   }
@@ -55,21 +59,11 @@ function configureSurfaceSession(window: BrowserWindow): void {
       callback(remembered)
       return
     }
-    void dialog
-      .showMessageBox(window, {
-        type: 'question',
-        buttons: ['Denegar', 'Permitir'],
-        defaultId: 0,
-        cancelId: 0,
-        message: `${origin} solicita el permiso «${permission}».`,
-        detail: 'La decisión se recuerda para este origen hasta cerrar Table.',
-      })
-      .then(({ response }) => {
-        const granted = response === 1
-        decisions.set(key, granted)
-        log('permission-request', { permission, origin, granted })
-        callback(granted)
-      })
+    void prompt(origin, permission).then(granted => {
+      decisions.set(key, granted)
+      log('permission-request', { permission, origin, granted })
+      callback(granted)
+    })
   })
   surfaceSession.setPermissionCheckHandler((_contents, permission, requestingOrigin) => {
     const granted = decisions.get(`${requestingOrigin}|${permission}`) ?? false
@@ -140,6 +134,37 @@ export class WebSurface {
   private bounds: Rectangle = { x: 0, y: 0, width: 0, height: 0 }
   private state: SurfaceState = INITIAL_STATE
   private exiting = false
+  private loadStartedAt: number | null = null
+
+  /**
+   * Pregunta si descartar el trabajo que la página dice tener pendiente.
+   * Sustituible solo por el smoke y el modo ciclos, que no responden diálogos.
+   */
+  confirmDiscard: (reason: 'quit' | 'unload') => boolean = reason =>
+    dialog.showMessageBoxSync(this.window, {
+      type: 'warning',
+      buttons: reason === 'quit' ? ['Cancelar', 'Salir sin guardar'] : ['Mantener cargada', 'Descargar sin guardar'],
+      defaultId: 0,
+      cancelId: 0,
+      message: 'La web avisa de trabajo sin guardar.',
+      detail: 'Table no puede comprobar si el cambio se ha guardado. Si continúas, puede perderse.',
+    }) === 1
+
+  /**
+   * Pregunta por un permiso web. El modo ciclos lo sustituye para medir sin
+   * intervención; la decisión queda registrada igualmente.
+   */
+  askPermission: PermissionPrompt = async (origin, permission) => {
+    const { response } = await dialog.showMessageBox(this.window, {
+      type: 'question',
+      buttons: ['Denegar', 'Permitir'],
+      defaultId: 0,
+      cancelId: 0,
+      message: `${origin} solicita el permiso «${permission}».`,
+      detail: 'La decisión se recuerda para este origen hasta cerrar Table.',
+    })
+    return response === 1
+  }
 
   constructor(
     private readonly window: BrowserWindow,
@@ -160,12 +185,16 @@ export class WebSurface {
   }
 
   /**
-   * Reutiliza la vista existente. Limitación del incremento A: navegar desde la
-   * barra no consulta `beforeunload`; el cierre seguro corresponde al incremento C.
+   * Cada apertura crea una vista nueva. Si ya hay una, se descarga antes
+   * respetando `beforeunload`; si el usuario la mantiene, no se navega.
    */
-  open(url: string): void {
-    const view = this.view ?? this.createView()
-    this.update({ status: 'loading', url, title: null, error: null, lastPopup: null })
+  async open(url: string): Promise<void> {
+    if (this.view && (await this.unload()) === 'kept') {
+      throw new Error('La web anterior sigue cargada: avisó de trabajo sin guardar')
+    }
+    const view = this.createView()
+    this.loadStartedAt = performance.now()
+    this.update({ status: 'loading', url, title: null, error: null, lastPopup: null, loadMs: null })
     log('surface-open', { origin: originOf(url) })
     // Los fallos se notifican con `did-fail-load`.
     view.webContents.loadURL(url).catch(() => undefined)
@@ -196,11 +225,32 @@ export class WebSurface {
       }
       view.setVisible(false)
       this.window.webContents.focus()
-      this.update({ entered: false, captureDataUrl })
+      this.update({ entered: false, captureDataUrl, capturedAt: captureDataUrl ? Date.now() : this.state.capturedAt })
       log('surface-exit', { captured: captureDataUrl !== null })
     } finally {
       this.exiting = false
     }
+  }
+
+  /**
+   * Descarga manual: cierra el contenido web y conserva URL y captura. Nunca
+   * se descarga por tiempo ni por presión de memoria: Table no sabe si el
+   * editor tiene trabajo sin sincronizar.
+   */
+  async unload(): Promise<UnloadResult> {
+    if (!this.view) {
+      return 'unloaded'
+    }
+    if (this.state.entered) {
+      await this.exit()
+    }
+    if (!(await this.closeView('unload'))) {
+      return 'kept'
+    }
+    this.loadStartedAt = null
+    this.update({ status: 'unloaded', entered: false, error: null })
+    log('surface-unloaded')
+    return 'unloaded'
   }
 
   setBounds(bounds: SurfaceBounds): void {
@@ -220,12 +270,16 @@ export class WebSurface {
     return this.view !== null && !this.view.webContents.isDestroyed()
   }
 
+  /** Cierre de la ventana: mismo criterio que la descarga. `false` si el usuario cancela. */
+  closeForQuit(): Promise<boolean> {
+    return this.closeView('quit')
+  }
+
   /**
-   * Cierra la web respetando `beforeunload`. Si la página avisa de trabajo
+   * Cierra la vista respetando `beforeunload`. Si la página avisa de trabajo
    * pendiente, el usuario decide; Table no descarta cambios por su cuenta.
-   * Resuelve `false` si el usuario cancela.
    */
-  closeRespectingUnload(): Promise<boolean> {
+  private closeView(reason: 'quit' | 'unload'): Promise<boolean> {
     const view = this.view
     if (!view || view.webContents.isDestroyed()) {
       this.detach()
@@ -234,16 +288,9 @@ export class WebSurface {
     const contents = view.webContents
     const { promise, resolve } = Promise.withResolvers<boolean>()
     const onPreventUnload = (event: Electron.Event): void => {
-      const choice = dialog.showMessageBoxSync(this.window, {
-        type: 'warning',
-        buttons: ['Cancelar', 'Salir sin guardar'],
-        defaultId: 0,
-        cancelId: 0,
-        message: 'La web avisa de trabajo sin guardar.',
-        detail: 'Table no puede comprobar si el cambio se ha guardado. Si sales ahora, puede perderse.',
-      })
-      log('unload-prevented', { leave: choice === 1 })
-      if (choice === 1) {
+      const discard = this.confirmDiscard(reason)
+      log('unload-prevented', { reason, discard })
+      if (discard) {
         event.preventDefault()
         return
       }
@@ -294,7 +341,7 @@ export class WebSurface {
   }
 
   private createView(): WebContentsView {
-    configureSurfaceSession(this.window)
+    configureSurfaceSession((origin, permission) => this.askPermission(origin, permission))
     const view = new WebContentsView({
       webPreferences: {
         partition: SURFACE_PARTITION,
@@ -321,7 +368,6 @@ export class WebSurface {
     if (!this.window.isDestroyed()) {
       this.window.contentView.removeChildView(view)
     }
-    this.update(INITIAL_STATE)
   }
 
   private guard(contents: WebContents): void {
@@ -337,6 +383,13 @@ export class WebSurface {
 
     contents.on('did-start-loading', () => this.update({ status: 'loading', error: null }))
     contents.on('did-stop-loading', () => {
+      if (this.loadStartedAt !== null) {
+        const loadMs = Math.round(performance.now() - this.loadStartedAt)
+        this.loadStartedAt = null
+        log('load-finished', { loadMs })
+        this.update({ status: 'ready', loadMs })
+        return
+      }
       if (this.state.status === 'loading') {
         this.update({ status: 'ready' })
       }

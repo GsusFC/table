@@ -179,4 +179,41 @@ Lo que cambió respecto al incremento A para que funcionara: popups como ventana
 
 ## Incremento C · Conservación, descarga y memoria
 
-No empezado. Requiere fijar los umbrales del escenario A en [validación de memoria](../memory-validation.md).
+En curso. Umbrales fijados en [validación de memoria](../memory-validation.md) el 2026-10-26.
+
+### Estados y cierre seguro
+
+| Estado | Qué ocurre | Memoria |
+| --- | --- | --- |
+| Activa | Vista visible con la interacción. | Cargada |
+| Conservada | Al salir: captura con hora y vista oculta, sin cerrar. La interfaz lo indica: «la web sigue cargada en memoria». | Cargada |
+| Descargada | Botón «Descargar»: cierra el contenido con `waitForBeforeUnload: true`. Quedan URL y captura fija con su hora. «Recargar» vuelve a abrirla y mide la carga. | Liberada (a medir) |
+
+- La descarga es siempre manual: nunca por tiempo ni por presión de memoria.
+- Si la página declara cambios con `beforeunload`, Table pregunta «Mantener cargada» o «Descargar sin guardar». Mismo criterio al cerrar la ventana.
+- Abrir otra dirección descarga antes la actual por el mismo camino; en el incremento A se navegaba sin consultar `beforeunload`.
+- Smoke: 23/23. Comprobaciones nuevas: descarga con URL y captura conservadas, recarga con duración medida, y una página sintética con `beforeunload` que se mantiene si el usuario elige mantener y se descarga si acepta descartar.
+
+### Arnés de medición
+
+| Pieza | Función |
+| --- | --- |
+| Modo ciclos (`TABLE_SPIKE_CYCLES`, `TABLE_SPIKE_ACTIVE_SECONDS`) | Reposo del shell 30 s; por ciclo: cargar, activa, conservada 5 s, descargar, observar 30 s. Marcadores `[t001-cycle]` con hora. Sin intervención: permisos denegados y cambios pendientes mantenidos (aborta el ciclo). |
+| `scripts/sample-memory.mjs` | Suma de `phys_footprint` de los procesos cuya línea de comandos contiene un texto, presión de memoria y swap, cada 2 s, en JSONL. |
+| `scripts/summarize-cycles.mjs` | Cruza muestras y marcadores: reposo del shell, pico, memoria conservada y tras descargar por ciclo, pendiente residual, presión máxima y variación de swap. |
+
+Comandos (build compilada, no modo desarrollo; los resultados quedan en `.local/`, ignorado por Git):
+
+```sh
+npm run build
+node scripts/sample-memory.mjs --match 'spikes/desktop-001/node_modules/electron/dist' --out .local/samples.jsonl &
+TABLE_SPIKE_START_URL='<url>' TABLE_SPIKE_CYCLES=10 npx electron . > .local/table.txt
+kill %1
+node scripts/summarize-cycles.mjs --samples .local/samples.jsonl --log .local/table.txt
+```
+
+Validación del arnés con una página sintética local, 2 ciclos: reposo del shell 115 MiB, pico 245 MiB, conservada 209 / 202 MiB, tras descargar 132 / 145 MiB, sin procesos restantes. Solo valida que el arnés funciona; no es una medición del escenario A.
+
+### Condiciones del equipo antes de medir
+
+El 2026-10-26, antes de cualquier medición, el equipo estaba en presión de memoria de **aviso** (`kern.memorystatus_vm_pressure_level` = 2) con **~24 000 de 24 576 MiB de swap usados**, con otras aplicaciones abiertas. En ese estado el criterio «presión normal y swap sin crecimiento» no se puede cumplir por causas ajenas a Table. La medición requiere cerrar aplicaciones pesadas y registrar el estado inicial.

@@ -6,6 +6,7 @@ const api: TableSpikeApi = {
   open: url => ipcRenderer.invoke(IPC.open, url),
   enter: () => ipcRenderer.invoke(IPC.enter),
   exit: () => ipcRenderer.invoke(IPC.exit),
+  unload: () => ipcRenderer.invoke(IPC.unload),
   setBounds: bounds => ipcRenderer.send(IPC.setBounds, bounds),
   setZoom: factor => ipcRenderer.invoke(IPC.setZoom, factor),
   getState: () => ipcRenderer.invoke(IPC.getState),

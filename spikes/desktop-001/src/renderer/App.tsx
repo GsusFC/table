@@ -12,6 +12,21 @@ const STATUS_LABEL: Record<SurfaceState['status'], string> = {
   loading: 'Cargando',
   ready: 'Cargada',
   failed: 'Error',
+  unloaded: 'Descargada',
+}
+
+function cardStateLabel(state: SurfaceState | null): string {
+  if (!state || state.status === 'empty') {
+    return '—'
+  }
+  if (state.status === 'unloaded') {
+    return 'Descargada'
+  }
+  return state.entered ? 'Activa' : 'Conservada (cargada y oculta)'
+}
+
+function formatTime(epochMs: number | null): string {
+  return epochMs === null ? '—' : new Date(epochMs).toLocaleTimeString('es-ES')
 }
 
 /** Quita el prefijo que Electron añade a los errores de `ipcRenderer.invoke`. */
@@ -90,7 +105,19 @@ export function App() {
   }
 
   const canEnter = state?.status === 'ready' || state?.status === 'loading'
-  const hasView = state !== null && state.status !== 'empty'
+  const unloaded = state?.status === 'unloaded'
+  const hasView = state !== null && state.status !== 'empty' && !unloaded
+  const reload = (): void => {
+    if (state?.url) {
+      const url = state.url
+      void run(() => api.open(url))
+    }
+  }
+  const unload = (): void => {
+    void run(async () => {
+      await api.unload()
+    })
+  }
   const zoom = state?.zoomFactor ?? 1
   const changeZoom = (factor: number): void => {
     void run(() => api.setZoom(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, factor))))
@@ -129,19 +156,30 @@ export function App() {
                   +
                 </button>
               </div>
-              {entered ? (
+              {entered && (
                 <button type="button" className="primary" onClick={() => void run(api.exit)}>
                   Volver a Table <kbd>{SHORTCUT}</kbd>
                 </button>
-              ) : (
-                <button
-                  ref={enterRef}
-                  type="button"
-                  className="primary"
-                  disabled={!canEnter}
-                  onClick={() => void run(api.enter)}
-                >
-                  Entrar
+              )}
+              {!entered && hasView && (
+                <>
+                  <button type="button" onClick={unload}>
+                    Descargar
+                  </button>
+                  <button
+                    ref={enterRef}
+                    type="button"
+                    className="primary"
+                    disabled={!canEnter}
+                    onClick={() => void run(api.enter)}
+                  >
+                    Entrar
+                  </button>
+                </>
+              )}
+              {unloaded && (
+                <button ref={enterRef} type="button" className="primary" onClick={reload}>
+                  Recargar
                 </button>
               )}
             </div>
@@ -155,12 +193,20 @@ export function App() {
             {!entered &&
               (state?.captureDataUrl ? (
                 <figure className="capture">
-                  <img src={state.captureDataUrl} alt="Captura de la web al salir" />
-                  <figcaption>Captura al salir. No es la web activa: doble clic o Entrar para volver.</figcaption>
+                  <img src={state.captureDataUrl} alt="Captura de la web" />
+                  <figcaption>
+                    {unloaded
+                      ? `Descargada. Captura fija de las ${formatTime(state.capturedAt)}: la web no está cargada. Recargar para usarla.`
+                      : `Conservada: la web sigue cargada en memoria. Captura de las ${formatTime(state.capturedAt)}; doble clic o Entrar para volver.`}
+                  </figcaption>
                 </figure>
               ) : (
                 <p className="placeholder">
-                  {hasView ? 'Web cargada y oculta. Doble clic o Entrar para interactuar.' : 'Abre una dirección para empezar.'}
+                  {unloaded
+                    ? 'Descargada sin captura. Recargar para usarla.'
+                    : hasView
+                      ? 'Web cargada y oculta. Doble clic o Entrar para interactuar.'
+                      : 'Abre una dirección para empezar.'}
                 </p>
               ))}
           </div>
@@ -172,8 +218,12 @@ export function App() {
             <textarea placeholder="Escribe aquí al salir de la web para comprobar que el teclado vuelve a Table." />
           </label>
           <dl className="facts">
+            <dt>Tarjeta</dt>
+            <dd>{cardStateLabel(state)}</dd>
             <dt>Foco</dt>
             <dd>{entered ? 'Web' : 'Table'}</dd>
+            <dt>Última carga</dt>
+            <dd>{state?.loadMs == null ? '—' : `${(state.loadMs / 1000).toFixed(1)} s`}</dd>
             <dt>Zoom de la web</dt>
             <dd>{Math.round(zoom * 100)}%</dd>
             <dt>Salir de la web</dt>
