@@ -48,7 +48,7 @@ const GUARDED_HTML = `<!doctype html><html lang="es"><head><meta charset="utf-8"
  * un recurso que no existe (error de red) y un mensaje de consola al cargar.
  */
 const APP_HTML = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>App sintética</title></head>
-<body><main><h1>App sintética</h1><label>Nombre <input id="nombre"></label> <button id="saludar">Saludar</button>
+<body><main><h1>App sintética</h1><label>Nombre <input id="nombre"></label> <label>Apellido <input id="apellido"></label> <button id="saludar">Saludar</button>
 <p id="saludo"></p><a href="https://www.notion.so/ficha-sintetica-0123456789abcdef0123456789abcdef">Ficha de Notion</a></main><script>
 console.log('smoke-console: app cargada')
 document.getElementById('saludar').addEventListener('click', () => {
@@ -1664,6 +1664,24 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
           waited['found'] === true &&
           secondSnapshot.text.includes('Hola, Ana'),
         { inputUid, buttonUid, typed, clicked, waited, snapshot: secondSnapshot.text.slice(0, 400) },
+      )
+
+      // Dos herramientas de la misma sesión comparten vista, pero no pueden compartir el foco
+      // a mitad de escribir: cada secuencia debe terminar antes de empezar la siguiente.
+      const surnameUid = /textbox "Apellido" \[uid=(e\d+)\]/.exec(firstSnapshot.text)?.[1]
+      const parallelTyping = await Promise.all([
+        textOf('table_web_type', { cardId: localId, uid: inputUid, text: 'Nombre independiente' }),
+        textOf('table_web_type', { cardId: localId, uid: surnameUid, text: 'Apellido independiente' }),
+      ])
+      const parallelValues = await findContents(localUrl)!.executeJavaScript(
+        `({ name: document.getElementById('nombre').value, surname: document.getElementById('apellido').value })`,
+      ) as { name: string; surname: string }
+      record(
+        'web: dos escrituras concurrentes conservan cada valor en su campo',
+        parallelTyping.every(result => !result.isError) &&
+          parallelValues.name === 'Nombre independiente' &&
+          parallelValues.surname === 'Apellido independiente',
+        parallelValues,
       )
 
       const shotResult = await call('table_web_screenshot', { cardId: localId })

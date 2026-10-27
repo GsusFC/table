@@ -65,6 +65,8 @@ Límite explícito: Table no puede asegurar que un arnés arbitrario, ejecutado 
 
 **Otras vías a Notion.** El MCP de Chrome de T-010, que dejaba al agente abrir Notion con el Chrome de la persona, se retiró con D-021. Las herramientas web de Table (T-012) rechazan las webs de Notion con «archivos filtrados». Aun así, «archivos filtrados» no es una garantía: un MCP de Notion o de navegador que la persona tenga en la configuración global del arnés sigue disponible para el agente; `TABLE.md` le pide que no abra Notion por otra vía, pero es una instrucción, no un control.
 
+Cambiar el modo también revoca las operaciones pendientes del navegador de Table y actualiza sus restricciones antes de admitir nuevas peticiones. El cambio no retira el acceso de un MCP oficial de Notion que ya esté conectado en una sesión anterior del arnés.
+
 **Capturas de páginas de Notion.** Una tarjeta web guarda una captura de lo que se vio al salir; si la página muestra `Budget`, la captura lo contiene. Es una copia local para el usuario, que ya ve esa página en Notion. Por eso las capturas de páginas de Notion no pueden formar parte del contexto ni de la selección visual que se entregue a un agente; hasta que la Fase 2 defina esa entrega, solo la ficha filtrada es apta (hallazgo de la revisión de Codex del 2026-10-26).
 
 ## Contenido completo (T-009)

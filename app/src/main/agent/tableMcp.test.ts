@@ -22,6 +22,7 @@ const FAKE_JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9])
 
 /** Web falsa de una tarjeta: lo justo para la captura. */
 const fakePage: AgentPage = {
+  exclusive: run => run(),
   send: async () => ({}) as never,
   url: () => 'http://localhost:5173/',
   title: () => 'Web local',

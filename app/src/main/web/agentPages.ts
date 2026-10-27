@@ -57,6 +57,8 @@ export interface NetworkError {
 export type NavigationOutcome = { readonly kind: 'started' } | { readonly kind: 'blocked' } | { readonly kind: 'failed'; readonly error: string }
 
 export interface AgentPage extends Cdp {
+  /** Una operación completa, sin intercalarse con otros handles de la misma WebContents. */
+  exclusive<T>(run: () => Promise<T>): Promise<T>
   url(): string
   title(): string
   /** Espera a que termine la carga en curso (o se agote `timeoutMs`). */
@@ -129,6 +131,35 @@ export interface AgentPages {
   page(contents: WebContents, signal: AbortSignal): AgentPage
   /** El agente dejó de usar la web: se suelta el depurador y vuelve a frenarse oculta. */
   release(contents: WebContents): void
+}
+
+/** La exclusión pertenece a la web real, no al handle ni al registro que lo creó. */
+const operationTails = new WeakMap<WebContents, Promise<void>>()
+
+async function exclusive<T>(contents: WebContents, signal: AbortSignal, run: () => Promise<T>): Promise<T> {
+  signal.throwIfAborted()
+  const previous = operationTails.get(contents) ?? Promise.resolve()
+  const { promise: cancelled, reject } = Promise.withResolvers<never>()
+  const onAbort = (): void => reject(signal.reason)
+  signal.addEventListener('abort', onAbort, { once: true })
+  const running = previous.then(() => {
+    signal.throwIfAborted()
+    if (contents.isDestroyed()) {
+      throw new Error('La web de la tarjeta ya no está cargada')
+    }
+    // Cancelar la respuesta no retira un comando ya enviado a Chromium.
+    // El siguiente turno espera a que la operación real termine o rechace.
+    return run()
+  })
+  const tail = running.then(() => undefined, () => undefined)
+  operationTails.set(contents, tail)
+  void tail.then(() => {
+    if (operationTails.get(contents) === tail) {
+      operationTails.delete(contents)
+    }
+  })
+  // Cancelar un turno en espera responde ya, pero no adelanta a los que le preceden.
+  return Promise.race([running, cancelled]).finally(() => signal.removeEventListener('abort', onAbort))
 }
 
 export function createAgentPages(): AgentPages {
@@ -221,7 +252,7 @@ export function createAgentPages(): AgentPages {
     await contents.debugger.sendCommand(wanted ? 'Network.enable' : 'Network.disable').catch(() => undefined)
   }
 
-  async function attach(contents: WebContents, entry: Tracked): Promise<void> {
+  async function attach(contents: WebContents, entry: Tracked, signal: AbortSignal): Promise<void> {
     if (entry.attached && contents.debugger.isAttached()) {
       return
     }
@@ -240,9 +271,11 @@ export function createAgentPages(): AgentPages {
     entry.networkEnabled = false
     // La página se comporta como enfocada aunque la persona esté en otra parte de Table.
     await contents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => undefined)
+    signal.throwIfAborted()
     // Oculta, sus temporizadores no se frenan mientras el agente la usa.
     contents.setBackgroundThrottling(false)
     await syncNetwork(contents, entry)
+    signal.throwIfAborted()
     log('agent-web-attached', { origin: originOf(contents.getURL()) })
   }
 
@@ -290,11 +323,14 @@ export function createAgentPages(): AgentPages {
       const send = async <T>(method: string, params?: Record<string, unknown>): Promise<T> => {
         // Sesión cerrada o petición cancelada: ni un comando más (ni volver a enganchar el depurador).
         signal.throwIfAborted()
-        await attach(contents, entry)
+        await attach(contents, entry, signal)
         signal.throwIfAborted()
-        return (await contents.debugger.sendCommand(method, params)) as T
+        const result = (await contents.debugger.sendCommand(method, params)) as T
+        signal.throwIfAborted()
+        return result
       }
       return {
+        exclusive: run => exclusive(contents, signal, run),
         send,
 
         url: () => (contents.isDestroyed() ? '' : contents.getURL()),
@@ -313,6 +349,7 @@ export function createAgentPages(): AgentPages {
         },
 
         async navigate(target) {
+          signal.throwIfAborted()
           if (contents.isDestroyed()) {
             return { kind: 'failed', error: 'La web de la tarjeta ya no está cargada' }
           }
@@ -324,10 +361,6 @@ export function createAgentPages(): AgentPages {
           contents.on('will-prevent-unload', onPrevent)
           try {
             if ('url' in target) {
-              const loading = contents.loadURL(target.url).then(
-                () => null,
-                (error: unknown) => (error instanceof Error ? error.message : String(error)),
-              )
               // Una web pesada puede tardar en cargar: basta con que la navegación empiece.
               const { promise: started, resolve: onStarted } = Promise.withResolvers<null>()
               const onStart = (details: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>): void => {
@@ -336,11 +369,21 @@ export function createAgentPages(): AgentPages {
                 }
               }
               contents.on('did-start-navigation', onStart)
+              const loading = contents.loadURL(target.url).then(
+                () => null,
+                (error: unknown) => (error instanceof Error ? error.message : String(error)),
+              )
               const error = await Promise.race([loading, started]).finally(() => {
                 if (!contents.isDestroyed()) {
                   contents.removeListener('did-start-navigation', onStart)
                 }
               })
+              // La respuesta MCP ya puede estar cancelada, pero loadURL emitido sigue siendo
+              // dueño del turno hasta resolverse; un inicio tardío no debe liberar la vista.
+              if (signal.aborted) {
+                await loading
+              }
+              signal.throwIfAborted()
               if (blocked) {
                 return { kind: 'blocked' }
               }
@@ -353,13 +396,7 @@ export function createAgentPages(): AgentPages {
             if (target.action === 'forward' && !history.canGoForward()) {
               return { kind: 'failed', error: 'No hay página siguiente' }
             }
-            const { promise, resolve } = Promise.withResolvers<void>()
-            const timer = setTimeout(resolve, 2_000)
-            const onStart = (): void => {
-              clearTimeout(timer)
-              resolve()
-            }
-            contents.once('did-start-loading', onStart)
+            const started = waitForEvent(contents, 'did-start-loading', 2_000, signal)
             if (target.action === 'back') {
               history.goBack()
             } else if (target.action === 'forward') {
@@ -367,10 +404,8 @@ export function createAgentPages(): AgentPages {
             } else {
               contents.reload()
             }
-            await promise
-            if (!contents.isDestroyed()) {
-              contents.removeListener('did-start-loading', onStart)
-            }
+            await started
+            signal.throwIfAborted()
             return blocked ? { kind: 'blocked' } : { kind: 'started' }
           } finally {
             if (!contents.isDestroyed()) {
@@ -380,6 +415,7 @@ export function createAgentPages(): AgentPages {
         },
 
         async capture() {
+          signal.throwIfAborted()
           if (contents.isDestroyed()) {
             return null
           }
@@ -391,6 +427,7 @@ export function createAgentPages(): AgentPages {
           } catch (error) {
             log('agent-capture-failed', { message: error instanceof Error ? error.message : String(error) })
           }
+          signal.throwIfAborted()
           if (!image || image.isEmpty()) {
             return null
           }
@@ -401,6 +438,7 @@ export function createAgentPages(): AgentPages {
         frameUrls: () => (contents.isDestroyed() ? [] : contents.mainFrame.framesInSubtree.map(frame => frame.url)),
 
         restrict(blocked) {
+          signal.throwIfAborted()
           navigationPolicy(contents).blocked = blocked
         },
 

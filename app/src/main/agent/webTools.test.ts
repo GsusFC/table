@@ -37,9 +37,12 @@ let clickLeadsTo: string | null
 let restricted: ((url: string) => boolean) | null
 let navigation: NavigationOutcome
 let session: AbortController
+let configurePage: ((page: AgentPage, signal: AbortSignal) => AgentPage) | null
+let confirmWith: ((signal: AbortSignal) => Promise<boolean>) | null
 
 function fakePage(url: string): AgentPage {
   return {
+    exclusive: run => run(),
     send: async <T>(method: string, params?: Record<string, unknown>): Promise<T> => {
       if (method === 'Accessibility.getFullAXTree') {
         return { nodes: [{ nodeId: '1', role: { value: 'RootWebArea' }, name: { value: 'Prueba' }, backendDOMNodeId: 1 }] } as T
@@ -95,19 +98,22 @@ beforeEach(async () => {
   restricted = null
   navigation = { kind: 'started' }
   session = new AbortController()
+  configurePage = null
+  confirmWith = null
   vi.spyOn(console, 'log').mockImplementation(() => undefined)
   activity = createActivityTracker({ onChange: () => undefined, pin: id => pins.push(id), unpin: id => unpins.push(id) })
   web = createWebToolHandlers({
     store,
     isMesaOpen: mesaId => mesaId === openMesa,
-    openPage: async (_mesaId, cardId, url) => {
+    openPage: async (_mesaId, cardId, url, signal) => {
       opened.push(cardId)
-      return fakePage(url)
+      const page = fakePage(url)
+      return configurePage ? configurePage(page, signal) : page
     },
     activity,
-    confirm: async request => {
+    confirm: async (request, signal) => {
       confirms.push(request)
-      return answer
+      return confirmWith ? confirmWith(signal) : answer
     },
     changed: (_mesaId, notice) => changes.push(notice),
     now: () => now,
@@ -260,13 +266,21 @@ describe('permiso por sesión', () => {
     expect(confirms).toHaveLength(2)
   })
 
-  it('una pregunta cancelada (sesión cerrada) no cuenta como «no»', async () => {
+  it('una pregunta cancelada no cuenta como «no» ni conserva una aceptación tardía', async () => {
     const { mesa, cardId } = await mesaWith('https://example.com/')
-    answer = false
-    session.abort()
-    await expect(call(mesa, 'table_web_snapshot', { cardId })).rejects.toThrow('no autorizó')
+    const asking = Promise.withResolvers<void>()
+    const permission = Promise.withResolvers<boolean>()
+    confirmWith = async () => {
+      asking.resolve()
+      return permission.promise
+    }
+    const pending = call(mesa, 'table_web_snapshot', { cardId })
+    await asking.promise
+    session.abort(new Error('Petición cancelada'))
+    permission.resolve(true)
+    await expect(pending).rejects.toThrow('Petición cancelada')
     session = new AbortController()
-    answer = true
+    confirmWith = null
     expect(await call(mesa, 'table_web_snapshot', { cardId })).toContain('Prueba')
     expect(confirms).toHaveLength(2)
   })
@@ -374,5 +388,183 @@ describe('la política dura toda la operación', () => {
     await expect(call(mesa, 'table_web_click', { cardId, uid: 'e1' })).resolves.toMatchObject({ clicked: 'e1' })
     await expect(call(mesa, 'table_web_evaluate', { cardId, function: '() => 1' })).rejects.toThrow('Solo en webs locales')
     await expect(call(mesa, 'table_web_console', { cardId })).rejects.toThrow('Solo en webs locales')
+  })
+})
+
+describe('revocación por cambios del modo de Notion', () => {
+  it('relee el store tras cargar: una Mesa antigua con MCP no autoriza la foto ni una petición futura', async () => {
+    const { mesa, cardId } = await mesaWith(NOTION_URL)
+    await store.setAgentNotion(mesa.id, 'mcp')
+    const waiting = Promise.withResolvers<void>()
+    const loaded = Promise.withResolvers<void>()
+    const read = vi.fn()
+    configurePage = page => ({
+      ...page,
+      send: async <T>(): Promise<T> => {
+        read()
+        return { nodes: [{ nodeId: '1', role: { value: 'StaticText' }, name: { value: 'MARCADOR_PRIVADO' } }] } as T
+      },
+      waitForLoad: async () => {
+        waiting.resolve()
+        await loaded.promise
+      },
+    })
+    const pending = call(mesa, 'table_web_snapshot', { cardId })
+    await waiting.promise
+    await store.setAgentNotion(mesa.id, 'files')
+    loaded.resolve()
+    await expect(pending).rejects.toThrow('Notion')
+    expect(read).not.toHaveBeenCalled()
+    await expect(call(mesa, 'table_web_snapshot', { cardId })).rejects.toThrow('Notion')
+    expect(opened).toEqual([cardId])
+    expect(restricted?.(NOTION_URL)).toBe(true)
+  })
+
+  it.each(['table_web_snapshot', 'table_web_open', 'table_set_activity'] as const)(
+    '%s no conserva una autorización obtenida antes de cambiar el modo mientras esperaba permiso',
+    async name => {
+      const { mesa, cardId } = await mesaWith(NOTION_URL)
+      await store.setAgentNotion(mesa.id, 'mcp')
+      const asking = Promise.withResolvers<void>()
+      const permission = Promise.withResolvers<boolean>()
+      confirmWith = async () => {
+        asking.resolve()
+        return permission.promise
+      }
+      const input = name === 'table_web_open' ? { url: `${NOTION_URL}?nueva=1` } : { cardId }
+      const pending = call(mesa, name, input)
+      await asking.promise
+      await store.setAgentNotion(mesa.id, 'files')
+      permission.resolve(true)
+      await expect(pending).rejects.toThrow('Notion')
+      expect(opened).toEqual([])
+      expect(activity.list()).toEqual([])
+      expect((await store.get(mesa.id)).cards).toHaveLength(1)
+    },
+  )
+
+  it('revoca la carga pendiente y bloquea peticiones nuevas antes de que termine la persistencia', async () => {
+    const { mesa, cardId } = await mesaWith(NOTION_URL)
+    await store.setAgentNotion(mesa.id, 'mcp')
+    const waiting = Promise.withResolvers<void>()
+    const loaded = Promise.withResolvers<void>()
+    const save = Promise.withResolvers<void>()
+    const signals: AbortSignal[] = []
+    const read = vi.fn()
+    configurePage = (page, signal) => {
+      signals.push(signal)
+      return {
+        ...page,
+        send: <T>(method: string, params?: Record<string, unknown>): Promise<T> => {
+          read()
+          return page.send<T>(method, params)
+        },
+        waitForLoad: async () => {
+          waiting.resolve()
+          await loaded.promise
+        },
+      }
+    }
+    const pending = call(mesa, 'table_web_snapshot', { cardId })
+    await waiting.promise
+    expect(restricted?.(NOTION_URL)).toBe(false)
+    const changing = web.withNotionModeChange(mesa.id, async () => {
+      await save.promise
+      return store.setAgentNotion(mesa.id, 'files')
+    })
+    expect(signals[0]?.aborted).toBe(true)
+    expect(restricted?.(NOTION_URL)).toBe(true)
+    expect((await store.get(mesa.id)).agentNotion).toBe('mcp')
+    await expect(call(mesa, 'table_web_snapshot', { cardId }, 'nueva')).rejects.toThrow('configuración')
+    loaded.resolve()
+    await expect(pending).rejects.toThrow('configuración')
+    expect(read).not.toHaveBeenCalled()
+    save.resolve()
+    await changing
+    await expect(call(mesa, 'table_web_snapshot', { cardId })).rejects.toThrow('Notion')
+  })
+
+  it('el hook revoca permisos pendientes y una aceptación tardía no evita volver a preguntar', async () => {
+    const { mesa, cardId } = await mesaWith('https://example.com/')
+    const asking = Promise.withResolvers<void>()
+    const permission = Promise.withResolvers<boolean>()
+    const signals: AbortSignal[] = []
+    confirmWith = async signal => {
+      signals.push(signal)
+      asking.resolve()
+      return permission.promise
+    }
+    const pending = call(mesa, 'table_web_snapshot', { cardId })
+    await asking.promise
+    await web.withNotionModeChange(mesa.id, () => store.setAgentNotion(mesa.id, 'mcp'))
+    expect(signals[0]?.aborted).toBe(true)
+    permission.resolve(true)
+    await expect(pending).rejects.toThrow('configuración')
+    expect(opened).toEqual([])
+    confirmWith = null
+    await call(mesa, 'table_web_snapshot', { cardId })
+    expect(confirms).toHaveLength(2)
+  })
+
+  it('al tomar turno vuelve a comprobar el modo antes de leer', async () => {
+    const { mesa, cardId } = await mesaWith(NOTION_URL)
+    await store.setAgentNotion(mesa.id, 'mcp')
+    const queued = Promise.withResolvers<void>()
+    const turn = Promise.withResolvers<void>()
+    const read = vi.fn()
+    configurePage = page => ({
+      ...page,
+      send: <T>(method: string, params?: Record<string, unknown>): Promise<T> => {
+        read()
+        return page.send<T>(method, params)
+      },
+      exclusive: async run => {
+        queued.resolve()
+        await turn.promise
+        return run()
+      },
+    })
+    const pending = call(mesa, 'table_web_snapshot', { cardId })
+    await queued.promise
+    await store.setAgentNotion(mesa.id, 'files')
+    turn.resolve()
+    await expect(pending).rejects.toThrow('Notion')
+    expect(read).not.toHaveBeenCalled()
+  })
+
+  it('cambios simultáneos mantienen el bloqueo hasta el último y actualizan la política de una actividad existente', async () => {
+    const { mesa, cardId } = await mesaWith('https://example.com/')
+    await store.setAgentNotion(mesa.id, 'mcp')
+    await call(mesa, 'table_web_snapshot', { cardId })
+    const first = Promise.withResolvers<void>()
+    const second = Promise.withResolvers<void>()
+    const changingFirst = web.withNotionModeChange(mesa.id, async () => {
+      await first.promise
+      await store.setAgentNotion(mesa.id, 'files')
+    })
+    const changingSecond = web.withNotionModeChange(mesa.id, async () => {
+      await second.promise
+      await store.setAgentNotion(mesa.id, 'mcp')
+    })
+    second.resolve()
+    await changingSecond
+    expect(restricted?.(NOTION_URL)).toBe(true)
+    await expect(call(mesa, 'table_web_snapshot', { cardId })).rejects.toThrow('configuración')
+    first.resolve()
+    await changingFirst
+    expect(restricted?.(NOTION_URL)).toBe(true)
+    await web.withNotionModeChange(mesa.id, () => store.setAgentNotion(mesa.id, 'mcp'))
+    expect(restricted?.(NOTION_URL)).toBe(false)
+  })
+
+  it('un fallo de persistencia revoca lo anterior y recupera la política del modo realmente guardado', async () => {
+    const { mesa, cardId } = await mesaWith('https://example.com/')
+    await store.setAgentNotion(mesa.id, 'mcp')
+    await call(mesa, 'table_web_snapshot', { cardId })
+    await expect(web.withNotionModeChange(mesa.id, async () => {
+      throw new Error('EACCES sintético')
+    })).rejects.toThrow('EACCES')
+    expect(restricted?.(NOTION_URL)).toBe(false)
+    expect(await call(mesa, 'table_web_snapshot', { cardId })).toContain('Prueba')
   })
 })

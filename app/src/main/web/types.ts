@@ -44,9 +44,10 @@ export interface SurfaceManager {
    * mostrarla (la persona sigue donde está) y devuelve su contenido. Rechaza
    * si la mesa no es la abierta, si la URL no es http(s) o si cargarla
    * cambiaría el editor de Figma que la persona tiene delante. Fija antes la
-   * tarjeta con `pin`.
+   * tarjeta con `pin`. Comprueba `signal` al tomar turno y tras cada espera:
+   * una petición cancelada no crea vistas, navega ni recibe una cesión tardía.
    */
-  loadForAgent(mesaId: MesaId, cardId: CardId, url: string): Promise<WebContents>
+  loadForAgent(mesaId: MesaId, cardId: CardId, url: string, signal: AbortSignal): Promise<WebContents>
   /** Contenido de la web cargada y viva de la tarjeta, o null. */
   loadedContents(cardId: CardId): WebContents | null
   /**

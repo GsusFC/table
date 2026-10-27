@@ -52,7 +52,7 @@ import { createAgentMcp, supportsTableMcp, type AgentMcp, type TableBridge } fro
 import { startTableMcpServer, type TableMcpServer } from './agent/tableMcp'
 import { createTableToolHandlers, type AgentConfirmation } from './agent/tableTools'
 import { createActivityTracker, type ActivityTracker } from './agent/activity'
-import { createWebToolHandlers } from './agent/webTools'
+import { createWebToolHandlers, type WebTools } from './agent/webTools'
 import { createNotionContent, type NotionContent } from './agent/notionContent'
 import { NOTION_DIR } from './agent/notionFiles'
 import { createResultsWatcher, IMAGE_MIME, type ResultEntry, type ResultsWatcher } from './agent/results'
@@ -118,6 +118,8 @@ let notionContent: NotionContent | null = null
 let resultsWatcher: ResultsWatcher | null = null
 /** MCP de los agentes por arnés y ajuste de Notion de cada mesa (T-010). */
 let agentMcp: AgentMcp | null = null
+/** Operaciones web y revisiones de permiso de las mesas. */
+let agentWeb: WebTools | null = null
 /** Autorización con Notion en curso (navegador abierto); se puede cancelar. */
 let connectingNotion: AbortController | null = null
 /** Escrituras iniciadas por el proceso principal (capturas, títulos); se esperan al cerrar. */
@@ -594,8 +596,11 @@ function registerAgentIpc(): void {
     const parsedMesa = parseId(mesaId)
     const parsedMode = parseAgentNotionMode(mode)
     try {
-      // Guarda el modo y deja al día los archivos de MCP que Table creó; si alguno falla, el error llega a la interfaz.
-      const saved = await requireAgent().mcp.setMode(parsedMesa, parsedMode)
+      if (!agentWeb) {
+        throw new Error('El navegador de Table no está disponible')
+      }
+      // Revoca primero las operaciones web anteriores y no admite otras hasta fijar el modo.
+      const saved = await agentWeb.withNotionModeChange(parsedMesa, () => requireAgent().mcp.setMode(parsedMesa, parsedMode))
       log('agent-notion-mode', { mode: saved })
       return saved
     } finally {
@@ -1151,11 +1156,12 @@ void app.whenReady().then(async () => {
   const webTools = createWebToolHandlers({
     store: requireStore(),
     isMesaOpen: mesaId => agentUi.mesaId === mesaId && surface?.getOpenMesa() === mesaId,
-    openPage: async (mesaId, cardId, url, signal) => agentPages.page(await requireSurface().loadForAgent(mesaId, cardId, url), signal),
+    openPage: async (mesaId, cardId, url, signal) => agentPages.page(await requireSurface().loadForAgent(mesaId, cardId, url, signal), signal),
     activity,
     confirm: confirmAgent,
     changed: (mesaId, notice) => sendToRenderer(IPC.agentMesaChanged, mesaId, notice),
   })
+  agentWeb = webTools
   tableMcp = await startTableMcpServer({ ...tableHandlers, ...webTools.handlers }).catch((error: unknown) => {
     // Sin servidor, las sesiones arrancan sin el MCP de Table (su chip no aparece).
     log('table-mcp-failed', { message: error instanceof Error ? error.message : String(error) })

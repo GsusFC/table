@@ -1,5 +1,5 @@
 import { MAX_WEB_TEXT, MAX_WEB_WAIT_MS, type WebToolName } from '../../shared/agentTools'
-import { DEFAULT_CARD_SIZE, type Card, type CardId, type Mesa, type MesaId } from '../../shared/model'
+import { DEFAULT_CARD_SIZE, type AgentNotionMode, type Card, type CardId, type Mesa, type MesaId } from '../../shared/model'
 import { recognizeService, serviceById } from '../../shared/services'
 import { isHttpUrl, parseHttpUrl, parseId } from '../../shared/validate'
 import type { MesaStore } from '../store/types'
@@ -39,6 +39,7 @@ const NOTION_BLOCKED =
   'Las webs de Notion no están disponibles para el agente en esta mesa («Notion para el agente: archivos filtrados»): usa notion/ y table_get_project.'
 const LOCAL_ONLY =
   'Solo en webs locales (localhost, 127.0.0.1, [::1]): en las demás webs el agente usa la sesión de la persona y esto leería datos de su cuenta.'
+const MODE_CHANGED = 'La configuración de Notion de esta mesa está cambiando o cambió durante la petición; vuelve a intentarlo.'
 
 export interface WebToolDeps {
   readonly store: MesaStore
@@ -62,9 +63,18 @@ export interface WebTools {
   readonly handlers: Readonly<Record<WebToolName, TableToolHandler>>
   /** La sesión terminó: se olvida su permiso. */
   endSession(sessionId: string): void
+  /** Revoca las peticiones de la mesa y bloquea nuevas hasta persistir y releer el modo. */
+  withNotionModeChange<T>(mesaId: MesaId, change: () => Promise<T>): Promise<T>
 }
 
 type Grant = { readonly state: 'granted' } | { readonly state: 'denied'; readonly until: number } | { readonly state: 'asking'; readonly answer: Promise<boolean> }
+
+interface MesaPolicy {
+  mode: AgentNotionMode
+  changing: number
+  revision: number
+  readonly requests: Map<AbortController, string>
+}
 
 function isNotion(url: string): boolean {
   return recognizeService(url).id === 'notion'
@@ -137,9 +147,39 @@ export function createWebToolHandlers(deps: WebToolDeps): WebTools {
   const { store, activity } = deps
   const now = deps.now ?? Date.now
   const grants = new Map<string, Grant>()
+  const policies = new Map<MesaId, MesaPolicy>()
+
+  function policyFor(mesaId: MesaId): MesaPolicy {
+    let policy = policies.get(mesaId)
+    if (!policy) {
+      policy = { mode: 'files', changing: 0, revision: 0, requests: new Map() }
+      policies.set(mesaId, policy)
+    }
+    return policy
+  }
+
+  /** Nunca autoriza con la Mesa leída antes de una espera de permiso, carga o turno. */
+  async function currentMesa(context: TableToolContext): Promise<Mesa> {
+    context.signal.throwIfAborted()
+    const policy = policyFor(context.mesaId)
+    if (policy.changing > 0) {
+      throw new Error(MODE_CHANGED)
+    }
+    const mesa = await store.get(context.mesaId)
+    context.signal.throwIfAborted()
+    if (policy.changing > 0) {
+      throw new Error(MODE_CHANGED)
+    }
+    policy.mode = mesa.agentNotion
+    if (!deps.isMesaOpen(mesa.id)) {
+      throw new Error(MESA_CLOSED)
+    }
+    return mesa
+  }
 
   /** Permiso de la sesión: se pregunta una vez y se recuerda hasta que termina. */
   async function requirePermission(context: TableToolContext): Promise<void> {
+    context.signal.throwIfAborted()
     const grant = grants.get(context.sessionId)
     if (grant?.state === 'granted') {
       return
@@ -165,18 +205,21 @@ export function createWebToolHandlers(deps: WebToolDeps): WebTools {
       },
       context.signal,
     )
-    grants.set(context.sessionId, { state: 'asking', answer })
+    const asking: Grant = { state: 'asking', answer }
+    grants.set(context.sessionId, asking)
     let accepted = false
     try {
       accepted = await answer
     } finally {
-      if (accepted) {
-        grants.set(context.sessionId, { state: 'granted' })
-      } else if (context.signal.aborted) {
-        // Sin respuesta de la persona (sesión cerrada, petición cancelada): la próxima vez se pregunta.
-        grants.delete(context.sessionId)
-      } else {
-        grants.set(context.sessionId, { state: 'denied', until: now() + WEB_DENIAL_MS })
+      if (grants.get(context.sessionId) === asking) {
+        if (context.signal.aborted) {
+          // Una respuesta tardía no recupera un permiso de una petición revocada.
+          grants.delete(context.sessionId)
+        } else if (accepted) {
+          grants.set(context.sessionId, { state: 'granted' })
+        } else {
+          grants.set(context.sessionId, { state: 'denied', until: now() + WEB_DENIAL_MS })
+        }
       }
     }
     if (!accepted) {
@@ -218,30 +261,35 @@ export function createWebToolHandlers(deps: WebToolDeps): WebTools {
     card: Card,
     mesa: Mesa,
     local: boolean,
-    run: (page: AgentPage, check: () => void) => Promise<T>,
+    run: (page: AgentPage, check: () => Promise<void>) => Promise<T>,
   ): Promise<T> {
-    const url = parseHttpUrl(card.url)
+    let url = parseHttpUrl(card.url)
     checkUrl(mesa, url, local)
-    if (!deps.isMesaOpen(mesa.id)) {
-      throw new Error(MESA_CLOSED)
-    }
     await requirePermission(context)
-    context.signal.throwIfAborted()
+    const current = await currentMesa(context)
+    url = parseHttpUrl(cardIn(current, card.id).url)
+    checkUrl(current, url, local)
     const done = activity.beginWeb({ sessionId: context.sessionId, mesaId: mesa.id, agentName: context.agentName }, card.id)
     try {
       const page = await deps.openPage(mesa.id, card.id, url, context.signal)
-      // Mientras el agente usa la web, ni navegaciones, ni redirecciones, ni frames, ni popups a lo que no puede ver.
-      page.restrict(target => isNotion(target) && mesa.agentNotion !== 'mcp')
-      // Una web que se acaba de cargar (o que sigue cargando) se espera antes de mirarla o tocarla.
-      await page.waitForLoad(LOAD_TIMEOUT_MS, context.signal)
-      const check = (): void => {
-        context.signal.throwIfAborted()
-        checkPage(mesa, page, local)
-      }
-      check()
-      const result = await run(page, check)
-      check()
-      return result
+      context.signal.throwIfAborted()
+      const policy = policyFor(mesa.id)
+      // La política permanece viva mientras haya actividad, también después de esta petición.
+      page.restrict(target => isNotion(target) && (policy.changing > 0 || policy.mode !== 'mcp'))
+      return await page.exclusive(async () => {
+        const check = async (): Promise<void> => {
+          const latest = await currentMesa(context)
+          checkUrl(latest, parseHttpUrl(cardIn(latest, card.id).url), local)
+          checkPage(latest, page, local)
+        }
+        // Lecturas, navegaciones y secuencias de entrada comparten el turno de la web real.
+        await check()
+        await page.waitForLoad(LOAD_TIMEOUT_MS, context.signal)
+        await check()
+        const result = await run(page, check)
+        await check()
+        return result
+      })
     } finally {
       done()
     }
@@ -251,9 +299,9 @@ export function createWebToolHandlers(deps: WebToolDeps): WebTools {
     context: TableToolContext,
     input: Readonly<Record<string, unknown>>,
     local: boolean,
-    run: (page: AgentPage, check: () => void) => Promise<T>,
+    run: (page: AgentPage, check: () => Promise<void>) => Promise<T>,
   ): Promise<T> {
-    const mesa = await store.get(context.mesaId)
+    const mesa = await currentMesa(context)
     return withPage(context, cardIn(mesa, input['cardId']), mesa, local, run)
   }
 
@@ -263,7 +311,7 @@ export function createWebToolHandlers(deps: WebToolDeps): WebTools {
       if ((input['cardId'] === undefined) === (input['url'] === undefined)) {
         throw new Error('Indica cardId o url (uno de los dos)')
       }
-      let mesa = await store.get(context.mesaId)
+      let mesa = await currentMesa(context)
       let card: Card | undefined
       let created = false
       if (input['url'] !== undefined) {
@@ -276,10 +324,12 @@ export function createWebToolHandlers(deps: WebToolDeps): WebTools {
           }
           // La tarjeta se crea solo con permiso: sin él, el agente no toca la mesa por esta vía.
           await requirePermission(context)
+          mesa = await currentMesa(context)
+          checkUrl(mesa, url, false)
           card = await store.addCard(mesa.id, { url, serviceId: recognizeService(url).id, position: placement(mesa, {}, DEFAULT_CARD_SIZE) })
           created = true
           deps.changed(mesa.id, 'El agente añadió una tarjeta')
-          mesa = await store.get(mesa.id)
+          mesa = await currentMesa(context)
         }
       } else {
         card = cardIn(mesa, input['cardId'])
@@ -305,14 +355,17 @@ export function createWebToolHandlers(deps: WebToolDeps): WebTools {
       if (action !== undefined && action !== 'back' && action !== 'forward' && action !== 'reload') {
         throw new Error('action: back, forward o reload')
       }
-      const mesa = await store.get(context.mesaId)
+      const mesa = await currentMesa(context)
       const card = cardIn(mesa, input['cardId'])
       const url = input['url'] === undefined ? null : parseHttpUrl(input['url'])
       if (url !== null) {
         checkUrl(mesa, url, false)
       }
       const target = url !== null ? { url } : { action: action as 'back' | 'forward' | 'reload' }
-      return withPage(context, card, mesa, false, async page => {
+      return withPage(context, card, mesa, false, async (page, check) => {
+        if (url !== null) {
+          checkUrl(await currentMesa(context), url, false)
+        }
         const outcome = await page.navigate(target)
         if (outcome.kind === 'blocked') {
           throw new Error(
@@ -323,11 +376,7 @@ export function createWebToolHandlers(deps: WebToolDeps): WebTools {
           throw new Error(`No se pudo navegar: ${outcome.error}`)
         }
         await page.waitForLoad(LOAD_TIMEOUT_MS, context.signal)
-        const reached = page.url()
-        // Si la navegación acabó en Notion, se dice, pero no se enseña nada de ella.
-        if (reached !== '') {
-          checkUrl(mesa, reached, false)
-        }
+        await check()
         return pageSummary(page)
       })
     },
@@ -441,7 +490,7 @@ export function createWebToolHandlers(deps: WebToolDeps): WebTools {
 
     async table_set_activity(context, input) {
       checkKeys(input, ['cardId', 'nodeId', 'text'])
-      const mesa = await store.get(context.mesaId)
+      let mesa = await currentMesa(context)
       const card = cardIn(mesa, input['cardId'])
       const nodeId = parseNodeId(input['nodeId'])
       const text = activityText(input['text'])
@@ -449,7 +498,8 @@ export function createWebToolHandlers(deps: WebToolDeps): WebTools {
       // las mismas reglas y el mismo permiso que las herramientas web.
       checkUrl(mesa, parseHttpUrl(card.url), false)
       await requirePermission(context)
-      context.signal.throwIfAborted()
+      mesa = await currentMesa(context)
+      checkUrl(mesa, parseHttpUrl(cardIn(mesa, card.id).url), false)
       const lit = activity.announce({ sessionId: context.sessionId, mesaId: mesa.id, agentName: context.agentName }, card.id, nodeId, text)
       return {
         cardId: lit.cardId,
@@ -465,10 +515,68 @@ export function createWebToolHandlers(deps: WebToolDeps): WebTools {
     },
   }
 
+  const guarded = Object.fromEntries(
+    Object.entries(handlers).map(([name, handler]) => [name, async (context: TableToolContext, input: Readonly<Record<string, unknown>>) => {
+      const policy = policyFor(context.mesaId)
+      context.signal.throwIfAborted()
+      if (policy.changing > 0) {
+        throw new Error(MODE_CHANGED)
+      }
+      const request = new AbortController()
+      const signal = AbortSignal.any([context.signal, request.signal])
+      policy.requests.set(request, context.sessionId)
+      try {
+        const result = await handler({ ...context, signal }, input)
+        signal.throwIfAborted()
+        return result
+      } finally {
+        policy.requests.delete(request)
+      }
+    }]),
+  ) as Record<WebToolName, TableToolHandler>
+  // Apagar la luz no usa ninguna web y sigue disponible durante la transición.
+  guarded.table_clear_activity = handlers.table_clear_activity
+
   return {
-    handlers,
+    handlers: guarded,
     endSession(sessionId) {
       grants.delete(sessionId)
+      for (const policy of policies.values()) {
+        for (const [request, owner] of policy.requests) {
+          if (owner === sessionId) {
+            request.abort(new Error('La sesión del agente terminó'))
+          }
+        }
+      }
+    },
+    async withNotionModeChange(mesaId, change) {
+      const policy = policyFor(mesaId)
+      policy.changing += 1
+      policy.revision += 1
+      policy.mode = 'files'
+      for (const [request, sessionId] of policy.requests) {
+        grants.delete(sessionId)
+        request.abort(new Error(MODE_CHANGED))
+      }
+      try {
+        return await change()
+      } finally {
+        // Si coinciden varios cambios, una lectura antigua no sustituye al último modo persistido.
+        const revision = ++policy.revision
+        try {
+          const latest = await store.get(mesaId)
+          if (policy.revision === revision) {
+            policy.mode = latest.agentNotion
+          }
+        } catch (error) {
+          if (policy.revision === revision) {
+            policy.mode = 'files'
+          }
+          throw error
+        } finally {
+          policy.changing -= 1
+        }
+      }
     },
   }
 }

@@ -333,14 +333,14 @@ async function pageText(cdp: Cdp): Promise<string> {
  * cancela. `check` se llama antes de cada lectura y lanza si la web ya no se
  * puede mirar (p. ej. llegó a un origen prohibido): la espera se corta.
  */
-export async function waitForText(cdp: Cdp, text: string, timeoutMs: number, signal: AbortSignal, check: () => void = () => undefined): Promise<boolean> {
+export async function waitForText(cdp: Cdp, text: string, timeoutMs: number, signal: AbortSignal, check: () => void | Promise<void> = () => undefined): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     // Cancelada (sesión cerrada): ni una lectura más.
     if (signal.aborted) {
       return false
     }
-    check()
+    await check()
     // Durante una navegación el contexto desaparece: se reintenta.
     const current = await pageText(cdp).catch(() => '')
     if (current.includes(text)) {

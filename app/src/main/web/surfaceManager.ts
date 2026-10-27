@@ -92,10 +92,21 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
    * capturas y `beforeunload`, y no deben intercalarse.
    */
   let queue: Promise<unknown> = Promise.resolve()
-  function serial<T>(operation: () => Promise<T>): Promise<T> {
-    const result = queue.then(operation, operation)
+  async function serial<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted()
+    const result = queue.then(() => {
+      signal?.throwIfAborted()
+      return operation()
+    })
     queue = result.catch(() => undefined)
-    return result
+    if (!signal) {
+      return result
+    }
+    const { promise: cancelled, reject } = Promise.withResolvers<never>()
+    const onAbort = (): void => reject(signal.reason)
+    signal.addEventListener('abort', onAbort, { once: true })
+    // La respuesta se cancela ya; la cola conserva el orden y descarta el turno al desencolarlo.
+    return Promise.race([result, cancelled]).finally(() => signal.removeEventListener('abort', onAbort))
   }
 
   function update(card: LoadedCard, partial: Partial<Omit<SurfaceCardState, 'cardId'>>): void {
@@ -389,7 +400,8 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
    * y se muestra ella; volver a entrar en `cardId` lo intenta de nuevo.
    * Devuelve la tarjeta que se muestra, o null si la vista ya no existe.
    */
-  async function shareView(donor: LoadedCard, cardId: CardId, url: string): Promise<LoadedCard | null> {
+  async function shareView(donor: LoadedCard, cardId: CardId, url: string, signal?: AbortSignal): Promise<LoadedCard | null> {
+    signal?.throwIfAborted()
     if (donor.state.currentUrl === url) {
       return transfer(donor, cardId)
     }
@@ -398,13 +410,18 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
     const { promise, resolve } = Promise.withResolvers<boolean>()
     const onStartNavigation = (details: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>): void => {
       // Sin iniciador: la navegación de `loadURL`, no una de la propia página.
-      if (!details.isMainFrame || details.initiator) {
+      if (!details.isMainFrame || details.initiator || signal?.aborted) {
         return
       }
       contents.removeListener('did-start-navigation', onStartNavigation)
       markLoadStarted(transfer(donor, cardId), url)
       resolve(true)
     }
+    const onAbort = (): void => {
+      contents.removeListener('did-start-navigation', onStartNavigation)
+      resolve(false)
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
     contents.on('did-start-navigation', onStartNavigation)
     // Sin `preventDefault` en `will-prevent-unload`, Electron cancela la navegación
     // y `loadURL` termina sin haberla empezado.
@@ -417,7 +434,9 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
         }
         resolve(false)
       })
-    if (await promise) {
+    const started = await promise.finally(() => signal?.removeEventListener('abort', onAbort))
+    signal?.throwIfAborted()
+    if (started) {
       return donor
     }
     if (!isAlive(donor) || cards.get(donor.cardId) !== donor) {
@@ -661,7 +680,8 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
    * mostrarla ni sacar a la persona de donde esté. La tarjeta tiene que
    * estar fijada (`pin`) antes, para que el límite de webs no la descargue.
    */
-  async function loadForAgent(mesaId: MesaId, cardId: CardId, url: string): Promise<WebContents> {
+  async function loadForAgent(mesaId: MesaId, cardId: CardId, url: string, signal: AbortSignal): Promise<WebContents> {
+    signal.throwIfAborted()
     if (mesaId !== openMesaId) {
       throw new Error('La mesa de esta sesión no está abierta en Table: la persona tiene que abrirla para que uses sus webs')
     }
@@ -683,7 +703,8 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
           `La persona está usando el editor de este archivo de Figma en otra tarjeta (${donor.cardId}): usa esa tarjeta o espera a que vuelva al lienzo`,
         )
       }
-      const shared = donor ? await shareView(donor, cardId, url) : null
+      const shared = donor ? await shareView(donor, cardId, url, signal) : null
+      signal.throwIfAborted()
       if (shared && shared.cardId !== cardId) {
         throw new Error('El editor de este archivo de Figma avisa de cambios sin guardar: no se cambia de frame sin que la persona lo resuelva')
       }
@@ -696,16 +717,18 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
     }
     card.lastUsedAt = performance.now()
     log('surface-agent-load', { origin: originOf(card.state.currentUrl ?? url) })
-    await enforceLoadedLimit()
+    await enforceLoadedLimit(signal)
+    signal.throwIfAborted()
     return card.view.webContents
   }
 
   /** Descarga las webs menos usadas hasta quedar en MAX_LOADED_WEBS, sin tocar la activa ni las fijadas. */
-  async function enforceLoadedLimit(): Promise<void> {
+  async function enforceLoadedLimit(signal?: AbortSignal): Promise<void> {
     const candidates = [...cards.values()]
       .filter(card => card !== active && !pinned.has(card.cardId))
       .sort((a, b) => a.lastUsedAt - b.lastUsedAt)
     for (const card of candidates) {
+      signal?.throwIfAborted()
       if (cards.size <= MAX_LOADED_WEBS) {
         return
       }
@@ -730,8 +753,8 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
       return serial(() => enterCard(mesaId, cardId, url, { ...options, focus: options.focus ?? true }))
     },
 
-    loadForAgent(mesaId, cardId, url) {
-      return serial(() => loadForAgent(mesaId, cardId, url))
+    loadForAgent(mesaId, cardId, url, signal) {
+      return serial(() => loadForAgent(mesaId, cardId, url, signal), signal)
     },
 
     loadedContents(cardId) {
