@@ -9,7 +9,13 @@ import { SessionBlockedError } from '../terminal/sessions'
 import { agentMcpLaunch, BROWSER_MCP_PACKAGE, createAgentMcp, FIGMA_MCP_URL, supportsTableMcp, type AgentMcp, type TableBridge } from './mcp'
 
 const NOTION_URL = 'https://mcp.notion.com/mcp'
-const BROWSER_ARGS = ['-y', BROWSER_MCP_PACKAGE, '--autoConnect', '--no-usage-statistics', '--no-performance-crux']
+const BROWSER_ARGS = [
+  '-y',
+  BROWSER_MCP_PACKAGE,
+  '--wsEndpoint=ws://127.0.0.1:9222/devtools/browser',
+  '--no-usage-statistics',
+  '--no-performance-crux',
+]
 /** El navegador recibe vacías las variables del MCP de Table (su testigo no es para él). */
 const NO_TABLE_ENV = { TABLE_MCP_SOCKET: '', TABLE_MCP_SESSION: '', TABLE_MCP_TICKET: '' }
 const MESA = '11111111-1111-4111-8111-111111111111'

@@ -1249,7 +1249,7 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
         args.startsWith('--mcp-config=') &&
           JSON.stringify(Object.keys(servers)) === JSON.stringify(['table', 'table-figma', 'table-chrome-devtools']) &&
           servers['table-figma']?.url === 'https://mcp.figma.com/mcp' &&
-          (servers['table-chrome-devtools']?.args ?? []).includes('--autoConnect') &&
+          (servers['table-chrome-devtools']?.args ?? []).includes('--wsEndpoint=ws://127.0.0.1:9222/devtools/browser') &&
           JSON.stringify(claudeSession.mcp.map(item => item.name)) === JSON.stringify(['table', 'figma', 'browser']) &&
           shownChips.map(chip => chip.text).join(',') === 'Table,Figma,Navegador' &&
           shownChips[0]!.title.includes('Borrar pide tu confirmación') &&

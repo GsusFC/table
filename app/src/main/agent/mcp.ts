@@ -36,8 +36,21 @@ import { TABLE_MCP_ENV_NAMES } from './tableMcp'
 export const FIGMA_MCP_URL = 'https://mcp.figma.com/mcp'
 /** Chrome DevTools MCP de Google, versión fijada: se conecta al Chrome en uso (Chrome 144+) con permiso de la persona. */
 export const BROWSER_MCP_PACKAGE = 'chrome-devtools-mcp@1.12.0'
+/**
+ * Dirección fija del servidor de depuración que abre `chrome://inspect/#remote-debugging`.
+ * No se usa `--autoConnect`: lee `DevToolsActivePort` del perfil de Chrome, y macOS
+ * protege esa carpeta frente a otras apps (`deny file-read-data`, comprobado el 2026-10-27).
+ * Sin el identificador de la URL, Chrome acepta la conexión tras su diálogo «Permitir».
+ */
+export const BROWSER_WS_ENDPOINT = 'ws://127.0.0.1:9222/devtools/browser'
 const BROWSER_MCP_COMMAND = 'npx'
-const BROWSER_MCP_ARGS: readonly string[] = ['-y', BROWSER_MCP_PACKAGE, '--autoConnect', '--no-usage-statistics', '--no-performance-crux']
+const BROWSER_MCP_ARGS: readonly string[] = [
+  '-y',
+  BROWSER_MCP_PACKAGE,
+  `--wsEndpoint=${BROWSER_WS_ENDPOINT}`,
+  '--no-usage-statistics',
+  '--no-performance-crux',
+]
 
 type McpTransport =
   | { readonly kind: 'remote'; readonly url: string }
