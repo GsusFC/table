@@ -1864,6 +1864,32 @@ kbd {
   color: var(--color-text-muted);
 }
 
+/* MCP de la sesión (T-010): chips con cómo autorizarlos en el título. */
+.agents-mcp {
+  display: flex;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.agents-mcp-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 9999px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  cursor: help;
+}
+
+.agents-mcp-unsupported {
+  border-style: dashed;
+  color: var(--color-text-faint);
+  text-decoration: line-through;
+}
+
 /* Progreso de la lectura de Notion (T-009). */
 .agents-context {
   flex-shrink: 0;

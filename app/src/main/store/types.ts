@@ -1,4 +1,5 @@
 import type {
+  AgentNotionMode,
   Card,
   CardId,
   CardPatch,
@@ -29,7 +30,8 @@ import type {
  *
  * Escrituras atómicas (archivo temporal + rename). Un archivo de las versiones
  * de esquema 1 (sin notas ni conexiones) o 2 (sin resultados) se lee migrado a
- * la actual y se guarda en la actual con la siguiente escritura. Un archivo de
+ * la actual y se guarda en la actual con la siguiente escritura. En la 3,
+ * `agentNotion` (T-010) es opcional en el archivo y vale `files` si falta. Un archivo de
  * otra versión, JSON inválido o forma inválida (URL no http(s), geometría o IDs
  * incorrectos, nombres de archivo de resultado que no son un solo segmento,
  * conexiones a elementos que no existen) no se sobrescribe: `list` lo cuenta
@@ -47,6 +49,8 @@ export interface MesaStore {
   create(name: string): Promise<Mesa>
   get(id: MesaId): Promise<Mesa>
   rename(id: MesaId, name: string): Promise<Mesa>
+  /** Cómo recibe el agente el contexto de Notion (T-010); sin cambios, no escribe. */
+  setAgentNotion(id: MesaId, mode: AgentNotionMode): Promise<Mesa>
   /** Borra la mesa y sus capturas. */
   remove(id: MesaId): Promise<void>
   setViewport(id: MesaId, viewport: Viewport): Promise<void>

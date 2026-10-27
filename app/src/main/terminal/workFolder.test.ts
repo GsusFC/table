@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -87,5 +87,18 @@ describe('carpetas de trabajo', () => {
     expect(await folders.folderFor(B, 'x')).toBe(join(root, 'Bueno'))
     expect(await folders.folderFor(A, 'Fuera')).toBe(join(root, 'Fuera'))
     expect(await folders.folderFor(C, 'bueno')).toBe(join(root, 'bueno (33333333)'))
+  })
+
+  it('rechaza una carpeta de mesa cambiada por un enlace simbólico (p. ej. a la carpeta personal)', async () => {
+    const folders = createWorkFolders(file, root)
+    const path = await folders.folderFor(A, 'Proyecto')
+    await expect(folders.verify(path)).resolves.toBeUndefined()
+    const home = join(base, 'casa')
+    await mkdir(join(home, '.gemini'), { recursive: true })
+    await rm(path, { recursive: true })
+    await symlink(home, path)
+    await expect(folders.folderFor(A, 'Proyecto')).rejects.toThrow('no es una carpeta normal')
+    await expect(folders.verify(path)).rejects.toThrow('no es una carpeta normal')
+    await expect(folders.verify(join(home, '.gemini'))).rejects.toThrow('no es una carpeta normal')
   })
 })

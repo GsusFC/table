@@ -1,5 +1,5 @@
 import { app, webContents, type BrowserWindow, type WebContents } from 'electron'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
@@ -59,6 +59,12 @@ export const smokeHooks = {
   terminalPid: (_sessionId: string): number | null => null,
   /** «Ver contexto» en el smoke: rutas que se abrirían, sin abrir apps del sistema. */
   openedContext: [] as string[],
+  /**
+   * MCP de los agentes (T-010): un perfil propio del smoke se configura como
+   * el arnés indicado (`claude`, `gemini`…), para ver lo que recibiría sin
+   * arrancar ese arnés.
+   */
+  mcpAdapters: new Map<string, string>(),
 }
 
 function processAlive(pid: number): boolean {
@@ -1132,6 +1138,174 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
       await inUi(`window.table.mesas.remove(${agentsArg})`)
     }
     // fin T-007 interfaz
+
+    // T-010: MCP de los agentes. Perfiles propios configurados como Claude Code, Gemini CLI y OpenCode (sin
+    // arrancar esos arneses) vuelcan lo que reciben: argumentos, archivos de la carpeta y entorno.
+    {
+      const mcpMesa = await inUi<Mesa>(`window.table.mesas.create('Mesa de MCP')`)
+      const mcpArg = JSON.stringify(mcpMesa.id)
+      const fakes = [
+        { name: 'Claude falso', adapter: 'claude', command: "printf '%s\\n' > .smoke-args.txt" },
+        { name: 'Gemini falso', adapter: 'gemini', command: 'cat .gemini/settings.json > .smoke-files.txt' },
+        { name: 'OpenCode falso', adapter: 'opencode', command: `printf '%s' "$OPENCODE_CONFIG_CONTENT" > .smoke-env.txt` },
+      ]
+      let saved: HarnessProfile[] = []
+      for (const fake of fakes) {
+        saved = await inUi<HarnessProfile[]>(`window.table.terminal.saveCustomProfile(${JSON.stringify({ name: fake.name, command: fake.command })})`)
+        smokeHooks.mcpAdapters.set(saved.find(profile => profile.name === fake.name)!.id, fake.adapter)
+      }
+      const fakeId = (name: string): string => saved.find(profile => profile.name === name)!.id
+      // Ya se está en el inicio: recargar vuelve a listar las mesas creadas por la API.
+      ui.reload()
+      await waitFor(
+        () => inUi<boolean>(`[...document.querySelectorAll('.mesa-row-open')].some(b => b.textContent.includes('Mesa de MCP'))`),
+        Boolean,
+        'mesa de MCP en el inicio',
+      )
+      await inUi(`[...document.querySelectorAll('.mesa-row-open')].find(b => b.textContent.includes('Mesa de MCP')).click()`)
+      await waitFor(() => inUi<boolean>(`!!document.querySelector('.react-flow__pane')`), Boolean, 'lienzo de MCP')
+      await inUi(`document.querySelector('.topbar [aria-label="Agentes"]').click()`)
+      await waitFor(() => inUi<number>(`document.querySelectorAll('.agents-profile').length`), count => count > 0, 'perfiles en el panel de MCP')
+      const startFromPanel = async (name: string, count: number): Promise<SessionInfo> => {
+        await inUi(`document.querySelector('.agents [aria-label="Nueva sesión"]').click()`)
+        await waitFor(() => inUi<boolean>(`!!document.querySelector('.menu')`), Boolean, 'menú de perfiles')
+        await inUi(
+          `[...document.querySelectorAll('.menu [role="menuitem"]')].find(b => b.querySelector('.menu-item-label').textContent === ${JSON.stringify(name)}).click()`,
+        )
+        const list = await waitFor(() => inUi<SessionInfo[]>(`window.table.terminal.sessions(${mcpArg})`), sessions => sessions.length === count, `sesión «${name}»`)
+        return list[count - 1]!
+      }
+      const readDump = (folder: string, file: string): Promise<string> =>
+        waitFor(() => (existsSync(join(folder, file)) ? readFileSync(join(folder, file), 'utf8') : ''), text => text.trim().length > 0, file)
+      const claudeServers = (text: string): Record<string, { url?: string; args?: string[] }> =>
+        (JSON.parse(text.trim().slice('--mcp-config='.length)) as { mcpServers: Record<string, { url?: string; args?: string[] }> }).mcpServers
+      const chips = (): Promise<{ text: string; title: string; status: string }[]> =>
+        inUi(`[...document.querySelectorAll('.agents-session-bar .agents-mcp-chip')].map(c => ({ text: c.textContent, title: c.title, status: c.dataset.status }))`)
+      const credentialLike = /token|bearer|authorization|secret|credencial/i
+
+      const claudeSession = await startFromPanel('Claude falso', 1)
+      const folder = claudeSession.cwd
+      const args = await readDump(folder, '.smoke-args.txt')
+      const servers = claudeServers(args)
+      const shownChips = await waitFor(chips, list => list.length === 2, 'chips de MCP en el panel')
+      record(
+        'mcp: Claude Code arranca con `--mcp-config` (Figma y navegador, sin Notion) y el panel muestra sus chips',
+        args.startsWith('--mcp-config=') &&
+          JSON.stringify(Object.keys(servers)) === JSON.stringify(['table-figma', 'table-chrome-devtools']) &&
+          servers['table-figma']?.url === 'https://mcp.figma.com/mcp' &&
+          (servers['table-chrome-devtools']?.args ?? []).includes('--autoConnect') &&
+          JSON.stringify(claudeSession.mcp.map(item => item.name)) === JSON.stringify(['figma', 'browser']) &&
+          shownChips.map(chip => chip.text).join(',') === 'Figma,Navegador' &&
+          shownChips[0]!.title.includes('/mcp') &&
+          shownChips[1]!.title.includes('chrome://inspect') &&
+          !credentialLike.test(args),
+        { chips: shownChips.map(chip => chip.text) },
+      )
+      await shot('31-mcp-chips')
+
+      await inUi(`window.table.terminal.start(${mcpArg}, ${JSON.stringify(fakeId('Gemini falso'))}, { cols: 80, rows: 24 })`)
+      const geminiFiles = JSON.parse(await readDump(folder, '.smoke-files.txt')) as { mcpServers: Record<string, unknown> }
+      await inUi(`window.table.terminal.start(${mcpArg}, ${JSON.stringify(fakeId('OpenCode falso'))}, { cols: 80, rows: 24 })`)
+      const opencodeEnv = await readDump(folder, '.smoke-env.txt')
+      record(
+        'mcp: Gemini CLI encuentra `.gemini/settings.json` en la carpeta y OpenCode su configuración en el entorno',
+        JSON.stringify(Object.keys(geminiFiles.mcpServers)) === JSON.stringify(['table-figma', 'table-chrome-devtools']) &&
+          Object.keys((JSON.parse(opencodeEnv) as { mcp: object }).mcp).join(',') === 'table-figma,table-chrome-devtools' &&
+          !credentialLike.test(opencodeEnv) &&
+          !credentialLike.test(readFileSync(join(folder, '.gemini/settings.json'), 'utf8')),
+      )
+
+      // «Notion para el agente: MCP completo» avisa antes; cancelar no cambia nada.
+      const openMoreMcp = async (label: string): Promise<void> => {
+        await inUi(`document.querySelector('.agents [aria-label="Más acciones de agentes"]').click()`)
+        await clickMenuItem(label)
+      }
+      const savedMode = async (): Promise<string> => (await inUi<Mesa>(`window.table.mesas.get(${mcpArg})`)).agentNotion
+      await openMoreMcp('Notion para el agente: MCP completo')
+      await waitFor(() => inUi<boolean>(`!!document.querySelector('dialog[open]')`), Boolean, 'aviso de Notion por MCP')
+      const warning = await inUi<string>(`document.querySelector('dialog[open]').textContent`)
+      await inUi(`[...document.querySelectorAll('dialog[open] button')].find(b => b.textContent === 'Cancelar').click()`)
+      await waitFor(() => inUi<boolean>(`!document.querySelector('dialog[open]')`), Boolean, 'aviso cerrado')
+      const afterCancel = await savedMode()
+      await openMoreMcp('Notion para el agente: MCP completo')
+      await waitFor(() => inUi<boolean>(`!!document.querySelector('dialog[open]')`), Boolean, 'aviso de Notion por MCP')
+      await inUi(`document.querySelector('dialog[open] button[type="submit"]').click()`)
+      // El diálogo se cierra cuando Table ya guardó el modo y reescribió TABLE.md y los archivos de MCP.
+      await waitFor(() => inUi<boolean>(`!document.querySelector('dialog[open]')`), Boolean, 'aviso cerrado')
+      const afterConfirm = await savedMode()
+      const readGemini = (): { mcpServers: Record<string, unknown> } =>
+        JSON.parse(readFileSync(join(folder, '.gemini/settings.json'), 'utf8')) as { mcpServers: Record<string, unknown> }
+      const geminiWithNotion = readGemini()
+      const tableWithNotion = readFileSync(join(folder, 'TABLE.md'), 'utf8')
+      rmSync(join(folder, '.smoke-args.txt'))
+      const notionSession = await startFromPanel('Claude falso', 4)
+      const notionServers = claudeServers(await readDump(folder, '.smoke-args.txt'))
+      const notionChips = await waitFor(chips, list => list.length === 3, 'chip de Notion').catch(() => [])
+      record(
+        'mcp: activar Notion por MCP avisa de presupuestos y oportunidades, se guarda en la mesa y llega a las sesiones nuevas',
+        warning.includes('presupuestos') &&
+          warning.includes('oportunidades') &&
+          afterCancel === 'files' &&
+          afterConfirm === 'mcp' &&
+          'table-notion' in geminiWithNotion.mcpServers &&
+          tableWithNotion.includes('- **Notion** (`table-notion`)') &&
+          notionServers['table-notion']?.url === 'https://mcp.notion.com/mcp' &&
+          notionSession.mcp.some(item => item.name === 'notion') &&
+          notionChips.map(chip => chip.text).join(',') === 'Figma,Navegador,Notion',
+        {
+          afterCancel,
+          afterConfirm,
+          warned: warning.includes('presupuestos') && warning.includes('oportunidades'),
+          files: 'table-notion' in geminiWithNotion.mcpServers,
+          table: tableWithNotion.includes('- **Notion** (`table-notion`)'),
+          args: Object.keys(notionServers),
+          session: notionSession.mcp.map(item => item.name),
+          chips: notionChips.map(chip => chip.text),
+        },
+      )
+      await shot('32-mcp-notion')
+
+      // Si Table no puede quitar Notion de un archivo suyo, la interfaz lo dice y los arneses que lo leen no arrancan.
+      const noticeText = (): Promise<string> => inUi<string>(`document.querySelector('.notice-text')?.textContent ?? ''`)
+      chmodSync(join(folder, '.gemini'), 0o500)
+      await openMoreMcp('Notion para el agente: archivos filtrados')
+      const failedNotice = await waitFor(noticeText, text => text.includes('no pudo actualizar'), 'aviso de archivo sin actualizar').catch(noticeText)
+      const blockedStart = await inUi<string>(
+        `window.table.terminal.start(${mcpArg}, ${JSON.stringify(fakeId('Gemini falso'))}, { cols: 80, rows: 24 }).then(() => 'arrancó', error => String(error))`,
+      )
+      const stillThere = 'table-notion' in readGemini().mcpServers
+      chmodSync(join(folder, '.gemini'), 0o700)
+      record(
+        'mcp: si no se puede quitar Notion de un archivo de Table, se avisa y Gemini CLI no arranca',
+        failedNotice.includes('.gemini/settings.json') && blockedStart.includes('no pudo quitar su MCP de Notion') && stillThere,
+        { failedNotice: failedNotice.slice(0, 80), blockedStart: blockedStart.slice(0, 80), stillThere },
+      )
+
+      // Volver a archivos filtrados: sin aviso; Table quita Notion de los archivos que ya había creado.
+      await openMoreMcp('Notion para el agente: archivos filtrados')
+      const backToFiles = await waitFor(savedMode, mode => mode === 'files', 'modo archivos guardado').catch(() => 'mcp')
+      const geminiWithout = await waitFor(readGemini, settings => !('table-notion' in settings.mcpServers), 'Notion fuera de .gemini').catch(readGemini)
+      record(
+        'mcp: volver a archivos filtrados reescribe la configuración de proyecto y TABLE.md sin Notion',
+        backToFiles === 'files' &&
+          !(await inUi<boolean>(`!!document.querySelector('dialog[open]')`)) &&
+          !('table-notion' in geminiWithout.mcpServers) &&
+          'table-figma' in geminiWithout.mcpServers &&
+          readFileSync(join(folder, 'TABLE.md'), 'utf8').includes('- **Notion**: sin MCP en esta mesa'),
+      )
+
+      for (const session of await inUi<SessionInfo[]>(`window.table.terminal.sessions(${mcpArg})`)) {
+        await inUi(`window.table.terminal.close(${JSON.stringify(session.id)})`)
+      }
+      for (const fake of fakes) {
+        await inUi(`window.table.terminal.removeCustomProfile(${JSON.stringify(fakeId(fake.name))})`)
+      }
+      smokeHooks.mcpAdapters.clear()
+      await inUi(`document.querySelector('.agents [aria-label="Plegar agentes"]')?.click()`)
+      await inUi(`document.querySelector('.rail [aria-label="Inicio"]').click()`)
+      await waitFor(() => inUi<boolean>(`!!document.querySelector('.home')`), Boolean, 'inicio')
+      await inUi(`window.table.mesas.remove(${mcpArg})`)
+    }
 
     // T-008: interfaz de «Enviar al agente» y tarjetas de resultado, con la terminal normal.
     {

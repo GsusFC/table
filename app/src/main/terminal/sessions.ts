@@ -3,7 +3,14 @@ import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { spawn, type IPty } from 'node-pty'
 import type { MesaId } from '../../shared/model'
-import { SESSION_REPLAY_BYTES, type HarnessProfile, type SessionId, type SessionInfo, type TerminalSize } from '../../shared/terminal'
+import {
+  SESSION_REPLAY_BYTES,
+  type HarnessProfile,
+  type SessionId,
+  type SessionInfo,
+  type SessionMcp,
+  type TerminalSize,
+} from '../../shared/terminal'
 import { log } from '../log'
 
 /** Salida agrupada antes de enviarla a la interfaz (un fotograma). */
@@ -28,9 +35,47 @@ export interface SessionManagerOptions {
   /** Carpeta de trabajo de la mesa (ruta absoluta, ya creada); lanza si la mesa no existe. */
   workFolder(mesaId: MesaId): Promise<string>
   profile(id: string): HarnessProfile | undefined
+  /**
+   * Antes de arrancar, con la carpeta ya lista: argumentos y entorno extra del
+   * arnés y sus MCP (T-010). Si lanza `SessionBlockedError`, la sesión no se
+   * abre y la interfaz recibe su mensaje; con cualquier otro error, arranca
+   * sin ellos.
+   */
+  prepare?(mesaId: MesaId, profile: HarnessProfile, cwd: string): Promise<SessionLaunch>
   onData(sessionId: SessionId, data: string): void
   /** Arranque y salida; no se emite para sesiones que se están cerrando. */
   onSession(session: SessionInfo): void
+}
+
+/** Lo que se añade al arranque de un perfil (T-010). Nunca credenciales. */
+export interface SessionLaunch {
+  /** Se añaden, entrecomillados, al final del comando del perfil; la terminal normal no los usa. */
+  readonly args: readonly string[]
+  readonly env: Readonly<Record<string, string>>
+  readonly mcp: readonly SessionMcp[]
+  /**
+   * Si la preparación sigue valiendo (p. ej. no cambió el ajuste de Notion de
+   * la mesa mientras tanto). Se comprueba justo antes de arrancar; si no, se
+   * vuelve a preparar.
+   */
+  readonly isCurrent?: () => boolean
+}
+
+/** La preparación no puede garantizar una configuración segura: la sesión no se abre. */
+export class SessionBlockedError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'SessionBlockedError'
+  }
+}
+
+const NO_LAUNCH: SessionLaunch = { args: [], env: {}, mcp: [] }
+/** Preparaciones como mucho por arranque si se quedan antiguas una y otra vez. */
+const MAX_PREPARE_ATTEMPTS = 3
+
+/** Texto entre comillas simples para `sh -c`: nada se expande dentro. */
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
 export interface SessionManager {
@@ -348,10 +393,29 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     const cwd = await options.workFolder(mesaId)
     // Mientras se preparaba la carpeta pudo empezar el cierre de la mesa o de Table.
     refuseStart(mesaId)
-    const args = profile.command === null ? ['-l'] : ['-l', '-c', profile.command]
+    let extra = NO_LAUNCH
+    for (let attempt = 1; options.prepare; attempt += 1) {
+      extra = await options.prepare(mesaId, profile, cwd).catch((error: unknown) => {
+        if (error instanceof SessionBlockedError) {
+          throw error
+        }
+        log('terminal-prepare-failed', { profileId: profile.id, message: error instanceof Error ? error.message : String(error) })
+        return NO_LAUNCH
+      })
+      refuseStart(mesaId)
+      // Comprobación y arranque sin `await` entre medias: nada puede cambiar el ajuste en ese hueco.
+      if (!extra.isCurrent || extra.isCurrent()) {
+        break
+      }
+      if (attempt >= MAX_PREPARE_ATTEMPTS) {
+        throw new Error('La configuración de la sesión cambió mientras se abría; vuelve a abrirla')
+      }
+    }
+    const command = profile.command === null ? null : [profile.command, ...extra.args.map(shellQuote)].join(' ')
+    const args = command === null ? ['-l'] : ['-l', '-c', command]
     let pty: IPty
     try {
-      pty = spawn(options.shell, args, { name: 'xterm-256color', cols: size.cols, rows: size.rows, cwd, env: options.env })
+      pty = spawn(options.shell, args, { name: 'xterm-256color', cols: size.cols, rows: size.rows, cwd, env: { ...options.env, ...extra.env } })
     } catch (error) {
       log('terminal-spawn-failed', { profileId: profile.id, message: error instanceof Error ? error.message : String(error) })
       throw new Error('No se pudo abrir la terminal')
@@ -368,6 +432,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
         status: 'running',
         exitCode: null,
         startedAt: new Date().toISOString(),
+        mcp: extra.mcp,
       },
       pty,
       replay: new ReplayBuffer(SESSION_REPLAY_BYTES),

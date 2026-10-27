@@ -47,6 +47,7 @@ const mesa: Mesa = {
   results: [],
   edges: [],
   dismissedResults: [],
+  agentNotion: 'files',
 }
 
 const snapshot = buildSnapshot(

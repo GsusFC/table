@@ -25,6 +25,21 @@ export interface HarnessProfile {
 
 export type SessionStatus = 'running' | 'exited'
 
+/** MCP del catálogo de Table para los agentes (T-010). */
+export type AgentMcpName = 'figma' | 'browser' | 'notion'
+
+/**
+ * Un MCP en una sesión: `configured` si Table lo configuró en el arnés al
+ * abrirla; `unsupported` si ese arnés no lo admite o Table no sabe
+ * configurarlo. Nunca lleva credenciales: la autorización la hace el arnés.
+ */
+export interface SessionMcp {
+  readonly name: AgentMcpName
+  readonly status: 'configured' | 'unsupported'
+  /** Cómo autorizarlo o por qué no está, para la persona. */
+  readonly hint: string
+}
+
 export interface SessionInfo {
   readonly id: SessionId
   readonly mesaId: MesaId
@@ -36,6 +51,8 @@ export interface SessionInfo {
   /** Código de salida cuando `exited`; null si terminó por señal o sigue en marcha. */
   readonly exitCode: number | null
   readonly startedAt: string
+  /** MCP de la sesión, fijados al arrancarla (T-010); vacío en la terminal normal. */
+  readonly mcp: readonly SessionMcp[]
 }
 
 /** Columnas y filas del terminal visible. */

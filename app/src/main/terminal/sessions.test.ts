@@ -4,7 +4,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SESSION_REPLAY_BYTES, type HarnessProfile, type SessionInfo } from '../../shared/terminal'
-import { createSessionManager, FLOW_HIGH_WATER, sessionEnvironment, type SessionManager } from './sessions'
+import {
+  createSessionManager,
+  FLOW_HIGH_WATER,
+  SessionBlockedError,
+  sessionEnvironment,
+  type SessionLaunch,
+  type SessionManager,
+} from './sessions'
 import { createWorkFolders } from './workFolder'
 
 const MESA = '11111111-1111-4111-8111-111111111111'
@@ -29,7 +36,17 @@ const PROFILES: Record<string, HarnessProfile> = {
   flood: profile('flood', `head -c ${SESSION_REPLAY_BYTES + 100_000} /dev/zero | tr '\\0' a; printf FIN; sleep 30`),
   bigFlood: profile('bigFlood', `head -c ${FLOW_HIGH_WATER * 4} /dev/zero | tr '\\0' a; printf FIN; sleep 30`),
   child: profile('child', 'sleep 300 & printf "hijo-%s-fin" $!; wait'),
+  /** Los argumentos de `prepare` se añaden al final: llegan al último `printf`. */
+  extra: profile('extra', `printf "env=$TABLE_TEST_EXTRA;"; printf '[%s]'`),
+  broken: profile('broken', 'printf roto; sleep 30'),
+  blocked: profile('blocked', 'printf no-debe-arrancar; sleep 30'),
+  /** Su preparación se queda antigua las veces que diga `staleTimes`. */
+  stale: profile('stale', `printf "[%s]"`),
 }
+
+/** Preparaciones de `stale` hechas y cuántas de ellas salen ya antiguas. */
+let stalePrepares = 0
+let staleTimes = 0
 
 /** Procesos reales en un pseudoterminal: no hay reloj falso que los adelante; se sondea hasta la condición. */
 async function until(check: () => boolean, label: string, timeoutMs = 10_000): Promise<void> {
@@ -70,6 +87,27 @@ beforeEach(async () => {
       return folders.folderFor(mesaId, 'Mesa: prueba')
     },
     profile: id => PROFILES[id],
+    prepare: async (mesaId, harness, cwd): Promise<SessionLaunch> => {
+      if (harness.id === 'broken') {
+        throw new Error('no se pudo preparar')
+      }
+      if (harness.id === 'blocked') {
+        throw new SessionBlockedError('Configuración insegura')
+      }
+      if (harness.id === 'stale') {
+        stalePrepares += 1
+        const attempt = stalePrepares
+        return { args: [`preparación-${attempt}`], env: {}, mcp: [], isCurrent: () => attempt > staleTimes }
+      }
+      if (harness.id !== 'extra' || mesaId !== MESA || !existsSync(cwd)) {
+        return { args: [], env: {}, mcp: [] }
+      }
+      return {
+        args: ['a b', "it's", '$HOME', '; echo inyectado'],
+        env: { TABLE_TEST_EXTRA: 'valor' },
+        mcp: [{ name: 'figma', status: 'configured', hint: 'Autoriza en el arnés' }],
+      }
+    },
     onData: (id, data) => {
       output.set(id, (output.get(id) ?? '') + data)
       if (autoAck) {
@@ -106,6 +144,39 @@ describe('sesiones', () => {
     expect(events.find(event => event.status === 'exited')?.exitCode).toBe(3)
     expect(manager.replay(session.id)).toContain('adios')
     expect(manager.runningCount()).toBe(0)
+  })
+
+  it('añade los argumentos (entrecomillados) y el entorno de `prepare` y guarda sus MCP en la sesión', async () => {
+    const session = await manager.start(MESA, 'extra', SIZE)
+    expect(session.mcp).toEqual([{ name: 'figma', status: 'configured', hint: 'Autoriza en el arnés' }])
+    await until(() => output.get(session.id)?.includes('; echo inyectado]') === true, 'argumentos')
+    const text = output.get(session.id) ?? ''
+    expect(text).toContain("env=valor;[a b][it's][$HOME][; echo inyectado]")
+    expect(text).not.toContain('\ninyectado')
+  })
+
+  it('si `prepare` falla, la sesión arranca igual, sin MCP', async () => {
+    const session = await manager.start(MESA, 'broken', SIZE)
+    expect(session.mcp).toEqual([])
+    await until(() => output.get(session.id)?.includes('roto') === true, 'salida')
+  })
+
+  it('si `prepare` bloquea la sesión, no se abre y el motivo llega a la interfaz', async () => {
+    await expect(manager.start(MESA, 'blocked', SIZE)).rejects.toThrow('Configuración insegura')
+    expect(manager.sessions(MESA)).toEqual([])
+    expect(events).toEqual([])
+  })
+
+  it('una preparación que se quedó antigua se repite; si no deja de cambiar, no arranca', async () => {
+    stalePrepares = 0
+    staleTimes = 1
+    const session = await manager.start(MESA, 'stale', SIZE)
+    await until(() => output.get(session.id)?.includes('[preparación-2]') === true, 'segunda preparación')
+    expect(stalePrepares).toBe(2)
+    stalePrepares = 0
+    staleTimes = 10
+    await expect(manager.start(MESA, 'stale', SIZE)).rejects.toThrow('cambió mientras se abría')
+    expect(stalePrepares).toBe(3)
   })
 
   it('acota la salida guardada', async () => {

@@ -10,6 +10,8 @@ export interface MenuItem {
   readonly hint?: string
   /** Visible pero sin acción (p. ej. un arnés no instalado); se salta con las flechas. */
   readonly disabled?: boolean
+  /** Explicación al pasar por encima. */
+  readonly title?: string
 }
 
 interface MenuProps {
@@ -134,6 +136,7 @@ export function Menu({ anchor, align = 'start', label, items, onClose }: MenuPro
             role="menuitem"
             className={item.danger ? 'menu-item menu-item-danger' : 'menu-item'}
             disabled={item.disabled}
+            title={item.title}
             onClick={() => {
               onClose()
               item.onSelect()

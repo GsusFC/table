@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
-import { mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { lstat, mkdir, realpath } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 import type { MesaId } from '../../shared/model'
 import { writeFileAtomic } from '../files'
 
@@ -40,6 +40,33 @@ export interface WorkFolders {
   folderFor(mesaId: MesaId, mesaName: string): Promise<string>
   /** Olvida la asignación de una mesa borrada; la carpeta y sus archivos se quedan. */
   forget(mesaId: MesaId): Promise<void>
+  /**
+   * Lanza si `folder` no es una carpeta normal (no un enlace simbólico) de un
+   * solo segmento cuya ruta real está dentro de la raíz. Antes de escribir
+   * configuración en ella: una carpeta cambiada por un enlace a `~` haría que
+   * Table editara la configuración global de un arnés.
+   */
+  verify(folder: string): Promise<void>
+}
+
+/** Lanza si `path` no es una carpeta normal directamente dentro de la ruta real de `root`. */
+async function checkWorkFolder(path: string, root: string): Promise<void> {
+  const refuse = (): never => {
+    throw new Error('La carpeta de trabajo de la mesa no es una carpeta normal dentro de la carpeta de Table')
+  }
+  if (dirname(path) !== root) {
+    refuse()
+  }
+  const stat = await lstat(path)
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    refuse()
+  }
+  const real = await realpath(path)
+  const expected = join(await realpath(root), basename(path))
+  // El disco de macOS no distingue mayúsculas: `realpath` puede devolver otra grafía del mismo nombre.
+  if (process.platform === 'darwin' ? real.toLowerCase() !== expected.toLowerCase() : real !== expected) {
+    refuse()
+  }
 }
 
 /**
@@ -87,6 +114,7 @@ export function createWorkFolders(file: string, root: string): WorkFolders {
         }
         const path = join(root, segment)
         await mkdir(path, { recursive: true })
+        await checkWorkFolder(path, root)
         return path
       })
     },
@@ -98,6 +126,10 @@ export function createWorkFolders(file: string, root: string): WorkFolders {
           await save(rest)
         }
       })
+    },
+
+    verify(folder) {
+      return checkWorkFolder(folder, root)
     },
   }
 }

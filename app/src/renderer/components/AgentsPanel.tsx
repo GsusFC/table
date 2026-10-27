@@ -1,8 +1,20 @@
-import { Ellipsis, FileText, ListChecks, PanelRightClose, Plus, RefreshCw, SquareArrowOutUpRight, SquareTerminal, X } from 'lucide-react'
+import {
+  Ellipsis,
+  FileText,
+  ListChecks,
+  PanelRightClose,
+  Plug,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+  SquareArrowOutUpRight,
+  SquareTerminal,
+  X,
+} from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
-import type { MesaId } from '../../shared/model'
+import type { AgentNotionMode, MesaId } from '../../shared/model'
 import type { NotionContextProgress } from '../../shared/notionContext'
-import type { HarnessProfile, SessionInfo } from '../../shared/terminal'
+import type { AgentMcpName, HarnessProfile, SessionInfo } from '../../shared/terminal'
 import { errorMessage } from '../lib/errors'
 import {
   attachSession,
@@ -44,6 +56,9 @@ interface AgentsPanelProps {
   readonly notify: (text: string, tone?: 'info' | 'error') => void
 }
 
+/** Nombre visible de cada MCP de la sesión (T-010). */
+const MCP_LABELS: Readonly<Record<AgentMcpName, string>> = { figma: 'Figma', browser: 'Navegador', notion: 'Notion' }
+
 /** Línea compacta del progreso de la lectura de Notion (T-009). */
 function progressText(progress: NotionContextProgress): string {
   switch (progress.phase) {
@@ -79,6 +94,9 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
   const [contextProgress, setContextProgress] = useState<NotionContextProgress | null>(null)
   const [showWarnings, setShowWarnings] = useState(false)
   const [choosingPages, setChoosingPages] = useState(false)
+  /** «Notion para el agente» de la mesa (T-010); null mientras se lee. */
+  const [notionMode, setNotionMode] = useState<AgentNotionMode | null>(null)
+  const [confirmNotionMcp, setConfirmNotionMcp] = useState(false)
   const bodyRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -100,6 +118,42 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
       off()
     }
   }, [mesaId])
+
+  const loadNotionMode = useCallback((): (() => void) => {
+    let current = true
+    api.mesas.get(mesaId).then(
+      mesa => current && setNotionMode(mesa.agentNotion),
+      () => undefined,
+    )
+    return () => {
+      current = false
+    }
+  }, [mesaId])
+  useEffect(() => {
+    setNotionMode(null)
+    return loadNotionMode()
+  }, [loadNotionMode])
+
+  const saveNotionMode = (mode: AgentNotionMode): Promise<void> =>
+    api.agent.setNotionMode(mesaId, mode).then(
+      saved => {
+        setNotionMode(saved)
+        notify(saved === 'mcp' ? 'Notion por MCP en las sesiones nuevas' : 'Notion por archivos filtrados en las sesiones nuevas', 'info')
+      },
+      (error: unknown) => {
+        // El modo pudo guardarse aunque fallaran los archivos: se vuelve a leer el de la mesa.
+        loadNotionMode()
+        throw error
+      },
+    )
+
+  const askNotionMcp = (): void => {
+    if (entered) {
+      onExitWeb().then(() => setConfirmNotionMcp(true), (error: unknown) => notify(errorMessage(error)))
+    } else {
+      setConfirmNotionMcp(true)
+    }
+  }
 
   const chooseNotionPages = (): void => {
     if (entered) {
@@ -332,6 +386,21 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
           <span className="agents-cwd" title={active.cwd}>
             {active.cwd}
           </span>
+          {active.mcp.length > 0 && (
+            <span className="agents-mcp" aria-label="MCP de la sesión">
+              {active.mcp.map(item => (
+                <span
+                  key={item.name}
+                  className={item.status === 'configured' ? 'agents-mcp-chip' : 'agents-mcp-chip agents-mcp-unsupported'}
+                  data-mcp={item.name}
+                  data-status={item.status}
+                  title={item.status === 'configured' ? item.hint : `No configurado: ${item.hint}`}
+                >
+                  {MCP_LABELS[item.name]}
+                </span>
+              ))}
+            </span>
+          )}
           <span className={`status status-${activeStatus.tone}`}>{activeStatus.label}</span>
           {!activeDetached && (
             <button type="button" className="button button-small" onClick={() => detach(active)}>
@@ -415,6 +484,29 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
                 api.agent.openContext(mesaId).catch((error: unknown) => notify(errorMessage(error)))
               },
             },
+            {
+              label: 'Notion para el agente: archivos filtrados',
+              icon: ShieldCheck,
+              hint: notionMode === 'files' ? 'activo' : undefined,
+              disabled: notionMode === null,
+              title:
+                'Table no configura el MCP de Notion en las sesiones nuevas. No es una garantía: con el navegador autorizado, el agente puede abrir Notion en Chrome igualmente.',
+              // Elegirlo aunque ya esté activo vuelve a quitar Notion de los archivos (p. ej. tras un error).
+              onSelect: () => {
+                saveNotionMode('files').catch((error: unknown) => notify(errorMessage(error)))
+              },
+            },
+            {
+              label: 'Notion para el agente: MCP completo',
+              icon: Plug,
+              hint: notionMode === 'mcp' ? 'activo' : undefined,
+              disabled: notionMode === null,
+              onSelect: () => {
+                if (notionMode !== 'mcp') {
+                  askNotionMcp()
+                }
+              },
+            },
           ]}
           onClose={() => setMoreAnchor(null)}
         />
@@ -435,6 +527,31 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
           mesaId={mesaId}
           onSaved={() => notify('Selección guardada; Table vuelve a leer Notion', 'info')}
           onClose={() => setChoosingPages(false)}
+        />
+      )}
+
+      {!entered && confirmNotionMcp && (
+        <ConfirmDialog
+          title="Activar el MCP de Notion"
+          confirmLabel="Activar MCP completo"
+          description={
+            <>
+              <p>
+                El agente podrá leer todo lo que tu cuenta ve en Notion, sin el filtro de Table: presupuestos, oportunidades y
+                cualquier importe.
+              </p>
+              <p>
+                Se aplica a las sesiones que abras a partir de ahora en esta mesa; la primera vez, el arnés te pedirá
+                autorizar Notion con tu cuenta.
+              </p>
+              <p>
+                «Archivos filtrados» tampoco es una garantía si autorizas el navegador: con él, el agente puede abrir
+                Notion en Chrome igualmente.
+              </p>
+            </>
+          }
+          onConfirm={() => saveNotionMode('mcp')}
+          onClose={() => setConfirmNotionMcp(false)}
         />
       )}
     </aside>

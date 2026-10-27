@@ -61,6 +61,10 @@ Una conexión MCP directa con permisos amplios puede recuperar datos excluidos d
 
 Límite explícito: Table no puede asegurar que un arnés arbitrario, ejecutado con los permisos y credenciales generales del usuario, nunca acceda a información por otros medios. Si se necesita esa garantía, habrá que definir un entorno restringido, credenciales acotadas y pruebas negativas. «No lo incluyas en el prompt» no cumple ese requisito.
 
+**MCP de Notion por mesa ([D-019](decisions.md), [T-010](tasks/010-mcp-de-los-agentes.md)).** Por defecto el agente recibe solo los archivos filtrados de `notion/`. Si la persona activa «Notion para el agente: MCP completo» en una mesa (con un aviso previo), Table configura el MCP oficial de Notion en las sesiones nuevas de esa mesa y el agente puede leer `Budget`, oportunidades e importes con la cuenta de la persona: el filtro deja de ser una garantía en esa mesa. Con archivos filtrados, Table no lo configura, pero no puede quitar un MCP de Notion que la persona tenga en la configuración global de su arnés.
+
+**El navegador es otra vía a Notion.** El MCP de navegador de T-010 usa el Chrome de la persona con sus sesiones iniciadas. Con él autorizado, el agente puede abrir Notion en Chrome y leer cualquier página que la persona vea, presupuestos incluidos, aunque la mesa esté en «archivos filtrados». En ese caso «archivos filtrados» no es una garantía: el panel lo avisa y `TABLE.md` pide al agente que no abra Notion con el navegador, pero es una instrucción, no un control.
+
 **Capturas de páginas de Notion.** Una tarjeta web guarda una captura de lo que se vio al salir; si la página muestra `Budget`, la captura lo contiene. Es una copia local para el usuario, que ya ve esa página en Notion. Por eso las capturas de páginas de Notion no pueden formar parte del contexto ni de la selección visual que se entregue a un agente; hasta que la Fase 2 defina esa entrega, solo la ficha filtrada es apta (hallazgo de la revisión de Codex del 2026-10-26).
 
 ## Contenido completo (T-009)

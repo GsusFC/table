@@ -200,6 +200,26 @@ function notionContentLines(summary: NotionContentSummary | null, hasProjects: b
   return lines
 }
 
+/** MCP que Table configura en las sesiones de la mesa (T-010) y para qué sirve cada uno. */
+function sessionToolLines(mesa: Mesa): string[] {
+  const lines = [
+    'Al abrir una sesión en esta carpeta, Table configura estos MCP en el arnés si lo admite (Claude Code, Codex, Gemini CLI, OpenCode; omp, sin Figma). El panel de agentes muestra cuáles tiene cada sesión. La primera vez, el arnés pide autorizar cada uno con la cuenta de la persona. pi, los perfiles propios y la terminal normal no tienen ninguno.',
+    '',
+    '- **Figma** (`table-figma`): para ver y editar el diseño. Úsalo con los enlaces de Figma de «Enlaces»: un enlace con `node-id` señala un frame concreto; pásalo entero.',
+    '- **Navegador** (`table-chrome-devtools`): maneja el Chrome de la persona, con sus sesiones iniciadas; Chrome le pide permiso al conectarse. Úsalo para Pinterest y otras webs de «Enlaces» que piden iniciar sesión.',
+  ]
+  if (mesa.agentNotion === 'mcp') {
+    lines.push(
+      '- **Notion** (`table-notion`): el MCP oficial, activado para esta mesa, sin el filtro de Table: puede leer presupuestos, oportunidades e importes. Empieza por el contenido filtrado de `notion/` y usa el MCP para lo que falte.',
+    )
+  } else {
+    lines.push(
+      '- **Notion**: sin MCP en esta mesa. Usa el contenido filtrado de `notion/` (ver «Contenido de Notion»). No abras Notion con el navegador: en esta mesa, lo de Notion para el agente es solo `notion/`.',
+    )
+  }
+  return lines
+}
+
 /**
  * `TABLE.md` completo. Función pura: recibe la mesa, la caché ya leída y la
  * fecha, para poder probarla con datos sintéticos.
@@ -227,6 +247,8 @@ export function formatTableContext(input: TableContextInput): string {
   }
 
   lines.push('## Contenido de Notion', '', ...notionContentLines(input.notionContent, projectCards.length > 0), '')
+
+  lines.push('## Herramientas de la sesión', '', ...sessionToolLines(mesa), '')
 
   lines.push('## Enlaces', '')
   if (mesa.cards.length === 0) {

@@ -3,6 +3,7 @@ import { existsSync, readdirSync, unlinkSync } from 'node:fs'
 import { readdir, readFile, rm, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
+  DEFAULT_AGENT_NOTION,
   DEFAULT_CARD_SIZE,
   DEFAULT_NOTE_SIZE,
   DEFAULT_RESULT_SIZE,
@@ -14,6 +15,7 @@ import {
   type CardPatch,
   type Edge,
   type EdgeId,
+  type AgentNotionMode,
   type Mesa,
   type MesaId,
   type MesaListing,
@@ -29,6 +31,7 @@ import {
   type Viewport,
 } from '../../shared/model'
 import {
+  parseAgentNotionMode,
   parseHttpUrl,
   parseId,
   parseMesaName,
@@ -202,6 +205,10 @@ function checkMesa(value: unknown, id: MesaId): Mesa {
   let rawEdges: readonly unknown[] = []
   let rawResults: readonly unknown[] = []
   let rawDismissed: readonly unknown[] = []
+  // `agentNotion` (T-010) solo puede venir en la versión actual.
+  if (version !== SCHEMA_VERSION && fields.agentNotion !== undefined) {
+    throw new Error(INVALID)
+  }
   if (version === V1_CARDS_ONLY) {
     if (fields.notes !== undefined || fields.edges !== undefined || fields.results !== undefined || fields.dismissedResults !== undefined) {
       throw new Error(INVALID)
@@ -270,6 +277,7 @@ function checkMesa(value: unknown, id: MesaId): Mesa {
     edges,
     results,
     dismissedResults,
+    agentNotion: fields.agentNotion === undefined ? DEFAULT_AGENT_NOTION : checkSame(fields.agentNotion, parseAgentNotionMode),
   }
 }
 
@@ -451,6 +459,7 @@ export function createMesaStore(baseDir: string): MesaStore {
         edges: [],
         results: [],
         dismissedResults: [],
+        agentNotion: DEFAULT_AGENT_NOTION,
       }
       await withQueue(id, () => writeMesa(mesa))
       return mesa
@@ -464,6 +473,16 @@ export function createMesaStore(baseDir: string): MesaStore {
       return mutate(parseId(id), (mesa, at) => {
         const renamed: Mesa = { ...mesa, name, updatedAt: at }
         return { mesa: renamed, result: renamed }
+      })
+    },
+
+    async setAgentNotion(id: MesaId, mode: AgentNotionMode): Promise<Mesa> {
+      return mutate(parseId(id), (mesa, at) => {
+        if (mesa.agentNotion === mode) {
+          return { mesa, result: mesa }
+        }
+        const changed: Mesa = { ...mesa, agentNotion: mode, updatedAt: at }
+        return { mesa: changed, result: changed }
       })
     },
 

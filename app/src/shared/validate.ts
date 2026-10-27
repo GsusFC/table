@@ -1,6 +1,8 @@
 import {
+  AGENT_NOTION_MODES,
   MAX_MESA_NAME_LENGTH,
   MAX_NOTE_TEXT_LENGTH,
+  type AgentNotionMode,
   type CardPatch,
   type NotePatch,
   type Point,
@@ -186,6 +188,13 @@ export function parseResultKind(value: unknown): ResultKind {
     throw new Error('Tipo de resultado no válido')
   }
   return value as ResultKind
+}
+
+export function parseAgentNotionMode(value: unknown): AgentNotionMode {
+  if (typeof value !== 'string' || !(AGENT_NOTION_MODES as readonly string[]).includes(value)) {
+    throw new Error('Modo de Notion para el agente no válido')
+  }
+  return value as AgentNotionMode
 }
 
 /** Igual que el de una tarjeta: posición y tamaño. */

@@ -53,6 +53,7 @@ const mesa: Mesa = {
   results: [{ id: ids.result, file: 'plan.md', kind: 'text', position: { x: 0, y: 0 }, size: DEFAULT_RESULT_SIZE, createdAt: AT, updatedAt: AT }],
   edges: [{ id: ids.edge, source: ids.figma, target: ids.note, createdAt: AT }],
   dismissedResults: [],
+  agentNotion: 'files',
 }
 
 /** Ficha real construida desde el fixture con campos excluidos (SECRETO), más un campo excluido inyectado en la caché. */
@@ -129,6 +130,21 @@ describe('TABLE.md', () => {
     expect(pending).toContain('Table está leyendo en segundo plano el contenido de las fichas')
     const none = formatTableContext({ mesa, generatedAt: AT, lastSelection: null, notionContent: null, projects: new Map(), frames: new Map() })
     expect(none).toContain('Sin fichas de proyecto: no hay contenido de Notion.')
+  })
+
+  it('«Herramientas de la sesión»: Figma y navegador; Notion por MCP solo si la mesa lo permite', () => {
+    expect(text).toContain('## Herramientas de la sesión')
+    expect(text).toContain('- **Figma** (`table-figma`)')
+    expect(text).toContain('`node-id`')
+    expect(text).toContain('- **Navegador** (`table-chrome-devtools`)')
+    expect(text).toContain('Pinterest')
+    expect(text).toContain('- **Notion**: sin MCP en esta mesa. Usa el contenido filtrado de `notion/`')
+    expect(text).toContain('No abras Notion con el navegador')
+    expect(text).not.toContain('(`table-notion`)')
+    const withMcp = formatTableContext({ mesa: { ...mesa, agentNotion: 'mcp' }, generatedAt: AT, lastSelection: null, notionContent: summary, ...details })
+    expect(withMcp).toContain('- **Notion** (`table-notion`): el MCP oficial')
+    expect(withMcp).toContain('presupuestos, oportunidades e importes')
+    expect(withMcp).not.toContain('No abras Notion con el navegador')
   })
 })
 

@@ -494,7 +494,7 @@ describe('migración de la versión 1', () => {
     const { id, path, v1 } = await writeV1()
     const content = await readFile(path, 'utf8')
     const mesa = await store.get(id)
-    expect(mesa).toEqual({ ...v1, schemaVersion: SCHEMA_VERSION, notes: [], edges: [], results: [], dismissedResults: [] })
+    expect(mesa).toEqual({ ...v1, schemaVersion: SCHEMA_VERSION, notes: [], edges: [], results: [], dismissedResults: [], agentNotion: 'files' })
     expect((await store.list()).mesas).toEqual([expect.objectContaining({ id, name: 'Mesa antigua', cardCount: 1 })])
     expect(await readFile(path, 'utf8')).toBe(content)
   })
@@ -512,6 +512,7 @@ describe('migración de la versión 1', () => {
       edges: [],
       results: [],
       dismissedResults: [],
+      agentNotion: 'files',
     })
     expect(await createMesaStore(baseDir).get(id)).toEqual(raw)
   })
@@ -573,7 +574,7 @@ describe('migración de la versión 2', () => {
   it('se abre sin pérdida, con la lista de resultados vacía, sin reescribir al leer', async () => {
     const { id, path, v2 } = await writeV2()
     const content = await readFile(path, 'utf8')
-    expect(await store.get(id)).toEqual({ ...v2, schemaVersion: SCHEMA_VERSION, results: [], dismissedResults: [] })
+    expect(await store.get(id)).toEqual({ ...v2, schemaVersion: SCHEMA_VERSION, results: [], dismissedResults: [], agentNotion: 'files' })
     expect(await readFile(path, 'utf8')).toBe(content)
   })
 
@@ -582,7 +583,7 @@ describe('migración de la versión 2', () => {
     setNow('2026-10-27T10:00:00.000Z')
     const [result] = await addResults(id, [{ file: 'plan.md', kind: 'text', position: { x: 800, y: 0 } }])
     const raw = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>
-    expect(raw).toEqual({ ...v2, schemaVersion: 3, updatedAt: '2026-10-27T10:00:00.000Z', results: [result], dismissedResults: [] })
+    expect(raw).toEqual({ ...v2, schemaVersion: 3, updatedAt: '2026-10-27T10:00:00.000Z', results: [result], dismissedResults: [], agentNotion: 'files' })
     expect(await createMesaStore(baseDir).get(id)).toEqual(raw)
   })
 
@@ -591,6 +592,56 @@ describe('migración de la versión 2', () => {
     const content = JSON.stringify({ ...v2, results: [] })
     await writeFile(path, content)
     expect(await store.list()).toEqual({ mesas: [], unreadable: [id] })
+    expect(await readFile(path, 'utf8')).toBe(content)
+  })
+
+  it('una versión 2 con el ajuste de Notion para el agente no es legible', async () => {
+    const { id, path, v2 } = await writeV2()
+    const content = JSON.stringify({ ...v2, agentNotion: 'mcp' })
+    await writeFile(path, content)
+    expect(await store.list()).toEqual({ mesas: [], unreadable: [id] })
+    expect(await readFile(path, 'utf8')).toBe(content)
+  })
+})
+
+describe('Notion para el agente (T-010)', () => {
+  it('una mesa nueva usa los archivos filtrados', async () => {
+    const mesa = await store.create('Nueva')
+    expect(mesa.agentNotion).toBe('files')
+    const raw = JSON.parse(await readFile(join(baseDir, 'mesas', `${mesa.id}.json`), 'utf8')) as Record<string, unknown>
+    expect(raw['agentNotion']).toBe('files')
+  })
+
+  it('un archivo de la versión 3 sin el campo se lee con «files» y no se reescribe al leer', async () => {
+    const mesa = await store.create('Anterior a T-010')
+    const path = join(baseDir, 'mesas', `${mesa.id}.json`)
+    const raw = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>
+    delete raw['agentNotion']
+    const content = JSON.stringify(raw)
+    await writeFile(path, content)
+    expect((await store.get(mesa.id)).agentNotion).toBe('files')
+    expect(await readFile(path, 'utf8')).toBe(content)
+  })
+
+  it('se guarda el modo; repetirlo no escribe', async () => {
+    const mesa = await store.create('Con MCP')
+    setNow('2026-10-27T11:00:00.000Z')
+    const changed = await store.setAgentNotion(mesa.id, 'mcp')
+    expect(changed).toMatchObject({ agentNotion: 'mcp', updatedAt: '2026-10-27T11:00:00.000Z' })
+    expect(await createMesaStore(baseDir).get(mesa.id)).toEqual(changed)
+    setNow('2026-10-27T12:00:00.000Z')
+    expect((await store.setAgentNotion(mesa.id, 'mcp')).updatedAt).toBe('2026-10-27T11:00:00.000Z')
+    expect((await store.setAgentNotion(mesa.id, 'files')).agentNotion).toBe('files')
+  })
+
+  it('un valor desconocido no es legible y no se toca', async () => {
+    const mesa = await store.create('Rara')
+    const path = join(baseDir, 'mesas', `${mesa.id}.json`)
+    const raw = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>
+    raw['agentNotion'] = 'todo'
+    const content = JSON.stringify(raw)
+    await writeFile(path, content)
+    await expect(store.get(mesa.id)).rejects.toThrow('no es válido')
     expect(await readFile(path, 'utf8')).toBe(content)
   })
 })

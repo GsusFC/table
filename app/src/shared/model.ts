@@ -97,6 +97,15 @@ export function edgeKey(a: ItemId, b: ItemId): string {
   return a < b ? `${a}|${b}` : `${b}|${a}`
 }
 
+/**
+ * Cómo recibe el agente el contexto de Notion de la mesa (D-019, T-010):
+ * `files`, el contenido filtrado por Table (`notion/`, T-009); `mcp`, además el
+ * MCP oficial de Notion en la sesión, sin filtro.
+ */
+export type AgentNotionMode = 'files' | 'mcp'
+export const AGENT_NOTION_MODES: readonly AgentNotionMode[] = ['files', 'mcp']
+export const DEFAULT_AGENT_NOTION: AgentNotionMode = 'files'
+
 export interface Mesa {
   readonly schemaVersion: typeof SCHEMA_VERSION
   readonly id: MesaId
@@ -114,6 +123,11 @@ export interface Mesa {
    * vuelven a importar mientras el archivo siga en la carpeta.
    */
   readonly dismissedResults: readonly string[]
+  /**
+   * Desde T-010, dentro de la versión 3: un archivo sin el campo se lee con
+   * `files` (el valor por defecto).
+   */
+  readonly agentNotion: AgentNotionMode
 }
 
 /** Lo necesario para la lista del inicio, sin cargar tarjetas. */

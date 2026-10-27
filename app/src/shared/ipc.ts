@@ -1,4 +1,5 @@
 import type {
+  AgentNotionMode,
   Card,
   CardId,
   CardPatch,
@@ -89,6 +90,8 @@ export const IPC = {
   agentContextState: 'agent:context-state',
   agentNotionTree: 'agent:notion-tree',
   agentSetNotionSelection: 'agent:set-notion-selection',
+  /** Ajuste de la mesa «Notion para el agente» (T-010). */
+  agentSetNotionMode: 'agent:set-notion-mode',
   /** main → renderer: progreso de la lectura del contenido de Notion de una mesa. */
   agentContextProgress: 'agent:context-progress',
   resultsUpdate: 'results:update',
@@ -248,6 +251,13 @@ export interface TableApi {
     notionTree(mesaId: MesaId): Promise<NotionTree>
     /** Guarda la selección de páginas por ficha y vuelve a leer Notion en segundo plano. */
     setNotionSelection(mesaId: MesaId, selections: Readonly<Record<string, NotionPageSelection>>): Promise<void>
+    /**
+     * «Notion para el agente» (T-010): `files` (por defecto) o `mcp`, el MCP
+     * oficial de Notion sin filtro en las sesiones nuevas. Reescribe `TABLE.md`
+     * y los archivos de configuración de MCP que Table ya creó en la carpeta.
+     * Devuelve el modo guardado.
+     */
+    setNotionMode(mesaId: MesaId, mode: AgentNotionMode): Promise<AgentNotionMode>
   }
   /** Tarjetas de resultado: archivos de `resultados/` en la carpeta de la mesa (T-008). */
   readonly results: {

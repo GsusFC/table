@@ -23,6 +23,7 @@ import { parseNotionSelections } from '../shared/notionContext'
 import { recognizeService } from '../shared/services'
 import {
   isCustomProfileId,
+  parseAgentNotionMode,
   parseCardPatch,
   parseHttpUrl,
   parseId,
@@ -37,6 +38,7 @@ import {
   parseViewport,
 } from '../shared/validate'
 import { CONTEXT_FILE, createAgentContext, type AgentContext } from './agent/context'
+import { createAgentMcp, type AgentMcp } from './agent/mcp'
 import { createNotionContent, type NotionContent } from './agent/notionContent'
 import { NOTION_DIR } from './agent/notionFiles'
 import { createResultsWatcher, IMAGE_MIME, type ResultEntry, type ResultsWatcher } from './agent/results'
@@ -97,6 +99,8 @@ let agentContext: AgentContext | null = null
 /** Contenido completo de Notion en `notion/` de cada mesa (T-009). */
 let notionContent: NotionContent | null = null
 let resultsWatcher: ResultsWatcher | null = null
+/** MCP de los agentes por arnés y ajuste de Notion de cada mesa (T-010). */
+let agentMcp: AgentMcp | null = null
 /** Autorización con Notion en curso (navegador abierto); se puede cancelar. */
 let connectingNotion: AbortController | null = null
 /** Escrituras iniciadas por el proceso principal (capturas, títulos); se esperan al cerrar. */
@@ -482,11 +486,11 @@ function registerFigmaIpc(): void {
   })
 }
 
-function requireAgent(): { context: AgentContext; results: ResultsWatcher; notion: NotionContent } {
-  if (!agentContext || !resultsWatcher || !notionContent) {
+function requireAgent(): { context: AgentContext; results: ResultsWatcher; notion: NotionContent; mcp: AgentMcp } {
+  if (!agentContext || !resultsWatcher || !notionContent || !agentMcp) {
     throw new Error('El contexto de los agentes no está listo')
   }
-  return { context: agentContext, results: resultsWatcher, notion: notionContent }
+  return { context: agentContext, results: resultsWatcher, notion: notionContent, mcp: agentMcp }
 }
 
 /** Elementos máximos en una selección enviada al agente. */
@@ -559,6 +563,21 @@ function registerAgentIpc(): void {
     const parsedMesa = parseId(mesaId)
     await requireStore().get(parsedMesa)
     await requireAgent().notion.setSelection(parsedMesa, parseNotionSelections(selections))
+  })
+  handle(IPC.agentSetNotionMode, async (mesaId, mode) => {
+    const parsedMesa = parseId(mesaId)
+    const parsedMode = parseAgentNotionMode(mode)
+    try {
+      // Guarda el modo y deja al día los archivos de MCP que Table creó; si alguno falla, el error llega a la interfaz.
+      const saved = await requireAgent().mcp.setMode(parsedMesa, parsedMode)
+      log('agent-notion-mode', { mode: saved })
+      return saved
+    } finally {
+      // `TABLE.md` dice qué MCP hay, también si los archivos no se pudieron actualizar.
+      await requireAgent()
+        .context.write(parsedMesa)
+        .catch((error: unknown) => log('agent-context-failed', { message: error instanceof Error ? error.message : String(error) }))
+    }
   })
   handle(IPC.agentSelectionText, (mesaId, itemIds) => {
     if (!Array.isArray(itemIds) || itemIds.length === 0 || itemIds.length > MAX_SELECTION_ITEMS) {
@@ -965,6 +984,14 @@ void app.whenReady().then(async () => {
     workFolder: mesaFolder,
     onChanged: mesaId => sendToRenderer(IPC.resultsChanged, mesaId),
   })
+  const mcp = createAgentMcp({
+    mode: async mesaId => (await requireStore().get(mesaId)).agentNotion,
+    saveMode: async (mesaId, mode) => (await requireStore().setAgentNotion(mesaId, mode)).agentNotion,
+    folder: mesaFolder,
+    verifyFolder: folder => folders.verify(folder),
+    registryFile: join(app.getPath('userData'), 'agent-mcp-files.json'),
+  })
+  agentMcp = mcp
   terminals = createSessionManager({
     shell,
     env: sessionEnv,
@@ -979,6 +1006,11 @@ void app.whenReady().then(async () => {
       return folder
     },
     profile: id => catalog.get(id),
+    // MCP de los agentes (T-010): Figma y navegador siempre, Notion si la mesa lo permite.
+    prepare: (mesaId, profile, cwd) => {
+      const smokeAdapter = smokeMode ? smokeHooks.mcpAdapters.get(profile.id) : undefined
+      return mcp.prepare(mesaId, cwd, smokeAdapter ?? (profile.source === 'builtin' ? profile.id : 'custom'))
+    },
     onData: (sessionId, data) => sendToRenderer(IPC.terminalData, sessionId, data),
     onSession: session => sendToRenderer(IPC.terminalSession, session),
   })

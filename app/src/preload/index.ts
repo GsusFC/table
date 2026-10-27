@@ -133,6 +133,7 @@ const api: TableApi = {
     },
     notionTree: mesaId => ipcRenderer.invoke(IPC.agentNotionTree, mesaId),
     setNotionSelection: (mesaId, selections) => ipcRenderer.invoke(IPC.agentSetNotionSelection, mesaId, selections),
+    setNotionMode: (mesaId, mode) => ipcRenderer.invoke(IPC.agentSetNotionMode, mesaId, mode),
   },
   results: {
     update: (mesaId, resultId, patch) => ipcRenderer.invoke(IPC.resultsUpdate, mesaId, resultId, patch),
