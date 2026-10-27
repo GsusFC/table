@@ -37,11 +37,11 @@ export interface SessionManagerOptions {
   profile(id: string): HarnessProfile | undefined
   /**
    * Antes de arrancar, con la carpeta ya lista: argumentos y entorno extra del
-   * arnés y sus MCP (T-010). Si lanza `SessionBlockedError`, la sesión no se
-   * abre y la interfaz recibe su mensaje; con cualquier otro error, arranca
-   * sin ellos.
+   * arnés y sus MCP (T-010, T-011). Recibe el ID que tendrá la sesión. Si
+   * lanza `SessionBlockedError`, la sesión no se abre y la interfaz recibe su
+   * mensaje; con cualquier otro error, arranca sin ellos.
    */
-  prepare?(mesaId: MesaId, profile: HarnessProfile, cwd: string): Promise<SessionLaunch>
+  prepare?(mesaId: MesaId, profile: HarnessProfile, cwd: string, sessionId: SessionId): Promise<SessionLaunch>
   onData(sessionId: SessionId, data: string): void
   /** Arranque y salida; no se emite para sesiones que se están cerrando. */
   onSession(session: SessionInfo): void
@@ -59,6 +59,8 @@ export interface SessionLaunch {
    * vuelve a preparar.
    */
   readonly isCurrent?: () => boolean
+  /** Se llama una vez cuando la sesión termina, se cierra o no llega a arrancar (p. ej. invalida su testigo del MCP de Table). */
+  readonly dispose?: () => void
 }
 
 /** La preparación no puede garantizar una configuración segura: la sesión no se abre. */
@@ -176,6 +178,8 @@ interface ProcessEntry {
 
 interface Session {
   info: SessionInfo
+  /** Libera lo que preparó `prepare` (p. ej. el testigo del MCP de Table); null cuando ya se liberó. */
+  dispose: (() => void) | null
   readonly pty: IPty
   readonly replay: ReplayBuffer
   /** Hora de inicio del proceso principal según `ps`, leída al arrancar. */
@@ -383,6 +387,8 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
         await terminate(session)
       } finally {
         sessions.delete(id)
+        session.dispose?.()
+        session.dispose = null
         log('terminal-closed', { profileId: session.info.profileId })
       }
     })()
@@ -393,20 +399,27 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     const cwd = await options.workFolder(mesaId)
     // Mientras se preparaba la carpeta pudo empezar el cierre de la mesa o de Table.
     refuseStart(mesaId)
+    const id = randomUUID()
     let extra = NO_LAUNCH
     for (let attempt = 1; options.prepare; attempt += 1) {
-      extra = await options.prepare(mesaId, profile, cwd).catch((error: unknown) => {
+      extra = await options.prepare(mesaId, profile, cwd, id).catch((error: unknown) => {
         if (error instanceof SessionBlockedError) {
           throw error
         }
         log('terminal-prepare-failed', { profileId: profile.id, message: error instanceof Error ? error.message : String(error) })
         return NO_LAUNCH
       })
-      refuseStart(mesaId)
+      try {
+        refuseStart(mesaId)
+      } catch (error) {
+        extra.dispose?.()
+        throw error
+      }
       // Comprobación y arranque sin `await` entre medias: nada puede cambiar el ajuste en ese hueco.
       if (!extra.isCurrent || extra.isCurrent()) {
         break
       }
+      extra.dispose?.()
       if (attempt >= MAX_PREPARE_ATTEMPTS) {
         throw new Error('La configuración de la sesión cambió mientras se abría; vuelve a abrirla')
       }
@@ -417,10 +430,10 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
     try {
       pty = spawn(options.shell, args, { name: 'xterm-256color', cols: size.cols, rows: size.rows, cwd, env: { ...options.env, ...extra.env } })
     } catch (error) {
+      extra.dispose?.()
       log('terminal-spawn-failed', { profileId: profile.id, message: error instanceof Error ? error.message : String(error) })
       throw new Error('No se pudo abrir la terminal')
     }
-    const id = randomUUID()
     const { promise: exited, resolve: markExited } = Promise.withResolvers<void>()
     const session: Session = {
       info: {
@@ -443,6 +456,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
       pauseTimer: null,
       closing: null,
       exited,
+      dispose: extra.dispose ?? null,
     }
     sessions.set(id, session)
     // Identidad del proceso para no confundirlo con otro que reutilice su PID al cerrarlo.
@@ -466,6 +480,8 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
         session.pauseTimer = null
       }
       markExited()
+      session.dispose?.()
+      session.dispose = null
       log('terminal-exited', { profileId: profile.id, exitCode, signal: bySignal ?? null })
       if (!session.closing) {
         flushOutput(id, session)

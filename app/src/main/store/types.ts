@@ -63,8 +63,8 @@ export interface MesaStore {
   /** Borra la tarjeta, sus conexiones (en la misma escritura) y su captura. */
   removeCard(mesaId: MesaId, cardId: CardId): Promise<void>
 
-  /** Nota vacía con tamaño por defecto; `position` ya validada. */
-  addNote(mesaId: MesaId, position: Point): Promise<Note>
+  /** Nota con tamaño por defecto, vacía si no se da `text`; `position` y `text` ya validados. */
+  addNote(mesaId: MesaId, position: Point, text?: string): Promise<Note>
   /** `patch` ya validado con `parseNotePatch`. */
   updateNote(mesaId: MesaId, noteId: NoteId, patch: NotePatch): Promise<Note>
   /** Borra la nota y sus conexiones en la misma escritura. */

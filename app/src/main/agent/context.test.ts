@@ -134,6 +134,9 @@ describe('TABLE.md', () => {
 
   it('«Herramientas de la sesión»: Figma y navegador; Notion por MCP solo si la mesa lo permite', () => {
     expect(text).toContain('## Herramientas de la sesión')
+    expect(text).toContain('- **Table** (`table`): la mesa en vivo')
+    expect(text).toContain('`table_get_selection`')
+    expect(text).toContain('pide confirmación a la persona')
     expect(text).toContain('- **Figma** (`table-figma`)')
     expect(text).toContain('`node-id`')
     expect(text).toContain('- **Navegador** (`table-chrome-devtools`)')

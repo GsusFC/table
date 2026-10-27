@@ -47,6 +47,8 @@ const PROFILES: Record<string, HarnessProfile> = {
 /** Preparaciones de `stale` hechas y cuántas de ellas salen ya antiguas. */
 let stalePrepares = 0
 let staleTimes = 0
+/** Sesiones cuya preparación se liberó (`dispose`), con el ID que recibió `prepare`. */
+let disposed: string[] = []
 
 /** Procesos reales en un pseudoterminal: no hay reloj falso que los adelante; se sondea hasta la condición. */
 async function until(check: () => boolean, label: string, timeoutMs = 10_000): Promise<void> {
@@ -87,7 +89,10 @@ beforeEach(async () => {
       return folders.folderFor(mesaId, 'Mesa: prueba')
     },
     profile: id => PROFILES[id],
-    prepare: async (mesaId, harness, cwd): Promise<SessionLaunch> => {
+    prepare: async (mesaId, harness, cwd, sessionId): Promise<SessionLaunch> => {
+      if (harness.id === 'hello' || harness.id === 'exit3') {
+        return { args: [], env: {}, mcp: [], dispose: () => disposed.push(sessionId) }
+      }
       if (harness.id === 'broken') {
         throw new Error('no se pudo preparar')
       }
@@ -97,7 +102,13 @@ beforeEach(async () => {
       if (harness.id === 'stale') {
         stalePrepares += 1
         const attempt = stalePrepares
-        return { args: [`preparación-${attempt}`], env: {}, mcp: [], isCurrent: () => attempt > staleTimes }
+        return {
+          args: [`preparación-${attempt}`],
+          env: {},
+          mcp: [],
+          isCurrent: () => attempt > staleTimes,
+          dispose: () => disposed.push(`stale-${attempt}`),
+        }
       }
       if (harness.id !== 'extra' || mesaId !== MESA || !existsSync(cwd)) {
         return { args: [], env: {}, mcp: [] }
@@ -167,16 +178,31 @@ describe('sesiones', () => {
     expect(events).toEqual([])
   })
 
-  it('una preparación que se quedó antigua se repite; si no deja de cambiar, no arranca', async () => {
+  it('una preparación que se quedó antigua se repite (y se libera); si no deja de cambiar, no arranca', async () => {
+    disposed = []
     stalePrepares = 0
     staleTimes = 1
     const session = await manager.start(MESA, 'stale', SIZE)
     await until(() => output.get(session.id)?.includes('[preparación-2]') === true, 'segunda preparación')
     expect(stalePrepares).toBe(2)
+    expect(disposed).toContain('stale-1')
     stalePrepares = 0
     staleTimes = 10
     await expect(manager.start(MESA, 'stale', SIZE)).rejects.toThrow('cambió mientras se abría')
     expect(stalePrepares).toBe(3)
+    expect(disposed).toEqual(expect.arrayContaining(['stale-1', 'stale-2', 'stale-3']))
+  })
+
+  it('lo preparado se libera una vez al terminar el proceso o al cerrar la sesión, con el ID de la sesión', async () => {
+    disposed = []
+    const exiting = await manager.start(MESA, 'exit3', SIZE)
+    await until(() => events.some(event => event.id === exiting.id && event.status === 'exited'), 'salida')
+    expect(disposed).toEqual([exiting.id])
+    await manager.close(exiting.id)
+    const running = await manager.start(MESA, 'hello', SIZE)
+    expect(disposed).toEqual([exiting.id])
+    await manager.close(running.id)
+    expect(disposed).toEqual([exiting.id, running.id])
   })
 
   it('acota la salida guardada', async () => {

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import { IPC, type PersistenceError, type TableApi } from '../shared/ipc'
-import type { Card, MesaId } from '../shared/model'
+import { IPC, type AgentConfirmRequest, type PersistenceError, type TableApi } from '../shared/ipc'
+import type { Card, ItemId, MesaId } from '../shared/model'
 import type { NotionContextProgress } from '../shared/notionContext'
 import type { SurfaceCardState } from '../shared/surface'
 import type { SessionId, SessionInfo } from '../shared/terminal'
@@ -134,6 +134,36 @@ const api: TableApi = {
     notionTree: mesaId => ipcRenderer.invoke(IPC.agentNotionTree, mesaId),
     setNotionSelection: (mesaId, selections) => ipcRenderer.invoke(IPC.agentSetNotionSelection, mesaId, selections),
     setNotionMode: (mesaId, mode) => ipcRenderer.invoke(IPC.agentSetNotionMode, mesaId, mode),
+    reportUiState: state => ipcRenderer.send(IPC.agentUiState, state),
+    onMesaChanged: listener => {
+      const handler = (_event: IpcRendererEvent, mesaId: MesaId, notice: string): void => listener(mesaId, notice)
+      ipcRenderer.on(IPC.agentMesaChanged, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC.agentMesaChanged, handler)
+      }
+    },
+    onShowItems: listener => {
+      const handler = (_event: IpcRendererEvent, mesaId: MesaId, itemIds: readonly ItemId[]): void => listener(mesaId, itemIds)
+      ipcRenderer.on(IPC.agentShowItems, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC.agentShowItems, handler)
+      }
+    },
+    onConfirmRequest: listener => {
+      const handler = (_event: IpcRendererEvent, request: AgentConfirmRequest): void => listener(request)
+      ipcRenderer.on(IPC.agentConfirmRequest, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC.agentConfirmRequest, handler)
+      }
+    },
+    onConfirmCancel: listener => {
+      const handler = (_event: IpcRendererEvent, requestId: string): void => listener(requestId)
+      ipcRenderer.on(IPC.agentConfirmCancel, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC.agentConfirmCancel, handler)
+      }
+    },
+    respondConfirm: (requestId, accepted) => ipcRenderer.send(IPC.agentConfirmResponse, requestId, accepted),
   },
   results: {
     update: (mesaId, resultId, patch) => ipcRenderer.invoke(IPC.resultsUpdate, mesaId, resultId, patch),

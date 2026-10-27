@@ -76,6 +76,7 @@ import { notionPageIdFromUrl, type ProjectSearchResult } from '../../shared/noti
 import type { SurfaceCardState, UnloadResult } from '../../shared/surface'
 import type { SessionId } from '../../shared/terminal'
 import { copyText } from '../lib/clipboard'
+import { takesDiskGeometry } from '../lib/diskGeometry'
 import { errorMessage } from '../lib/errors'
 import { notifyFigmaThumbnailsChanged } from '../lib/figmaThumbnails'
 import { displayHost } from '../lib/format'
@@ -232,7 +233,13 @@ function initialNodes(mesa: Mesa): MesaNode[] {
 
 const isMesaItem = (node: MesaNode): node is MesaItemNode => node.type !== 'terminal'
 
-/** Mantiene la geometría local (el usuario puede estar arrastrando) y toma el resto del disco. */
+/**
+ * Mantiene la geometría local (el usuario puede estar arrastrando o
+ * redimensionando) y toma el resto del disco. Si la geometría cambió en disco
+ * (p. ej. la movió un agente, T-011), se toma la del disco salvo que el
+ * elemento se esté arrastrando o redimensionando, o tenga una geometría local
+ * aún sin guardar (distinta de la última que vino del disco).
+ */
 function mergeNodes(
   previous: readonly MesaNode[],
   cards: readonly Card[],
@@ -240,26 +247,25 @@ function mergeNodes(
   results: readonly Result[],
 ): MesaNode[] {
   const byId = new Map(previous.map(node => [node.id, node]))
+  const merge = <N extends MesaItemNode>(existing: N, before: Card | Note | Result, after: Card | Note | Result, data: N['data']): N => {
+    if (before === after) {
+      return existing
+    }
+    return takesDiskGeometry(existing, before, after)
+      ? { ...existing, data, position: after.position, width: after.size.width, height: after.size.height }
+      : { ...existing, data }
+  }
   const mergedCards = cards.map((card): MesaNode => {
     const existing = byId.get(card.id)
-    if (existing?.type !== 'card') {
-      return cardNode(card)
-    }
-    return existing.data.card === card ? existing : { ...existing, data: { card } }
+    return existing?.type === 'card' ? merge(existing, existing.data.card, card, { card }) : cardNode(card)
   })
   const mergedNotes = notes.map((note): MesaNode => {
     const existing = byId.get(note.id)
-    if (existing?.type !== 'note') {
-      return noteNode(note)
-    }
-    return existing.data.note === note ? existing : { ...existing, data: { note } }
+    return existing?.type === 'note' ? merge(existing, existing.data.note, note, { note }) : noteNode(note)
   })
   const mergedResults = results.map((result): MesaNode => {
     const existing = byId.get(result.id)
-    if (existing?.type !== 'result') {
-      return resultNode(result)
-    }
-    return existing.data.result === result ? existing : { ...existing, data: { result } }
+    return existing?.type === 'result' ? merge(existing, existing.data.result, result, { result }) : resultNode(result)
   })
   return [...mergedCards, ...mergedNotes, ...mergedResults, ...previous.filter(node => node.type === 'terminal')]
 }
@@ -622,6 +628,32 @@ function CanvasInner({
 
   const selectedIds = useMemo(() => nodes.filter(node => node.selected && isMesaItem(node)).map(node => node.id), [nodes])
   const selectedCount = selectedIds.length
+
+  // MCP de Table (T-011): el agente lee la selección y no cambia la nota que se está escribiendo.
+  // Se informa solo cuando cambian (no en cada fotograma de un arrastre).
+  const selectionKey = selectedIds.join(',')
+  useEffect(() => {
+    window.table.agent.reportUiState({ mesaId: mesa.id, selection: selectionKey ? selectionKey.split(',') : [], editingNoteId })
+  }, [mesa.id, selectionKey, editingNoteId])
+  useEffect(() => () => window.table.agent.reportUiState({ mesaId: null, selection: [], editingNoteId: null }), [])
+
+  // `table_show_items`: selecciona esos elementos y los centra en la vista.
+  useEffect(
+    () =>
+      window.table.agent.onShowItems((mesaId, ids) => {
+        if (mesaId !== mesa.id) {
+          return
+        }
+        const wanted = new Set(ids)
+        setNodes(current =>
+          current.map(node => (isMesaItem(node) && node.selected !== wanted.has(node.id) ? { ...node, selected: wanted.has(node.id) } : node)),
+        )
+        setEdges(current => current.map(edge => (edge.selected ? { ...edge, selected: false } : edge)))
+        // Un elemento recién creado por el agente puede tardar un momento en llegar al lienzo.
+        window.setTimeout(() => void flow.fitView({ nodes: ids.map(id => ({ id })), padding: 0.4, duration: 300, maxZoom: 1.5 }), 150)
+      }),
+    [mesa.id, flow],
+  )
 
   /** Ordena o alinea los elementos seleccionados y guarda sus posiciones. */
   const arrangeSelection = useCallback(

@@ -547,11 +547,11 @@ export function createMesaStore(baseDir: string): MesaStore {
       })
     },
 
-    async addNote(mesaId: MesaId, position: Point): Promise<Note> {
+    async addNote(mesaId: MesaId, position: Point, text = ''): Promise<Note> {
       return mutate(parseId(mesaId), (mesa, at) => {
         const note: Note = {
           id: randomUUID(),
-          text: '',
+          text,
           position,
           size: DEFAULT_NOTE_SIZE,
           createdAt: at,

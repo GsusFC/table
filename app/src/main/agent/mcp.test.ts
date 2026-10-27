@@ -6,10 +6,12 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentNotionMode } from '../../shared/model'
 import { SessionBlockedError } from '../terminal/sessions'
-import { agentMcpLaunch, BROWSER_MCP_PACKAGE, createAgentMcp, FIGMA_MCP_URL, type AgentMcp } from './mcp'
+import { agentMcpLaunch, BROWSER_MCP_PACKAGE, createAgentMcp, FIGMA_MCP_URL, supportsTableMcp, type AgentMcp, type TableBridge } from './mcp'
 
 const NOTION_URL = 'https://mcp.notion.com/mcp'
 const BROWSER_ARGS = ['-y', BROWSER_MCP_PACKAGE, '--autoConnect', '--no-usage-statistics', '--no-performance-crux']
+/** El navegador recibe vacías las variables del MCP de Table (su testigo no es para él). */
+const NO_TABLE_ENV = { TABLE_MCP_SOCKET: '', TABLE_MCP_SESSION: '', TABLE_MCP_TICKET: '' }
 const MESA = '11111111-1111-4111-8111-111111111111'
 const GEMINI = '.gemini/settings.json'
 const OMP = '.omp/mcp.json'
@@ -85,7 +87,7 @@ describe('Claude Code', () => {
     expect(JSON.parse(arg!.slice('--mcp-config='.length))).toEqual({
       mcpServers: {
         'table-figma': { type: 'http', url: FIGMA_MCP_URL },
-        'table-chrome-devtools': { type: 'stdio', command: 'npx', args: BROWSER_ARGS },
+        'table-chrome-devtools': { type: 'stdio', command: 'npx', args: BROWSER_ARGS, env: NO_TABLE_ENV },
         'table-notion': { type: 'http', url: NOTION_URL },
       },
     })
@@ -118,6 +120,8 @@ describe('Codex', () => {
       '-c',
       `mcp_servers.table-chrome-devtools.args=${JSON.stringify(BROWSER_ARGS)}`,
       '-c',
+      'mcp_servers.table-chrome-devtools.env={TABLE_MCP_SOCKET="",TABLE_MCP_SESSION="",TABLE_MCP_TICKET=""}',
+      '-c',
       'mcp_servers.table-chrome-devtools.startup_timeout_sec=60',
     ])
     expect(launch.mcp.find(item => item.name === 'figma')?.hint).toContain(
@@ -141,7 +145,7 @@ describe('OpenCode', () => {
       $schema: 'https://opencode.ai/config.json',
       mcp: {
         'table-figma': { type: 'remote', url: FIGMA_MCP_URL },
-        'table-chrome-devtools': { type: 'local', command: ['npx', ...BROWSER_ARGS] },
+        'table-chrome-devtools': { type: 'local', command: ['npx', ...BROWSER_ARGS], environment: NO_TABLE_ENV },
         'table-notion': { type: 'remote', url: NOTION_URL },
       },
     })
@@ -158,7 +162,7 @@ describe('Gemini CLI', () => {
     expect(await readJson(GEMINI)).toEqual({
       mcpServers: {
         'table-figma': { httpUrl: FIGMA_MCP_URL },
-        'table-chrome-devtools': { command: 'npx', args: BROWSER_ARGS },
+        'table-chrome-devtools': { command: 'npx', args: BROWSER_ARGS, env: NO_TABLE_ENV },
         'table-notion': { httpUrl: NOTION_URL },
       },
     })
@@ -179,14 +183,18 @@ describe('Gemini CLI', () => {
       mcpServers: {
         ...own,
         'table-figma': { httpUrl: FIGMA_MCP_URL },
-        'table-chrome-devtools': { command: 'npx', args: BROWSER_ARGS },
+        'table-chrome-devtools': { command: 'npx', args: BROWSER_ARGS, env: NO_TABLE_ENV },
         'table-notion': { httpUrl: NOTION_URL },
       },
     })
     expect(await mcp.setMode(MESA, 'files')).toBe('files')
     expect(await readJson(GEMINI)).toEqual({
       theme: 'GitHub',
-      mcpServers: { ...own, 'table-figma': { httpUrl: FIGMA_MCP_URL }, 'table-chrome-devtools': { command: 'npx', args: BROWSER_ARGS } },
+      mcpServers: {
+        ...own,
+        'table-figma': { httpUrl: FIGMA_MCP_URL },
+        'table-chrome-devtools': { command: 'npx', args: BROWSER_ARGS, env: NO_TABLE_ENV },
+      },
     })
   })
 
@@ -301,7 +309,7 @@ describe('omp', () => {
     const launch = await mcp.prepare(MESA, folder, 'omp')
     expect(await readJson(OMP)).toEqual({
       mcpServers: {
-        'table-chrome-devtools': { type: 'stdio', command: 'npx', args: BROWSER_ARGS },
+        'table-chrome-devtools': { type: 'stdio', command: 'npx', args: BROWSER_ARGS, env: NO_TABLE_ENV },
         'table-notion': { type: 'http', url: NOTION_URL },
       },
     })
@@ -311,7 +319,69 @@ describe('omp', () => {
       ['notion', 'configured'],
     ])
     await mcp.setMode(MESA, 'files')
-    expect(await readJson(OMP)).toEqual({ mcpServers: { 'table-chrome-devtools': { type: 'stdio', command: 'npx', args: BROWSER_ARGS } } })
+    expect(await readJson(OMP)).toEqual({
+      mcpServers: { 'table-chrome-devtools': { type: 'stdio', command: 'npx', args: BROWSER_ARGS, env: NO_TABLE_ENV } },
+    })
+  })
+})
+
+describe('MCP de Table (T-011)', () => {
+  const BRIDGE: TableBridge = { command: '/Applications/Table.app/Contents/MacOS/Table', args: ['/Applications/Table.app/mcpBridge.js'] }
+  const STDIO = { command: BRIDGE.command, args: BRIDGE.args, env: { ELECTRON_RUN_AS_NODE: '1' } }
+  const SESSION_ENV = ['TABLE_MCP_SOCKET', 'TABLE_MCP_SESSION', 'TABLE_MCP_TICKET']
+
+  it('solo en los arneses que admiten MCP', () => {
+    expect(['claude', 'codex', 'gemini', 'opencode', 'omp'].every(supportsTableMcp)).toBe(true)
+    expect(['pi', 'custom', 'shell'].some(supportsTableMcp)).toBe(false)
+  })
+
+  it('Claude Code: servidor stdio `table` con el ejecutable de Table en modo Node; chip con las herramientas', () => {
+    const launch = agentMcpLaunch('claude', 'files', BRIDGE)
+    const config = JSON.parse(launch.args[0]!.slice('--mcp-config='.length)) as { mcpServers: Record<string, unknown> }
+    expect(config.mcpServers['table']).toEqual({ type: 'stdio', ...STDIO })
+    const chip = launch.mcp[0]
+    expect(chip).toMatchObject({ name: 'table', status: 'configured' })
+    expect(chip?.hint).toContain('leer la selección')
+    expect(chip?.hint).toContain('Borrar pide tu confirmación')
+  })
+
+  it('Codex: `env` y `env_vars` para que el puente reciba el entorno de la sesión', () => {
+    const args = agentMcpLaunch('codex', 'files', BRIDGE).args
+    expect(args).toContain(`mcp_servers.table.command=${JSON.stringify(BRIDGE.command)}`)
+    expect(args).toContain(`mcp_servers.table.args=${JSON.stringify(BRIDGE.args)}`)
+    expect(args).toContain('mcp_servers.table.env={ELECTRON_RUN_AS_NODE="1"}')
+    expect(args).toContain(`mcp_servers.table.env_vars=${JSON.stringify(SESSION_ENV)}`)
+  })
+
+  it('OpenCode, Gemini CLI y omp; nunca el testigo en la configuración', async () => {
+    const opencode = JSON.parse(agentMcpLaunch('opencode', 'files', BRIDGE).env['OPENCODE_CONFIG_CONTENT']!) as { mcp: Record<string, unknown> }
+    expect(opencode.mcp['table']).toEqual({ type: 'local', command: [BRIDGE.command, ...BRIDGE.args], environment: { ELECTRON_RUN_AS_NODE: '1' } })
+    const withBridge = createAgentMcp({
+      mode: async () => 'files',
+      saveMode: async (_mesaId, next) => next,
+      folder: async () => folder,
+      verifyFolder: async () => undefined,
+      registryFile: join(root, 'datos', 'agent-mcp-files.json'),
+      tableBridge: () => BRIDGE,
+    })
+    await withBridge.prepare(MESA, folder, 'gemini')
+    await withBridge.prepare(MESA, folder, 'omp')
+    expect((await readJson(GEMINI)).mcpServers['table']).toEqual(STDIO)
+    expect((await readJson(OMP)).mcpServers['table']).toEqual({ type: 'stdio', ...STDIO })
+    // Cambiar el modo de Notion conserva `table`.
+    await withBridge.setMode(MESA, 'mcp')
+    expect(Object.keys((await readJson(GEMINI)).mcpServers)).toEqual(['table', 'table-figma', 'table-chrome-devtools', 'table-notion'])
+    for (const text of [await readFile(join(folder, GEMINI), 'utf8'), await readFile(join(folder, OMP), 'utf8'), JSON.stringify(opencode)]) {
+      // Solo aparecen vacías (en el navegador): nunca un valor de testigo, socket o sesión.
+      expect(text).not.toMatch(/"TABLE_MCP_(TICKET|SOCKET|SESSION)": ?"[^"]/)
+      expect(text).not.toMatch(/[0-9a-f]{64}/)
+    }
+  })
+
+  it('sin servidor en marcha, ni configuración ni chip', () => {
+    const launch = agentMcpLaunch('claude', 'files', null)
+    expect(launch.mcp.map(item => item.name)).toEqual(['figma', 'browser'])
+    expect(launch.args[0]).not.toContain('"table"')
   })
 })
 

@@ -11,6 +11,7 @@ import {
   type Size,
   type Viewport,
 } from './model'
+import type { AgentUiState } from './ipc'
 import type { PanelBounds } from './surface'
 import {
   MAX_PROFILE_COMMAND_LENGTH,
@@ -27,7 +28,8 @@ import {
  */
 
 const MAX_URL_LENGTH = 2048
-const MAX_COORDINATE = 1_000_000
+/** Límite de las coordenadas del lienzo: una mesa con coordenadas fuera no es legible. */
+export const MAX_COORDINATE = 1_000_000
 const MIN_CARD_DIMENSION = 80
 const MAX_CARD_DIMENSION = 4000
 const MAX_PANEL_DIMENSION = 16384
@@ -195,6 +197,23 @@ export function parseAgentNotionMode(value: unknown): AgentNotionMode {
     throw new Error('Modo de Notion para el agente no válido')
   }
   return value as AgentNotionMode
+}
+
+/** Elementos seleccionados que la interfaz puede informar a la vez. */
+const MAX_UI_SELECTION = 10_000
+
+/** Estado de la interfaz para el MCP de Table (T-011). */
+export function parseAgentUiState(value: unknown): AgentUiState {
+  const record = asRecord(value, 'Estado de la interfaz')
+  const selection = record['selection']
+  if (!Array.isArray(selection) || selection.length > MAX_UI_SELECTION) {
+    throw new Error('Selección no válida')
+  }
+  return {
+    mesaId: record['mesaId'] === null ? null : parseId(record['mesaId']),
+    selection: selection.map(parseId),
+    editingNoteId: record['editingNoteId'] === null ? null : parseId(record['editingNoteId']),
+  }
 }
 
 /** Igual que el de una tarjeta: posición y tamaño. */

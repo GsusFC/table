@@ -17,13 +17,22 @@ import { homedir, tmpdir, userInfo } from 'node:os'
 import { extname, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { figmaFileKey } from '../shared/figma'
-import { CAPTURE_PROTOCOL, IPC, RESULT_PROTOCOL, type PersistenceError } from '../shared/ipc'
+import { randomUUID } from 'node:crypto'
+import {
+  CAPTURE_PROTOCOL,
+  IPC,
+  RESULT_PROTOCOL,
+  type AgentConfirmRequest,
+  type AgentUiState,
+  type PersistenceError,
+} from '../shared/ipc'
 import type { MesaId } from '../shared/model'
 import { parseNotionSelections } from '../shared/notionContext'
 import { recognizeService } from '../shared/services'
 import {
   isCustomProfileId,
   parseAgentNotionMode,
+  parseAgentUiState,
   parseCardPatch,
   parseHttpUrl,
   parseId,
@@ -38,7 +47,9 @@ import {
   parseViewport,
 } from '../shared/validate'
 import { CONTEXT_FILE, createAgentContext, type AgentContext } from './agent/context'
-import { createAgentMcp, type AgentMcp } from './agent/mcp'
+import { createAgentMcp, supportsTableMcp, type AgentMcp, type TableBridge } from './agent/mcp'
+import { startTableMcpServer, type TableMcpServer } from './agent/tableMcp'
+import { createTableToolHandlers, type RemovalRequest } from './agent/tableTools'
 import { createNotionContent, type NotionContent } from './agent/notionContent'
 import { NOTION_DIR } from './agent/notionFiles'
 import { createResultsWatcher, IMAGE_MIME, type ResultEntry, type ResultsWatcher } from './agent/results'
@@ -630,6 +641,95 @@ function registerAgentIpc(): void {
   handle(IPC.resultsMissing, mesaId => requireAgent().results.missing(parseId(mesaId)))
 }
 
+/** MCP de Table (T-011): servidor de la mesa para los agentes. */
+let tableMcp: TableMcpServer | null = null
+/** Lo que la interfaz informa: mesa abierta, selección y nota en edición. */
+let agentUi: AgentUiState = { mesaId: null, selection: [], editingNoteId: null }
+/** Confirmaciones de borrado esperando respuesta de la interfaz. */
+const pendingConfirms = new Map<string, (accepted: boolean) => void>()
+/**
+ * Tiempo para contestar un borrado del agente. Después se rechaza: el arnés
+ * dejaría de esperar (Codex corta las herramientas a los 60 s) y la persona
+ * no debe aceptar algo que el agente ya dio por fallido.
+ */
+const AGENT_CONFIRM_TIMEOUT_MS = 50_000
+
+/** La interfaz se recarga: su estado y sus diálogos pendientes ya no valen. */
+function resetAgentUi(): void {
+  agentUi = { mesaId: null, selection: [], editingNoteId: null }
+  for (const finish of [...pendingConfirms.values()]) {
+    finish(false)
+  }
+}
+
+/**
+ * Borrado pedido por un agente: si su mesa está abierta, con el diálogo de
+ * confirmación de Table (la interfaz cierra antes la web abierta); si no, con
+ * un diálogo nativo sobre la ventana. Sin respuesta a tiempo, o si `signal`
+ * se cancela (sesión cerrada, puente desconectado, petición cancelada), se
+ * retira el diálogo y se rechaza.
+ */
+async function confirmAgentRemoval(request: RemovalRequest, signal: AbortSignal): Promise<boolean> {
+  const window = mainWindow
+  if (!window || window.isDestroyed() || signal.aborted) {
+    return false
+  }
+  if (!window.isFocused() && !smokeMode) {
+    app.dock?.bounce('informational')
+  }
+  const expired = AbortSignal.any([signal, AbortSignal.timeout(AGENT_CONFIRM_TIMEOUT_MS)])
+  if (agentUi.mesaId === request.mesaId) {
+    const id = randomUUID()
+    const { promise, resolve } = Promise.withResolvers<boolean>()
+    const withdraw = (): void => {
+      sendToRenderer(IPC.agentConfirmCancel, id)
+      finish(false)
+    }
+    const finish = (accepted: boolean): void => {
+      if (pendingConfirms.delete(id)) {
+        expired.removeEventListener('abort', withdraw)
+        // Aceptado justo cuando se cancelaba: cuenta como rechazado.
+        resolve(accepted && !expired.aborted)
+      }
+    }
+    expired.addEventListener('abort', withdraw, { once: true })
+    pendingConfirms.set(id, finish)
+    const message: AgentConfirmRequest = { id, mesaId: request.mesaId, title: request.title, items: request.items }
+    sendToRenderer(IPC.agentConfirmRequest, message)
+    return promise
+  }
+  if (smokeMode) {
+    return smokeHooks.confirmAgentRemoval(request) && !expired.aborted
+  }
+  const { response } = await dialog.showMessageBox(window, {
+    type: 'warning',
+    message: request.title,
+    detail: `${request.items.join('\n')}\n\nLo pide el agente desde su sesión. El archivo de un resultado se queda en resultados/.`,
+    buttons: ['Cancelar', 'Borrar'],
+    defaultId: 0,
+    cancelId: 0,
+    signal: expired,
+  })
+  return response === 1 && !expired.aborted
+}
+
+function registerTableMcpIpc(): void {
+  listen(IPC.agentUiState, state => {
+    agentUi = parseAgentUiState(state)
+  })
+  listen(IPC.agentConfirmResponse, (requestId, accepted) => {
+    if (typeof requestId === 'string' && typeof accepted === 'boolean') {
+      pendingConfirms.get(requestId)?.(accepted)
+    }
+  })
+}
+
+/** Cómo arranca un arnés el puente stdio: el ejecutable de Table en modo Node con `mcpBridge.js`, junto al proceso principal compilado. */
+const TABLE_BRIDGE_SCRIPT = join(__dirname, 'mcpBridge.js')
+function tableBridge(): TableBridge | null {
+  return tableMcp && existsSync(TABLE_BRIDGE_SCRIPT) ? { command: process.execPath, args: [TABLE_BRIDGE_SCRIPT] } : null
+}
+
 function requireTerminals(): { catalog: ProfileCatalog; sessions: SessionManager } {
   if (!profileCatalog || !terminals) {
     throw new Error('Las terminales no están listas')
@@ -805,7 +905,10 @@ function createWindow(): BrowserWindow {
   })
   const contents = window.webContents
   // Al recargar la interfaz, la salida enviada y sin confirmar ya no se confirmará: no puede dejar sesiones pausadas.
-  contents.on('did-start-loading', () => terminals?.resetFlowControl())
+  contents.on('did-start-loading', () => {
+    terminals?.resetFlowControl()
+    resetAgentUi()
+  })
   contents.on('did-finish-load', () => terminals?.resetFlowControl())
 
   // El zoom de la interfaz local descuadraría getBoundingClientRect() frente a setBounds().
@@ -869,6 +972,9 @@ function createWindow(): BrowserWindow {
         }
         // Procesos de las sesiones y sus descendientes; espera acotada a que salgan.
         await terminals?.closeAll()
+        // Sin sesiones, el MCP de Table ya no tiene a quién servir: se cierra y se borra su socket.
+        await tableMcp?.close().catch(() => undefined)
+        tableMcp = null
         // Las capturas tomadas al salir de la última web también se esperan.
         await Promise.allSettled([...pendingPersistence])
         await requireStore().flush()
@@ -984,12 +1090,36 @@ void app.whenReady().then(async () => {
     workFolder: mesaFolder,
     onChanged: mesaId => sendToRenderer(IPC.resultsChanged, mesaId),
   })
+  // MCP de Table (T-011): las herramientas de la mesa, servidas por un socket Unix a cada sesión.
+  const tableHandlers = createTableToolHandlers({
+    store: requireStore(),
+    workFolder: mesaFolder,
+    cachedProject: url => projectService.cached(url),
+    unloadCard: cardId => requireSurface().unload(cardId),
+    ui: {
+      isOpen: mesaId => agentUi.mesaId === mesaId,
+      selection: mesaId => (agentUi.mesaId === mesaId ? agentUi.selection : []),
+      editingNote: mesaId => (agentUi.mesaId === mesaId ? agentUi.editingNoteId : null),
+      show: (mesaId, ids) => sendToRenderer(IPC.agentShowItems, mesaId, ids),
+    },
+    confirm: confirmAgentRemoval,
+    changed: (mesaId, notice) => sendToRenderer(IPC.agentMesaChanged, mesaId, notice),
+  })
+  tableMcp = await startTableMcpServer(tableHandlers).catch((error: unknown) => {
+    // Sin servidor, las sesiones arrancan sin el MCP de Table (su chip no aparece).
+    log('table-mcp-failed', { message: error instanceof Error ? error.message : String(error) })
+    return null
+  })
+  if (smokeMode) {
+    smokeHooks.tableMcpBridge = tableBridge
+  }
   const mcp = createAgentMcp({
     mode: async mesaId => (await requireStore().get(mesaId)).agentNotion,
     saveMode: async (mesaId, mode) => (await requireStore().setAgentNotion(mesaId, mode)).agentNotion,
     folder: mesaFolder,
     verifyFolder: folder => folders.verify(folder),
     registryFile: join(app.getPath('userData'), 'agent-mcp-files.json'),
+    tableBridge,
   })
   agentMcp = mcp
   terminals = createSessionManager({
@@ -1006,16 +1136,28 @@ void app.whenReady().then(async () => {
       return folder
     },
     profile: id => catalog.get(id),
-    // MCP de los agentes (T-010): Figma y navegador siempre, Notion si la mesa lo permite.
-    prepare: (mesaId, profile, cwd) => {
+    // MCP de los agentes (T-010, T-011): Table, Figma y navegador siempre; Notion si la mesa lo permite.
+    prepare: async (mesaId, profile, cwd, sessionId) => {
       const smokeAdapter = smokeMode ? smokeHooks.mcpAdapters.get(profile.id) : undefined
-      return mcp.prepare(mesaId, cwd, smokeAdapter ?? (profile.source === 'builtin' ? profile.id : 'custom'))
+      const adapter = smokeAdapter ?? (profile.source === 'builtin' ? profile.id : 'custom')
+      const launch = await mcp.prepare(mesaId, cwd, adapter)
+      const server = tableMcp
+      if (!server || !supportsTableMcp(adapter) || !launch.mcp.some(item => item.name === 'table' && item.status === 'configured')) {
+        return launch
+      }
+      // El testigo va solo en el entorno de la sesión (nunca en argumentos ni archivos) y caduca con ella.
+      const registration = server.register({ sessionId, mesaId, agentName: profile.name })
+      if (smokeMode) {
+        smokeHooks.tableMcpEnv.set(sessionId, registration.env)
+      }
+      return { ...launch, env: { ...launch.env, ...registration.env }, dispose: registration.dispose }
     },
     onData: (sessionId, data) => sendToRenderer(IPC.terminalData, sessionId, data),
     onSession: session => sendToRenderer(IPC.terminalSession, session),
   })
   registerTerminalIpc()
   registerAgentIpc()
+  registerTableMcpIpc()
   if (smokeMode) {
     const sessions = terminals
     smokeHooks.terminalPid = sessionId => sessions.pidOf(sessionId)

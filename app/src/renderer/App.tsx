@@ -19,6 +19,7 @@ import {
   type ResultId,
   type ResultPatch,
 } from '../shared/model'
+import type { AgentConfirmRequest } from '../shared/ipc'
 import { serviceById } from '../shared/services'
 import type { SurfaceCardState, UnloadResult } from '../shared/surface'
 import type { SessionId } from '../shared/terminal'
@@ -31,6 +32,7 @@ import { Rail } from './components/Rail'
 import { SettingsDialog } from './components/SettingsDialog'
 import { ServiceBadge } from './components/ServiceBadge'
 import { TopBar, type EnteredCard, type Notice, type SaveStatus } from './components/TopBar'
+import { LocalWrites, mergeReloadedMesa, type LocalField } from './lib/agentReload'
 import { errorMessage } from './lib/errors'
 import { cardCountLabel, displayHost } from './lib/format'
 import { isExitShortcut } from './lib/shortcut'
@@ -63,6 +65,8 @@ type DialogState =
 
 const HOME: Route = { kind: 'home' }
 const NOTICE_MS = { info: 4000, error: 8000 } as const
+/** Avisos de acciones del agente que llegan seguidos se juntan en uno. */
+const AGENT_NOTICE_DELAY_MS = 600
 /** Separación de las tarjetas creadas junto con la mesa. */
 const INITIAL_GRID = { columns: 3, gap: 40 } as const
 /** Panel de agentes: abierto o plegado y su ancho, recordados en este equipo. */
@@ -116,6 +120,14 @@ function patchOperations(kind: 'card' | 'note' | 'result', id: ItemId, patch: No
     .map(field => `${kind}:${id}:${field}`)
 }
 
+/** Campos que cambia una escritura, para que una lectura del agente anterior no los deshaga (T-011). */
+function patchFields(patch: NotePatch): LocalField[] {
+  return [
+    ...(patch.position !== undefined || patch.size !== undefined ? (['geometry'] as const) : []),
+    ...(patch.text !== undefined ? (['text'] as const) : []),
+  ]
+}
+
 /** Qué hacer con los fallos de una escritura: mesa y operaciones que registra o resuelve. */
 interface TrackedOperations {
   readonly mesaId: MesaId
@@ -157,6 +169,8 @@ export function App() {
   const [failures, setFailures] = useState<ReadonlyMap<FailureKey, MesaId | null>>(() => new Map())
   /** Escrituras en curso, para esperarlas antes de cerrar. */
   const inFlight = useRef(new Set<Promise<unknown>>())
+  /** Cambios locales en curso o recientes, frente a las lecturas tras un cambio del agente. */
+  const localWrites = useRef(new LocalWrites())
   /** Guardados con retardo del lienzo que hay que adelantar antes de cerrar. */
   const flushers = useRef(new Set<() => void>())
   const panelRef = useRef<HTMLElement>(null)
@@ -499,6 +513,7 @@ export function App() {
         throw new Error('No hay ninguna mesa abierta')
       }
       const card = await track(api.cards.add(mesaId, url, position))
+      localWrites.current.touch(card.id, ['exists'])
       patchMesa(mesaId, current => ({
         ...current,
         cards: [...current.cards.filter(existing => existing.id !== card.id), card],
@@ -513,14 +528,17 @@ export function App() {
       if (!mesaId) {
         return
       }
-      track(api.cards.update(mesaId, cardId, patch), { mesaId, operations: patchOperations('card', cardId, patch) }).then(
-        card =>
-          patchMesa(mesaId, current => ({
-            ...current,
-            cards: current.cards.map(existing => (existing.id === card.id ? card : existing)),
-          })),
-        notifyError,
-      )
+      const end = localWrites.current.begin(cardId, patchFields(patch))
+      track(api.cards.update(mesaId, cardId, patch), { mesaId, operations: patchOperations('card', cardId, patch) })
+        .then(
+          card =>
+            patchMesa(mesaId, current => ({
+              ...current,
+              cards: current.cards.map(existing => (existing.id === card.id ? card : existing)),
+            })),
+          notifyError,
+        )
+        .finally(end)
     },
     [mesaId, track, patchMesa, notifyError],
   )
@@ -530,7 +548,8 @@ export function App() {
       if (!mesaId) {
         throw new Error('No hay ninguna mesa abierta')
       }
-      const result = await track(api.cards.remove(mesaId, cardId))
+      const end = localWrites.current.begin(cardId, ['exists'])
+      const result = await track(api.cards.remove(mesaId, cardId)).finally(end)
       if (result === 'unloaded') {
         // El almacén borró también sus conexiones.
         patchMesa(mesaId, current => ({
@@ -553,6 +572,7 @@ export function App() {
         throw new Error('No hay ninguna mesa abierta')
       }
       const note = await track(api.notes.add(mesaId, position))
+      localWrites.current.touch(note.id, ['exists'])
       patchMesa(mesaId, current => ({
         ...current,
         notes: [...current.notes.filter(existing => existing.id !== note.id), note],
@@ -576,18 +596,21 @@ export function App() {
           notes: current.notes.map(existing => (existing.id === noteId ? { ...existing, text } : existing)),
         }))
       }
+      const end = localWrites.current.begin(noteId, patchFields(patch))
       const saved = track(api.notes.update(mesaId, noteId, patch), {
         mesaId,
         operations: patchOperations('note', noteId, patch),
-      }).then(
-        // El texto local manda: ya se puso al escribir y las escrituras van en orden. Una
-        // respuesta de un guardado anterior no debe pisar lo escrito después.
-        note =>
-          patchMesa(mesaId, current => ({
-            ...current,
-            notes: current.notes.map(existing => (existing.id === note.id ? { ...note, text: existing.text } : existing)),
-          })),
-      )
+      })
+        .then(
+          // El texto local manda: ya se puso al escribir y las escrituras van en orden. Una
+          // respuesta de un guardado anterior no debe pisar lo escrito después.
+          note =>
+            patchMesa(mesaId, current => ({
+              ...current,
+              notes: current.notes.map(existing => (existing.id === note.id ? { ...note, text: existing.text } : existing)),
+            })),
+        )
+        .finally(end)
       saved.catch(notifyError)
       return saved
     },
@@ -599,7 +622,8 @@ export function App() {
       if (!mesaId) {
         throw new Error('No hay ninguna mesa abierta')
       }
-      await track(api.notes.remove(mesaId, noteId))
+      const end = localWrites.current.begin(noteId, ['exists'])
+      await track(api.notes.remove(mesaId, noteId)).finally(end)
       // El almacén borró también sus conexiones.
       patchMesa(mesaId, current => ({
         ...current,
@@ -617,17 +641,20 @@ export function App() {
       if (!mesaId) {
         return
       }
+      const end = localWrites.current.begin(resultId, patchFields(patch))
       track(api.results.update(mesaId, resultId, patch), {
         mesaId,
         operations: patchOperations('result', resultId, patch),
-      }).then(
-        result =>
-          patchMesa(mesaId, current => ({
-            ...current,
-            results: current.results.map(existing => (existing.id === result.id ? result : existing)),
-          })),
-        notifyError,
-      )
+      })
+        .then(
+          result =>
+            patchMesa(mesaId, current => ({
+              ...current,
+              results: current.results.map(existing => (existing.id === result.id ? result : existing)),
+            })),
+          notifyError,
+        )
+        .finally(end)
     },
     [mesaId, track, patchMesa, notifyError],
   )
@@ -638,7 +665,8 @@ export function App() {
       if (!mesaId) {
         throw new Error('No hay ninguna mesa abierta')
       }
-      await track(api.results.remove(mesaId, resultId))
+      const end = localWrites.current.begin(resultId, ['exists'])
+      await track(api.results.remove(mesaId, resultId)).finally(end)
       // El almacén borró también sus conexiones.
       patchMesa(mesaId, current => ({
         ...current,
@@ -662,9 +690,13 @@ export function App() {
       if (changedId !== mesaId) {
         return
       }
+      const mark = localWrites.current.mark()
       api.mesas.get(mesaId).then(loaded => {
         if (active) {
-          patchMesa(mesaId, current => ({ ...current, results: loaded.results }))
+          // Solo cambian los resultados; lo que la persona cambió después de leer se conserva.
+          patchMesa(mesaId, current =>
+            mergeReloadedMesa(current, { ...current, results: loaded.results }, (id, field) => localWrites.current.protects(id, field, mark)),
+          )
         }
       }, notifyError)
     })
@@ -700,7 +732,9 @@ export function App() {
         throw new Error('No hay ninguna mesa abierta')
       }
       const edge = await track(api.edges.add(mesaId, source, target))
-      patchMesa(mesaId, current => ({ ...current, edges: [...current.edges, edge] }))
+      localWrites.current.touch(edge.id, ['exists'])
+      // Un agente pudo crear la misma conexión mientras tanto: sin duplicarla.
+      patchMesa(mesaId, current => ({ ...current, edges: [...current.edges.filter(existing => existing.id !== edge.id), edge] }))
       return edge
     },
     [mesaId, track, patchMesa],
@@ -711,7 +745,8 @@ export function App() {
       if (!mesaId) {
         throw new Error('No hay ninguna mesa abierta')
       }
-      await track(api.edges.remove(mesaId, edgeId))
+      const end = localWrites.current.begin(edgeId, ['exists'])
+      await track(api.edges.remove(mesaId, edgeId)).finally(end)
       patchMesa(mesaId, current => ({ ...current, edges: current.edges.filter(edge => edge.id !== edgeId) }))
     },
     [mesaId, track, patchMesa],
@@ -744,6 +779,78 @@ export function App() {
       loadSessions(mesaId).catch(notifyError)
     }
   }, [mesaId, notifyError])
+
+  // MCP de Table (T-011): tras cada cambio del agente se vuelve a leer la mesa y se
+  // avisa; los avisos seguidos se juntan en uno. Lo que la persona cambió y aún no
+  // estaba en disco al leer (texto, posición, elementos creados o borrados) se conserva.
+  const agentNotices = useRef<{ texts: string[]; timer: number | null }>({ texts: [], timer: null })
+  useEffect(() => {
+    if (!mesaId) {
+      return
+    }
+    let active = true
+    let latest = 0
+    const notices = agentNotices.current
+    const unsubscribe = api.agent.onMesaChanged((changedId, text) => {
+      if (changedId !== mesaId) {
+        return
+      }
+      latest += 1
+      const request = latest
+      const mark = localWrites.current.mark()
+      api.mesas.get(mesaId).then(loaded => {
+        // Solo la lectura más reciente: una más antigua que llegue después no deshace cambios.
+        if (active && request === latest) {
+          patchMesa(mesaId, current => mergeReloadedMesa(current, loaded, (id, field) => localWrites.current.protects(id, field, mark)))
+        }
+      }, notifyError)
+      notices.texts.push(text)
+      if (notices.timer !== null) {
+        window.clearTimeout(notices.timer)
+      }
+      notices.timer = window.setTimeout(() => {
+        const texts = notices.texts
+        notices.texts = []
+        notices.timer = null
+        if (active && texts.length > 0) {
+          notify(texts.length === 1 ? texts[0]! : `El agente hizo ${texts.length} cambios en la mesa`, 'info')
+        }
+      }, AGENT_NOTICE_DELAY_MS)
+    })
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [mesaId, notify, notifyError, patchMesa])
+
+  // Borrados pedidos por un agente: un diálogo de Table cada vez, en orden. Con
+  // una web en el panel, antes se vuelve al lienzo (la vista nativa lo taparía).
+  const [agentConfirms, setAgentConfirms] = useState<readonly AgentConfirmRequest[]>([])
+  const answeredConfirms = useRef(new Set<string>())
+  useEffect(() => {
+    const offRequest = api.agent.onConfirmRequest(request => setAgentConfirms(queue => [...queue, request]))
+    const offCancel = api.agent.onConfirmCancel(requestId => {
+      answeredConfirms.current.add(requestId)
+      setAgentConfirms(queue => queue.filter(request => request.id !== requestId))
+    })
+    return () => {
+      offRequest()
+      offCancel()
+    }
+  }, [])
+  const agentConfirm = agentConfirms[0] ?? null
+  useEffect(() => {
+    if (agentConfirm && entered) {
+      exitWeb()
+    }
+  }, [agentConfirm, entered, exitWeb])
+  const answerAgentConfirm = useCallback((request: AgentConfirmRequest, accepted: boolean) => {
+    if (!answeredConfirms.current.has(request.id)) {
+      answeredConfirms.current.add(request.id)
+      api.agent.respondConfirm(request.id, accepted)
+    }
+    setAgentConfirms(queue => queue.filter(pending => pending.id !== request.id))
+  }, [])
 
   /** «Volver al panel» desde una tarjeta de terminal: abre el panel si estaba plegado. */
   const attachTerminal = useCallback((sessionId: SessionId) => {
@@ -911,6 +1018,27 @@ export function App() {
           }
           onConfirm={() => deleteMesa(dialog.mesa.id)}
           onClose={() => setDialog(null)}
+        />
+      )}
+
+      {!entered && agentConfirm && (
+        <ConfirmDialog
+          key={agentConfirm.id}
+          title={agentConfirm.title}
+          confirmLabel="Borrar"
+          description={
+            <>
+              <ul className="dialog-list">
+                {agentConfirm.items.map((item, index) => (
+                  // Dos notas pueden llamarse igual: la posición identifica la línea.
+                  <li key={index}>{item}</li>
+                ))}
+              </ul>
+              <p className="dialog-note">Lo pide el agente desde su sesión. El archivo de un resultado se queda en resultados/.</p>
+            </>
+          }
+          onConfirm={async () => answerAgentConfirm(agentConfirm, true)}
+          onClose={() => answerAgentConfirm(agentConfirm, false)}
         />
       )}
 

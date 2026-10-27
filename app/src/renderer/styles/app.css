@@ -608,6 +608,15 @@ kbd {
   font-size: var(--font-size-sm);
 }
 
+/* Lo que un agente quiere borrar (T-011). */
+.dialog-list {
+  max-height: 200px;
+  margin: 0;
+  padding-left: var(--space-4);
+  overflow-y: auto;
+  font-size: var(--font-size-sm);
+}
+
 .dialog-actions {
   display: flex;
   justify-content: flex-end;

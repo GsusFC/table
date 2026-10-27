@@ -119,8 +119,8 @@ function cardLabel(card: Card, details: CardDetails): string {
   return oneLine(`${url.hostname}${url.pathname === '/' ? '' : url.pathname}`)
 }
 
-/** Cómo se nombra cada elemento en conexiones y selección. */
-function itemLabels(mesa: Mesa, details: CardDetails): Map<ItemId, string> {
+/** Cómo se nombra cada elemento en conexiones y selección (también en el MCP de Table). */
+export function itemLabels(mesa: Mesa, details: CardDetails): Map<ItemId, string> {
   const labels = new Map<ItemId, string>()
   for (const card of mesa.cards) {
     labels.set(card.id, `${serviceById(card.serviceId).name} «${cardLabel(card, details)}»`)
@@ -154,16 +154,17 @@ function fieldText(value: ProjectFieldValue): string {
   }
 }
 
-/** Solo los campos de la lista cerrada, aunque la caché trajera otros. */
-function projectLines(snapshot: ProjectSnapshot, url: string): string[] {
+/** Campos de la lista cerrada con su texto, aunque la caché trajera otros (también en el MCP de Table). */
+export function projectFields(snapshot: ProjectSnapshot): { readonly label: string; readonly value: string }[] {
   const allowed = new Map<string, string>(PROJECT_FIELDS.map(field => [field.name, field.label]))
-  const lines = [`### ${oneLine(snapshot.title)}`, '']
-  for (const field of snapshot.fields) {
+  return snapshot.fields.flatMap(field => {
     const label = allowed.get(field.name)
-    if (label) {
-      lines.push(`- ${label}: ${fieldText(field.value)}`)
-    }
-  }
+    return label ? [{ label, value: fieldText(field.value) }] : []
+  })
+}
+
+function projectLines(snapshot: ProjectSnapshot, url: string): string[] {
+  const lines = [`### ${oneLine(snapshot.title)}`, '', ...projectFields(snapshot).map(field => `- ${field.label}: ${field.value}`)]
   lines.push(
     '',
     `Leída de Notion el ${formatInstant(snapshot.fetchedAt)} (última edición en Notion: ${formatInstant(snapshot.editedAt)}). Ficha: <${oneLine(url)}>`,
@@ -200,11 +201,12 @@ function notionContentLines(summary: NotionContentSummary | null, hasProjects: b
   return lines
 }
 
-/** MCP que Table configura en las sesiones de la mesa (T-010) y para qué sirve cada uno. */
+/** MCP que Table configura en las sesiones de la mesa (T-010, T-011) y para qué sirve cada uno. */
 function sessionToolLines(mesa: Mesa): string[] {
   const lines = [
-    'Al abrir una sesión en esta carpeta, Table configura estos MCP en el arnés si lo admite (Claude Code, Codex, Gemini CLI, OpenCode; omp, sin Figma). El panel de agentes muestra cuáles tiene cada sesión. La primera vez, el arnés pide autorizar cada uno con la cuenta de la persona. pi, los perfiles propios y la terminal normal no tienen ninguno.',
+    'Al abrir una sesión en esta carpeta, Table configura estos MCP en el arnés si lo admite (Claude Code, Codex, Gemini CLI, OpenCode; omp, sin Figma). El panel de agentes muestra cuáles tiene cada sesión. La primera vez, el arnés pide autorizar Figma (y Notion, si está) con la cuenta de la persona. pi, los perfiles propios y la terminal normal no tienen ninguno.',
     '',
+    '- **Table** (`table`): la mesa en vivo. Úsalo para leer la mesa (`table_get_mesa`), lo que la persona tiene seleccionado (`table_get_selection`) y la ficha filtrada (`table_get_project`), y para trabajar en ella como la persona: añadir tarjetas y notas junto a otros elementos, cambiar notas, mover y conectar, y registrar lo que guardes en `resultados/` con sus fuentes (`table_add_result`). Los cambios se ven al momento en la mesa. Borrar (`table_remove_items`, `table_disconnect`) pide confirmación a la persona: si no acepta, no se borra nada. Este archivo es una copia con fecha; la mesa actual la da `table_get_mesa`. Sin este MCP, lee este archivo y guarda los resultados en `resultados/`: también llegan a la mesa.',
     '- **Figma** (`table-figma`): para ver y editar el diseño. Úsalo con los enlaces de Figma de «Enlaces»: un enlace con `node-id` señala un frame concreto; pásalo entero.',
     '- **Navegador** (`table-chrome-devtools`): maneja el Chrome de la persona, con sus sesiones iniciadas; Chrome le pide permiso al conectarse. Úsalo para Pinterest y otras webs de «Enlaces» que piden iniciar sesión.',
   ]

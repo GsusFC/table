@@ -10,7 +10,7 @@ import {
   type ResultId,
   type ResultKind,
 } from '../../shared/model'
-import { parseResultFile } from '../../shared/validate'
+import { MAX_COORDINATE, parseResultFile } from '../../shared/validate'
 import { log } from '../log'
 import type { MesaStore } from '../store/types'
 import { RESULTS_DIR } from './context'
@@ -66,24 +66,28 @@ const ROW_GAP = 24
 
 /**
  * Posiciones de los resultados nuevos: una columna a la derecha de las
- * tarjetas y notas, debajo del último resultado de esa columna.
+ * tarjetas y notas, debajo del último resultado de esa columna. Siempre
+ * dentro de los límites del lienzo (`MAX_COORDINATE`): la importación es
+ * automática y una coordenada fuera haría ilegible la mesa; si no cabe, el
+ * resultado queda en el borde (tapando, quizá, otro elemento).
  */
 export function placeNewResults(mesa: Mesa, count: number): Point[] {
+  const clamp = (value: number): number => Math.max(-MAX_COORDINATE, Math.min(MAX_COORDINATE, value))
   const others = [...mesa.cards, ...mesa.notes]
-  const x = others.length === 0 ? 0 : Math.max(...others.map(item => item.position.x + item.size.width)) + COLUMN_GAP
+  const x = clamp(others.length === 0 ? 0 : Math.max(...others.map(item => item.position.x + item.size.width)) + COLUMN_GAP)
   const top = others.length === 0 ? 0 : Math.min(...others.map(item => item.position.y))
   const inColumn = mesa.results.filter(result => result.position.x === x)
   let y = inColumn.length === 0 ? top : Math.max(...inColumn.map(result => result.position.y + result.size.height)) + ROW_GAP
   const points: Point[] = []
   for (let index = 0; index < count; index += 1) {
-    points.push({ x, y })
+    points.push({ x, y: clamp(y) })
     y += DEFAULT_RESULT_SIZE.height + ROW_GAP
   }
   return points
 }
 
 /** Clave de un nombre de archivo, sin distinguir mayúsculas como el disco de macOS. */
-function fileKey(file: string): string {
+export function fileKey(file: string): string {
   return file.normalize('NFC').toLowerCase()
 }
 

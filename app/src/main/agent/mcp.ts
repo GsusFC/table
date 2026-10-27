@@ -1,12 +1,14 @@
 import type { Stats } from 'node:fs'
 import { lstat, mkdir, readFile } from 'node:fs/promises'
 import { dirname, join, sep } from 'node:path'
+import { AGENT_TOOLS } from '../../shared/agentTools'
 import type { AgentNotionMode, MesaId } from '../../shared/model'
 import type { AgentMcpName, SessionMcp } from '../../shared/terminal'
 import { writeFileAtomic } from '../files'
 import { log } from '../log'
 import { NOTION_MCP_URL } from '../notion/mcp'
 import { SessionBlockedError, type SessionLaunch } from '../terminal/sessions'
+import { TABLE_MCP_ENV_NAMES } from './tableMcp'
 
 /**
  * MCP de los agentes (D-019, T-010). Table configura en cada sesión de un
@@ -37,7 +39,17 @@ export const BROWSER_MCP_PACKAGE = 'chrome-devtools-mcp@1.12.0'
 const BROWSER_MCP_COMMAND = 'npx'
 const BROWSER_MCP_ARGS: readonly string[] = ['-y', BROWSER_MCP_PACKAGE, '--autoConnect', '--no-usage-statistics', '--no-performance-crux']
 
-type McpTransport = { readonly kind: 'remote'; readonly url: string } | { readonly kind: 'local'; readonly command: string; readonly args: readonly string[] }
+type McpTransport =
+  | { readonly kind: 'remote'; readonly url: string }
+  | {
+      readonly kind: 'local'
+      readonly command: string
+      readonly args: readonly string[]
+      /** Variables fijas para el servidor. */
+      readonly env?: Readonly<Record<string, string>>
+      /** Variables de la sesión que el arnés tiene que reenviar (Codex no pasa el entorno entero). */
+      readonly forwardEnv?: readonly string[]
+    }
 
 export interface AgentMcpServer {
   readonly name: AgentMcpName
@@ -46,20 +58,55 @@ export interface AgentMcpServer {
   readonly transport: McpTransport
 }
 
+/** Cómo arranca el arnés el puente stdio del MCP de Table (T-011). */
+export interface TableBridge {
+  /** Ejecutable de Table (`process.execPath`), en modo Node. */
+  readonly command: string
+  readonly args: readonly string[]
+}
+
 const FIGMA: AgentMcpServer = { name: 'figma', key: 'table-figma', transport: { kind: 'remote', url: FIGMA_MCP_URL } }
-/** Sin `browser` en el nombre: omp descarta los MCP de navegador que se llaman así. */
+/**
+ * Sin `browser` en el nombre: omp descarta los MCP de navegador que se llaman
+ * así. Con las variables del MCP de Table vacías: el arnés pasa su entorno a
+ * sus MCP, y el navegador (un paquete de terceros) no debe recibir el testigo
+ * de la sesión. Codex no las pasa salvo con `env_vars`, que solo lleva `table`.
+ */
 const BROWSER: AgentMcpServer = {
   name: 'browser',
   key: 'table-chrome-devtools',
-  transport: { kind: 'local', command: BROWSER_MCP_COMMAND, args: BROWSER_MCP_ARGS },
+  transport: {
+    kind: 'local',
+    command: BROWSER_MCP_COMMAND,
+    args: BROWSER_MCP_ARGS,
+    env: Object.fromEntries(TABLE_MCP_ENV_NAMES.map(name => [name, ''])),
+  },
 }
 const NOTION: AgentMcpServer = { name: 'notion', key: 'table-notion', transport: { kind: 'remote', url: NOTION_MCP_URL } }
 export const NOTION_MCP_KEY = NOTION.key
+export const TABLE_MCP_KEY = 'table'
 
-/** Servidores de una sesión: Figma y navegador siempre; Notion solo si la mesa lo permite. */
-export function agentMcpServers(mode: AgentNotionMode): readonly AgentMcpServer[] {
-  return mode === 'mcp' ? [FIGMA, BROWSER, NOTION] : [FIGMA, BROWSER]
+function tableServer(bridge: TableBridge): AgentMcpServer {
+  return {
+    name: 'table',
+    key: TABLE_MCP_KEY,
+    transport: {
+      kind: 'local',
+      command: bridge.command,
+      args: bridge.args,
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+      forwardEnv: TABLE_MCP_ENV_NAMES,
+    },
+  }
 }
+
+/** Servidores de una sesión: Table (si su servidor está en marcha), Figma y navegador siempre; Notion solo si la mesa lo permite. */
+export function agentMcpServers(mode: AgentNotionMode, bridge: TableBridge | null = null): readonly AgentMcpServer[] {
+  return [...(bridge ? [tableServer(bridge)] : []), FIGMA, BROWSER, ...(mode === 'mcp' ? [NOTION] : [])]
+}
+
+/** Lo que puede hacer el agente con el MCP de Table, para el chip. */
+const TABLE_HINT = `El agente trabaja en esta mesa: ${AGENT_TOOLS.map(tool => tool.title.toLowerCase()).join(', ')}. Borrar pide tu confirmación en Table. No hace falta autorizarlo.`
 
 const BROWSER_HINT =
   'Usa tu Chrome (versión 144 o posterior): activa una vez chrome://inspect/#remote-debugging; Chrome pide permiso cada vez que el agente se conecta. Con el permiso, el agente puede abrir cualquier web de ese Chrome, Notion incluido.'
@@ -93,22 +140,38 @@ function serverMap(servers: readonly AgentMcpServer[], format: (transport: McpTr
   return Object.fromEntries(servers.map(server => [server.key, format(server.transport)]))
 }
 
+/** Servidor local en el formato habitual (`command`, `args`, `env`): Claude Code, Gemini CLI, omp. */
+function stdioEntry(transport: Extract<McpTransport, { kind: 'local' }>, type?: 'stdio'): Record<string, unknown> {
+  return {
+    ...(type ? { type } : {}),
+    command: transport.command,
+    args: transport.args,
+    ...(transport.env ? { env: transport.env } : {}),
+  }
+}
+
+/** Ayuda del chip: Table y navegador, iguales en todos; el resto, la del arnés. */
+function hint(server: AgentMcpServer, auth: (server: AgentMcpServer) => string): string {
+  if (server.name === 'table') {
+    return TABLE_HINT
+  }
+  if (server.name === 'browser') {
+    return BROWSER_HINT
+  }
+  return server.name === 'notion' ? `${auth(server)} ${NOTION_WARNING}` : auth(server)
+}
+
 function claude(servers: readonly AgentMcpServer[]): McpLaunch {
   const config = {
-    mcpServers: serverMap(servers, transport =>
-      transport.kind === 'remote'
-        ? { type: 'http', url: transport.url }
-        : { type: 'stdio', command: transport.command, args: transport.args },
-    ),
+    mcpServers: serverMap(servers, transport => (transport.kind === 'remote' ? { type: 'http', url: transport.url } : stdioEntry(transport, 'stdio'))),
   }
-  const auth = (key: string): string => `Escribe /mcp en Claude Code, elige ${key} y «Authenticate» para autorizarlo con tu cuenta.`
   return {
     // Con `=`: `--mcp-config` admite varios valores y se comería los argumentos siguientes.
     args: [`--mcp-config=${JSON.stringify(config)}`],
     env: {},
     files: [],
     mcp: servers.map(server =>
-      entry(server, server.name === 'browser' ? BROWSER_HINT : server.name === 'notion' ? `${auth(server.key)} ${NOTION_WARNING}` : auth(server.key)),
+      entry(server, hint(server, ({ key }) => `Escribe /mcp en Claude Code, elige ${key} y «Authenticate» para autorizarlo con tu cuenta.`)),
     ),
   }
 }
@@ -118,30 +181,39 @@ function codex(servers: readonly AgentMcpServer[]): McpLaunch {
   const args: string[] = []
   for (const server of servers) {
     const prefix = `mcp_servers.${server.key}`
-    if (server.transport.kind === 'remote') {
-      args.push('-c', `${prefix}.url=${JSON.stringify(server.transport.url)}`)
-    } else {
-      args.push(
-        '-c',
-        `${prefix}.command=${JSON.stringify(server.transport.command)}`,
-        '-c',
-        `${prefix}.args=${JSON.stringify(server.transport.args)}`,
-        // La primera vez `npx` descarga el paquete: más que los 10 s por defecto.
-        '-c',
-        `${prefix}.startup_timeout_sec=60`,
-      )
+    const transport = server.transport
+    if (transport.kind === 'remote') {
+      args.push('-c', `${prefix}.url=${JSON.stringify(transport.url)}`)
+      continue
+    }
+    args.push('-c', `${prefix}.command=${JSON.stringify(transport.command)}`, '-c', `${prefix}.args=${JSON.stringify(transport.args)}`)
+    if (transport.env) {
+      // Tabla en línea de TOML: `{NOMBRE="valor"}`.
+      const pairs = Object.entries(transport.env).map(([name, value]) => `${name}=${JSON.stringify(value)}`)
+      args.push('-c', `${prefix}.env={${pairs.join(',')}}`)
+    }
+    if (transport.forwardEnv) {
+      // Codex no pasa el entorno entero a sus MCP: solo los nombres de `env_vars`.
+      args.push('-c', `${prefix}.env_vars=${JSON.stringify(transport.forwardEnv)}`)
+    }
+    if (server.name === 'browser') {
+      // La primera vez `npx` descarga el paquete: más que los 10 s por defecto.
+      args.push('-c', `${prefix}.startup_timeout_sec=60`)
     }
   }
-  const login = (server: AgentMcpServer): string =>
-    server.transport.kind === 'remote'
-      ? `Para autorizarlo, ejecuta una vez en una terminal: codex mcp login ${server.key} -c mcp_servers.${server.key}.url="${server.transport.url}"`
-      : ''
   return {
     args,
     env: {},
     files: [],
     mcp: servers.map(server =>
-      entry(server, server.name === 'browser' ? BROWSER_HINT : server.name === 'notion' ? `${login(server)}. ${NOTION_WARNING}` : login(server)),
+      entry(
+        server,
+        hint(server, ({ key, transport }) =>
+          transport.kind === 'remote'
+            ? `Para autorizarlo, ejecuta una vez en una terminal: codex mcp login ${key} -c mcp_servers.${key}.url="${transport.url}".`
+            : '',
+        ),
+      ),
     ),
   }
 }
@@ -153,10 +225,8 @@ const GEMINI_TRUST = 'Gemini pide confiar en la carpeta de la mesa la primera ve
 function geminiFile(servers: readonly AgentMcpServer[]): McpProjectFile {
   return {
     path: GEMINI_SETTINGS,
-    servers: serverMap(servers, transport =>
-      transport.kind === 'remote' ? { httpUrl: transport.url } : { command: transport.command, args: transport.args },
-    ),
-    managed: [FIGMA.key, BROWSER.key, NOTION.key],
+    servers: serverMap(servers, transport => (transport.kind === 'remote' ? { httpUrl: transport.url } : stdioEntry(transport))),
+    managed: [TABLE_MCP_KEY, FIGMA.key, BROWSER.key, NOTION.key],
   }
 }
 
@@ -165,14 +235,7 @@ function gemini(servers: readonly AgentMcpServer[]): McpLaunch {
     args: [],
     env: {},
     files: [geminiFile(servers)],
-    mcp: servers.map(server =>
-      entry(
-        server,
-        server.name === 'browser'
-          ? `${GEMINI_TRUST} ${BROWSER_HINT}`
-          : `${GEMINI_TRUST} Después, autoriza con /mcp auth ${server.key}.${server.name === 'notion' ? ` ${NOTION_WARNING}` : ''}`,
-      ),
-    ),
+    mcp: servers.map(server => entry(server, `${GEMINI_TRUST} ${hint(server, ({ key }) => `Después, autoriza con /mcp auth ${key}.`)}`)),
   }
 }
 
@@ -180,21 +243,16 @@ function opencode(servers: readonly AgentMcpServer[]): McpLaunch {
   const config = {
     $schema: 'https://opencode.ai/config.json',
     mcp: serverMap(servers, transport =>
-      transport.kind === 'remote' ? { type: 'remote', url: transport.url } : { type: 'local', command: [transport.command, ...transport.args] },
+      transport.kind === 'remote'
+        ? { type: 'remote', url: transport.url }
+        : { type: 'local', command: [transport.command, ...transport.args], ...(transport.env ? { environment: transport.env } : {}) },
     ),
   }
   return {
     args: [],
     env: { OPENCODE_CONFIG_CONTENT: JSON.stringify(config) },
     files: [],
-    mcp: servers.map(server =>
-      entry(
-        server,
-        server.name === 'browser'
-          ? BROWSER_HINT
-          : `OpenCode abre la autorización la primera vez que el agente usa ${server.key}.${server.name === 'notion' ? ` ${NOTION_WARNING}` : ''}`,
-      ),
-    ),
+    mcp: servers.map(server => entry(server, hint(server, ({ key }) => `OpenCode abre la autorización la primera vez que el agente usa ${key}.`))),
   }
 }
 
@@ -204,10 +262,9 @@ function ompFile(servers: readonly AgentMcpServer[]): McpProjectFile {
     path: OMP_SETTINGS,
     servers: serverMap(
       servers.filter(server => server.name !== 'figma'),
-      transport =>
-        transport.kind === 'remote' ? { type: 'http', url: transport.url } : { type: 'stdio', command: transport.command, args: transport.args },
+      transport => (transport.kind === 'remote' ? { type: 'http', url: transport.url } : stdioEntry(transport, 'stdio')),
     ),
-    managed: [BROWSER.key, NOTION.key],
+    managed: [TABLE_MCP_KEY, BROWSER.key, NOTION.key],
   }
 }
 
@@ -219,13 +276,13 @@ function omp(servers: readonly AgentMcpServer[]): McpLaunch {
     mcp: servers.map(server =>
       server.name === 'figma'
         ? entry(server, 'Figma solo autoriza a los clientes de su catálogo y omp no está en él. Usa Claude Code, Codex, Gemini CLI u OpenCode.', 'unsupported')
-        : entry(server, server.name === 'browser' ? BROWSER_HINT : `Autoriza con /mcp reauth ${server.key} en omp. ${NOTION_WARNING}`),
+        : entry(server, hint(server, ({ key }) => `Autoriza con /mcp reauth ${key} en omp.`)),
     ),
   }
 }
 
-function unsupported(servers: readonly AgentMcpServer[], hint: string): McpLaunch {
-  return { ...NONE, mcp: servers.map(server => entry(server, hint, 'unsupported')) }
+function unsupported(servers: readonly AgentMcpServer[], reason: string): McpLaunch {
+  return { ...NONE, mcp: servers.map(server => entry(server, reason, 'unsupported')) }
 }
 
 /**
@@ -233,8 +290,8 @@ function unsupported(servers: readonly AgentMcpServer[], hint: string): McpLaunc
  * catálogo, `custom` para los propios, `shell` para la terminal normal).
  * Función pura: no toca disco.
  */
-export function agentMcpLaunch(adapterId: string, mode: AgentNotionMode): McpLaunch {
-  const servers = agentMcpServers(mode)
+export function agentMcpLaunch(adapterId: string, mode: AgentNotionMode, bridge: TableBridge | null = null): McpLaunch {
+  const servers = agentMcpServers(mode, bridge)
   switch (adapterId) {
     case 'claude':
       return claude(servers)
@@ -255,10 +312,15 @@ export function agentMcpLaunch(adapterId: string, mode: AgentNotionMode): McpLau
   }
 }
 
+/** Arneses en los que Table configura su propio MCP (y registra la sesión en su servidor). */
+export function supportsTableMcp(adapterId: string): boolean {
+  return ['claude', 'codex', 'gemini', 'opencode', 'omp'].includes(adapterId)
+}
+
 /** Archivos de proyecto que Table puede crear, por ruta relativa. */
-const PROJECT_FILES: Readonly<Record<string, (mode: AgentNotionMode) => McpProjectFile>> = {
-  [GEMINI_SETTINGS]: mode => geminiFile(agentMcpServers(mode)),
-  [OMP_SETTINGS]: mode => ompFile(agentMcpServers(mode)),
+const PROJECT_FILES: Readonly<Record<string, (mode: AgentNotionMode, bridge: TableBridge | null) => McpProjectFile>> = {
+  [GEMINI_SETTINGS]: (mode, bridge) => geminiFile(agentMcpServers(mode, bridge)),
+  [OMP_SETTINGS]: (mode, bridge) => ompFile(agentMcpServers(mode, bridge)),
 }
 
 /** Archivos de proyecto que lee cada arnés al arrancar (omp también importa la configuración de Gemini CLI). */
@@ -419,6 +481,8 @@ export interface AgentMcpOptions {
   verifyFolder(folder: string): Promise<void>
   /** Registro de entradas de Table (en los datos de Table). */
   registryFile: string
+  /** Puente del MCP de Table, o null si su servidor no está en marcha (entonces no se configura). */
+  tableBridge?: () => TableBridge | null
 }
 
 export interface AgentMcp {
@@ -522,7 +586,7 @@ export function createAgentMcp(options: AgentMcpOptions): AgentMcp {
       if (!spec) {
         continue
       }
-      const result = await apply(folder, spec(mode), false)
+      const result = await apply(folder, spec(mode, options.tableBridge?.() ?? null), false)
       if (result.reason !== null) {
         failures.push({ path: relativePath, reason: result.reason, notionLeft: mode === 'files' && result.owned.has(NOTION.key) })
       }
@@ -536,7 +600,8 @@ export function createAgentMcp(options: AgentMcpOptions): AgentMcp {
       const revision = revisions.get(mesaId) ?? 0
       return enqueue(async () => {
         const mode = await options.mode(mesaId)
-        const launch = agentMcpLaunch(adapterId, mode)
+        const bridge = options.tableBridge?.() ?? null
+        const launch = agentMcpLaunch(adapterId, mode, bridge)
         const reads = PROJECT_FILE_READERS[adapterId] ?? []
         if (reads.length === 0) {
           return { args: launch.args, env: launch.env, mcp: launch.mcp, isCurrent: () => (revisions.get(mesaId) ?? 0) === revision }
@@ -553,7 +618,7 @@ export function createAgentMcp(options: AgentMcpOptions): AgentMcp {
         const results = await Promise.all(launch.files.map(file => apply(folder, file, true)))
         const reasons = results.map(result => result.reason).filter((reason): reason is string => reason !== null)
         const conflicts = new Set(results.flatMap(result => result.conflicts))
-        const servers = agentMcpServers(mode)
+        const servers = agentMcpServers(mode, bridge)
         const mcp = launch.mcp.map((item): SessionMcp => {
           if (item.status !== 'configured') {
             return item

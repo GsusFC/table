@@ -57,7 +57,7 @@ interface AgentsPanelProps {
 }
 
 /** Nombre visible de cada MCP de la sesión (T-010). */
-const MCP_LABELS: Readonly<Record<AgentMcpName, string>> = { figma: 'Figma', browser: 'Navegador', notion: 'Notion' }
+const MCP_LABELS: Readonly<Record<AgentMcpName, string>> = { table: 'Table', figma: 'Figma', browser: 'Navegador', notion: 'Notion' }
 
 /** Línea compacta del progreso de la lectura de Notion (T-009). */
 function progressText(progress: NotionContextProgress): string {

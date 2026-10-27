@@ -92,6 +92,18 @@ export const IPC = {
   agentSetNotionSelection: 'agent:set-notion-selection',
   /** Ajuste de la mesa «Notion para el agente» (T-010). */
   agentSetNotionMode: 'agent:set-notion-mode',
+  /** renderer → main, sin respuesta: mesa abierta, selección y nota en edición (MCP de Table, T-011). */
+  agentUiState: 'agent:ui-state',
+  /** main → renderer: el agente cambió la mesa; se vuelve a leer y se avisa. */
+  agentMesaChanged: 'agent:mesa-changed',
+  /** main → renderer: seleccionar y centrar elementos (`table_show_items`). */
+  agentShowItems: 'agent:show-items',
+  /** main → renderer: confirmar un borrado pedido por un agente; responde `agentConfirmResponse`. */
+  agentConfirmRequest: 'agent:confirm-request',
+  /** main → renderer: la petición caducó (el agente ya no espera). */
+  agentConfirmCancel: 'agent:confirm-cancel',
+  /** renderer → main, sin respuesta. */
+  agentConfirmResponse: 'agent:confirm-response',
   /** main → renderer: progreso de la lectura del contenido de Notion de una mesa. */
   agentContextProgress: 'agent:context-progress',
   resultsUpdate: 'results:update',
@@ -258,6 +270,21 @@ export interface TableApi {
      * Devuelve el modo guardado.
      */
     setNotionMode(mesaId: MesaId, mode: AgentNotionMode): Promise<AgentNotionMode>
+    /**
+     * MCP de Table (T-011): la interfaz informa de la mesa abierta, la
+     * selección y la nota en edición; el agente las lee y no cambia una nota
+     * que la persona está escribiendo.
+     */
+    reportUiState(state: AgentUiState): void
+    /** El agente cambió la mesa: volver a leerla y mostrar `notice`. */
+    onMesaChanged(listener: (mesaId: MesaId, notice: string) => void): () => void
+    /** `table_show_items`: seleccionar y centrar esos elementos. */
+    onShowItems(listener: (mesaId: MesaId, itemIds: readonly ItemId[]) => void): () => void
+    /** Un agente quiere borrar algo: la interfaz pregunta y responde con `respondConfirm`. */
+    onConfirmRequest(listener: (request: AgentConfirmRequest) => void): () => void
+    /** La petición caducó: cerrar su diálogo sin responder. */
+    onConfirmCancel(listener: (requestId: string) => void): () => void
+    respondConfirm(requestId: string, accepted: boolean): void
   }
   /** Tarjetas de resultado: archivos de `resultados/` en la carpeta de la mesa (T-008). */
   readonly results: {
@@ -283,4 +310,23 @@ export interface PersistenceError {
   readonly mesaId: MesaId
   readonly cardId: CardId
   readonly operation: 'capture' | 'title'
+}
+
+/** Estado de la interfaz que necesita el MCP de Table (T-011). */
+export interface AgentUiState {
+  /** Mesa abierta en la ventana, o null en el inicio. */
+  readonly mesaId: MesaId | null
+  readonly selection: readonly ItemId[]
+  /** Nota que la persona está editando, o null. */
+  readonly editingNoteId: string | null
+}
+
+/** Confirmación de un borrado pedido por un agente. */
+export interface AgentConfirmRequest {
+  readonly id: string
+  readonly mesaId: MesaId
+  /** «Claude Code quiere borrar 2 elementos de la mesa». */
+  readonly title: string
+  /** Una línea por elemento o conexión. */
+  readonly items: readonly string[]
 }

@@ -4,9 +4,12 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
+import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js'
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { Server as McpServer } from '@modelcontextprotocol/sdk/server/index.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import { AGENT_TOOLS } from '../shared/agentTools'
 import type { Card, Mesa, Point, Size } from '../shared/model'
 import type { HarnessProfile, SessionInfo } from '../shared/terminal'
 import {
@@ -18,6 +21,8 @@ import {
   fixturePageResponse,
   fixtureSearchResponse,
 } from './notion/fixtures'
+import type { TableBridge } from './agent/mcp'
+import type { RemovalRequest } from './agent/tableTools'
 import type { SettingsStore } from './settings/settingsStore'
 import type { SurfaceManager } from './web/types'
 
@@ -65,6 +70,12 @@ export const smokeHooks = {
    * arrancar ese arnés.
    */
   mcpAdapters: new Map<string, string>(),
+  /** MCP de Table (T-011): cómo arranca el puente, para conectarlo desde el smoke con un cliente del SDK. */
+  tableMcpBridge: (): TableBridge | null => null,
+  /** Entorno del MCP de Table de cada sesión (socket, sesión y testigo); solo en el smoke, nunca se registra. */
+  tableMcpEnv: new Map<string, Readonly<Record<string, string>>>(),
+  /** Borrado de un agente con la mesa cerrada (diálogo nativo): el smoke anota y rechaza. */
+  confirmAgentRemoval: (_request: RemovalRequest): boolean => false,
 }
 
 function processAlive(pid: number): boolean {
@@ -1232,17 +1243,18 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
       const folder = claudeSession.cwd
       const args = await readDump(folder, '.smoke-args.txt')
       const servers = claudeServers(args)
-      const shownChips = await waitFor(chips, list => list.length === 2, 'chips de MCP en el panel')
+      const shownChips = await waitFor(chips, list => list.length === 3, 'chips de MCP en el panel')
       record(
-        'mcp: Claude Code arranca con `--mcp-config` (Figma y navegador, sin Notion) y el panel muestra sus chips',
+        'mcp: Claude Code arranca con `--mcp-config` (Table, Figma y navegador, sin Notion) y el panel muestra sus chips',
         args.startsWith('--mcp-config=') &&
-          JSON.stringify(Object.keys(servers)) === JSON.stringify(['table-figma', 'table-chrome-devtools']) &&
+          JSON.stringify(Object.keys(servers)) === JSON.stringify(['table', 'table-figma', 'table-chrome-devtools']) &&
           servers['table-figma']?.url === 'https://mcp.figma.com/mcp' &&
           (servers['table-chrome-devtools']?.args ?? []).includes('--autoConnect') &&
-          JSON.stringify(claudeSession.mcp.map(item => item.name)) === JSON.stringify(['figma', 'browser']) &&
-          shownChips.map(chip => chip.text).join(',') === 'Figma,Navegador' &&
-          shownChips[0]!.title.includes('/mcp') &&
-          shownChips[1]!.title.includes('chrome://inspect') &&
+          JSON.stringify(claudeSession.mcp.map(item => item.name)) === JSON.stringify(['table', 'figma', 'browser']) &&
+          shownChips.map(chip => chip.text).join(',') === 'Table,Figma,Navegador' &&
+          shownChips[0]!.title.includes('Borrar pide tu confirmación') &&
+          shownChips[1]!.title.includes('/mcp') &&
+          shownChips[2]!.title.includes('chrome://inspect') &&
           !credentialLike.test(args),
         { chips: shownChips.map(chip => chip.text) },
       )
@@ -1254,8 +1266,8 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
       const opencodeEnv = await readDump(folder, '.smoke-env.txt')
       record(
         'mcp: Gemini CLI encuentra `.gemini/settings.json` en la carpeta y OpenCode su configuración en el entorno',
-        JSON.stringify(Object.keys(geminiFiles.mcpServers)) === JSON.stringify(['table-figma', 'table-chrome-devtools']) &&
-          Object.keys((JSON.parse(opencodeEnv) as { mcp: object }).mcp).join(',') === 'table-figma,table-chrome-devtools' &&
+        JSON.stringify(Object.keys(geminiFiles.mcpServers)) === JSON.stringify(['table', 'table-figma', 'table-chrome-devtools']) &&
+          Object.keys((JSON.parse(opencodeEnv) as { mcp: object }).mcp).join(',') === 'table,table-figma,table-chrome-devtools' &&
           !credentialLike.test(opencodeEnv) &&
           !credentialLike.test(readFileSync(join(folder, '.gemini/settings.json'), 'utf8')),
       )
@@ -1285,7 +1297,7 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
       rmSync(join(folder, '.smoke-args.txt'))
       const notionSession = await startFromPanel('Claude falso', 4)
       const notionServers = claudeServers(await readDump(folder, '.smoke-args.txt'))
-      const notionChips = await waitFor(chips, list => list.length === 3, 'chip de Notion').catch(() => [])
+      const notionChips = await waitFor(chips, list => list.length === 4, 'chip de Notion').catch(() => [])
       record(
         'mcp: activar Notion por MCP avisa de presupuestos y oportunidades, se guarda en la mesa y llega a las sesiones nuevas',
         warning.includes('presupuestos') &&
@@ -1296,7 +1308,7 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
           tableWithNotion.includes('- **Notion** (`table-notion`)') &&
           notionServers['table-notion']?.url === 'https://mcp.notion.com/mcp' &&
           notionSession.mcp.some(item => item.name === 'notion') &&
-          notionChips.map(chip => chip.text).join(',') === 'Figma,Navegador,Notion',
+          notionChips.map(chip => chip.text).join(',') === 'Table,Figma,Navegador,Notion',
         {
           afterCancel,
           afterConfirm,
@@ -1350,6 +1362,169 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
       await inUi(`document.querySelector('.rail [aria-label="Inicio"]').click()`)
       await waitFor(() => inUi<boolean>(`!!document.querySelector('.home')`), Boolean, 'inicio')
       await inUi(`window.table.mesas.remove(${mcpArg})`)
+    }
+
+    // T-011: MCP de Table. Un perfil propio configurado como Claude Code recibe `table` y el entorno de su sesión;
+    // después el smoke arranca el puente real con un cliente del SDK, como lo haría el arnés.
+    {
+      const tableMesa = await inUi<Mesa>(`window.table.mesas.create('Mesa del MCP de Table')`)
+      const tableArg = JSON.stringify(tableMesa.id)
+      const sourceCard = await inUi<Card>(`window.table.cards.add(${tableArg}, 'https://example.com/fuente', { x: 0, y: 0 })`)
+      const fake = await inUi<HarnessProfile[]>(
+        `window.table.terminal.saveCustomProfile(${JSON.stringify({
+          name: 'Claude con Table',
+          // Los argumentos de Table se añaden al final: llegan a la función. La sesión sigue viva para el puente.
+          command: `f() { printf '%s\\n' "$@" > .smoke-table-args.txt; printf '%s' "$TABLE_MCP_SESSION" > .smoke-table-session.txt; sleep 120; }; f`,
+        })})`,
+      )
+      const fakeId = fake.find(profile => profile.name === 'Claude con Table')!.id
+      smokeHooks.mcpAdapters.set(fakeId, 'claude')
+      ui.reload()
+      await waitFor(
+        () => inUi<boolean>(`[...document.querySelectorAll('.mesa-row-open')].some(b => b.textContent.includes('Mesa del MCP de Table'))`),
+        Boolean,
+        'mesa del MCP de Table en el inicio',
+      )
+      await inUi(`[...document.querySelectorAll('.mesa-row-open')].find(b => b.textContent.includes('Mesa del MCP de Table')).click()`)
+      await waitFor(nodeCount, count => count === 1, 'tarjeta de la mesa del MCP')
+      await inUi(`document.querySelector('.topbar [aria-label="Agentes"]').click()`)
+      await waitFor(() => inUi<number>(`document.querySelectorAll('.agents-profile').length`), count => count > 0, 'perfiles en el panel')
+      await inUi(`[...document.querySelectorAll('.agents-profile')].find(b => b.textContent.includes('Claude con Table')).click()`)
+      const [session] = await waitFor(() => inUi<SessionInfo[]>(`window.table.terminal.sessions(${tableArg})`), list => list.length === 1, 'sesión con Table')
+      const folder = session!.cwd
+      const readDump = (file: string): Promise<string> =>
+        waitFor(() => (existsSync(join(folder, file)) ? readFileSync(join(folder, file), 'utf8') : ''), text => text.trim().length > 0, file)
+      const config = JSON.parse((await readDump('.smoke-table-args.txt')).trim().slice('--mcp-config='.length)) as {
+        mcpServers: Record<string, { command?: string; args?: string[]; env?: Record<string, string> }>
+      }
+      const bridge = smokeHooks.tableMcpBridge()
+      const tableServer = config.mcpServers['table']
+      const sessionInEnv = await readDump('.smoke-table-session.txt')
+      const tableChip = await waitFor(
+        () => inUi<string>(`document.querySelector('.agents-session-bar .agents-mcp-chip[data-mcp="table"]')?.textContent ?? ''`),
+        text => text === 'Table',
+        'chip «Table»',
+      ).catch(() => '')
+      record(
+        'table: la sesión recibe el servidor `table` (Table en modo Node con el puente) y su entorno; el panel muestra el chip',
+        bridge !== null &&
+          tableServer?.command === bridge.command &&
+          JSON.stringify(tableServer.args) === JSON.stringify(bridge.args) &&
+          tableServer.env?.['ELECTRON_RUN_AS_NODE'] === '1' &&
+          sessionInEnv === session!.id &&
+          !JSON.stringify(config).includes(smokeHooks.tableMcpEnv.get(session!.id)?.['TABLE_MCP_TICKET'] ?? 'sin-testigo') &&
+          tableChip === 'Table',
+        { chip: tableChip },
+      )
+
+      // El puente real, arrancado con el ejecutable de Table en modo Node, como lo haría el arnés.
+      const client = new McpClient({ name: 'smoke', version: '1.0.0' })
+      let clientClosed = false
+      client.onclose = () => {
+        clientClosed = true
+      }
+      await client.connect(
+        new StdioClientTransport({
+          command: bridge!.command,
+          args: [...bridge!.args],
+          env: { ELECTRON_RUN_AS_NODE: '1', ...smokeHooks.tableMcpEnv.get(session!.id) },
+          stderr: 'pipe',
+        }),
+      )
+      const { tools } = await client.listTools()
+      record(
+        'table: un cliente MCP por el puente lista las herramientas del catálogo',
+        JSON.stringify(tools.map(tool => tool.name)) === JSON.stringify(AGENT_TOOLS.map(tool => tool.name)),
+        { tools: tools.length },
+      )
+
+      // La selección de la interfaz llega al agente.
+      await inUi(`(() => {
+        const canvas = document.querySelector('.canvas')
+        canvas.focus()
+        canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', metaKey: true, ctrlKey: true, bubbles: true }))
+      })()`)
+      const toolJson = async (name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> => {
+        const result = await client.callTool({ name, arguments: args })
+        const [content] = result.content as { type: string; text: string }[]
+        if (result.isError) {
+          throw new Error(content?.text ?? name)
+        }
+        return JSON.parse(content!.text) as Record<string, unknown>
+      }
+      const selection = await waitFor(
+        () => toolJson('table_get_selection', {}),
+        value => JSON.stringify(value['items']).includes(sourceCard.id),
+        'selección en el agente',
+      ).catch(() => ({}) as Record<string, unknown>)
+      record('table: table_get_selection devuelve lo seleccionado en la mesa', selection['open'] === true, { selection })
+
+      // El agente añade una nota junto a la tarjeta: aparece en el lienzo sin recargar, con aviso.
+      const added = await toolJson('table_add_note', { text: 'Resumen del agente', near: sourceCard.id })
+      const noteId = String(added['id'])
+      const noteSelector = JSON.stringify(`.react-flow__node[data-id="${noteId}"]`)
+      const shownNote = await waitFor(
+        () => inUi<string>(`document.querySelector(${noteSelector})?.textContent ?? ''`),
+        text => text.includes('Resumen del agente'),
+        'nota del agente en el lienzo',
+      ).catch(() => '')
+      const notice = await waitFor(
+        () => inUi<string>(`document.querySelector('.notice-text')?.textContent ?? ''`),
+        text => text.includes('El agente añadió una nota'),
+        'aviso de la acción del agente',
+      ).catch(() => '')
+      record('table: table_add_note junto a una tarjeta aparece en el lienzo y avisa', shownNote.includes('Resumen del agente') && notice !== '', {
+        notice,
+      })
+      await shot('33-table-mcp-nota')
+
+      // Borrar pide confirmación en Table; aceptada en el diálogo, la nota desaparece.
+      const removal = toolJson('table_remove_items', { ids: [noteId] })
+      const dialogText = await waitFor(
+        () => inUi<string>(`document.querySelector('dialog[open]')?.textContent ?? ''`),
+        text => text.includes('quiere borrar'),
+        'confirmación del borrado del agente',
+      ).catch(() => '')
+      await shot('34-table-mcp-confirmar')
+      await inUi(`document.querySelector('dialog[open] button[type="submit"]')?.click()`)
+      const removed = await removal.catch(() => ({}) as Record<string, unknown>)
+      const gone = await waitFor(() => inUi<boolean>(`!document.querySelector(${noteSelector})`), Boolean, 'nota borrada en el lienzo').catch(
+        () => false,
+      )
+      record(
+        'table: borrar pide confirmación nombrando al agente y lo que se borra; aceptada, la nota desaparece',
+        dialogText.includes('Claude con Table quiere borrar 1 elemento') &&
+          dialogText.includes('Resumen del agente') &&
+          JSON.stringify(removed['removed']) === JSON.stringify([noteId]) &&
+          gone,
+        { dialog: dialogText.slice(0, 120), removed: removed['removed'] },
+      )
+
+      // Con un borrado esperando confirmación, cerrar la sesión retira el diálogo, el puente termina y no se borra nada.
+      const pendingRemoval = toolJson('table_remove_items', { ids: [sourceCard.id] }).catch(() => null)
+      await waitFor(
+        () => inUi<string>(`document.querySelector('dialog[open]')?.textContent ?? ''`),
+        text => text.includes('quiere borrar'),
+        'confirmación pendiente al cerrar la sesión',
+      ).catch(() => '')
+      await inUi(`window.table.terminal.close(${JSON.stringify(session!.id)})`)
+      const withdrawn = await waitFor(() => inUi<boolean>(`!document.querySelector('dialog[open]')`), Boolean, 'diálogo retirado').catch(() => false)
+      const ended = await waitFor(() => clientClosed, Boolean, 'puente cerrado con la sesión').catch(() => false)
+      await pendingRemoval
+      const cardKept = (await inUi<Mesa>(`window.table.mesas.get(${tableArg})`)).cards.some(card => card.id === sourceCard.id)
+      record('table: cerrar la sesión retira la confirmación pendiente, termina el puente y no borra nada', withdrawn && ended && cardKept, {
+        withdrawn,
+        ended,
+        cardKept,
+      })
+      await client.close().catch(() => undefined)
+
+      await inUi(`window.table.terminal.removeCustomProfile(${JSON.stringify(fakeId)})`)
+      smokeHooks.mcpAdapters.clear()
+      await inUi(`document.querySelector('.agents [aria-label="Plegar agentes"]')?.click()`)
+      await inUi(`document.querySelector('.rail [aria-label="Inicio"]').click()`)
+      await waitFor(() => inUi<boolean>(`!!document.querySelector('.home')`), Boolean, 'inicio')
+      await inUi(`window.table.mesas.remove(${tableArg})`)
     }
 
     // T-008: interfaz de «Enviar al agente» y tarjetas de resultado, con la terminal normal.
