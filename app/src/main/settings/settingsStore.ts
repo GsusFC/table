@@ -66,10 +66,10 @@ export interface SettingsStore {
   notionView(): NotionSettingsView
   /** Credenciales descifradas, o null. Solo para el proceso principal. */
   notionConnection(): NotionConnection | null
-  /** Guarda una conexión nueva (sube la revisión). */
-  connectNotion(connection: NotionConnection, identity: NotionIdentity): Promise<void>
-  /** Sustituye las credenciales de la conexión actual (tokens renovados) sin cambiar la revisión. */
-  updateNotionConnection(connection: NotionConnection): Promise<void>
+  /** Guarda una conexión nueva (sube la revisión), salvo cancelación antes de persistir. */
+  connectNotion(connection: NotionConnection, identity: NotionIdentity, signal?: AbortSignal): Promise<void>
+  /** Renueva solo la conexión de esa revisión; una renovación antigua no modifica otra cuenta. */
+  updateNotionConnection(connection: NotionConnection, expectedRevision: number): Promise<void>
   disconnectNotion(): Promise<void>
   figmaView(): FigmaSettingsView
   /** Token descifrado, o null. Solo para el cliente de Figma del proceso principal. */
@@ -97,10 +97,13 @@ export function createSettingsStore(userData: string, box: SecretBox): SettingsS
   let queue: Promise<unknown> = Promise.resolve()
 
   /** Cada cambio se calcula sobre el estado vigente dentro de la cola: dos cambios seguidos no se pisan. */
-  function update(change: (current: SettingsFile) => SettingsFile, bump: boolean): Promise<void> {
+  function update(change: (current: SettingsFile) => SettingsFile, bump: boolean, signal?: AbortSignal): Promise<void> {
     const write = queue.then(async () => {
       const next = change(settings)
-      await writeFileAtomic(path, `${JSON.stringify(next, null, 2)}\n`)
+      if (next === settings) {
+        return
+      }
+      await writeFileAtomic(path, `${JSON.stringify(next, null, 2)}\n`, { signal })
       settings = next
       if (bump) {
         revision += 1
@@ -152,15 +155,21 @@ export function createSettingsStore(userData: string, box: SecretBox): SettingsS
       }
     },
 
-    async connectNotion(connection, identity) {
-      const sealed = seal(JSON.stringify(connection))
-      await update(current => ({ ...current, notion: { connection: sealed, ...identity } }), true)
+    async connectNotion(connection, identity, signal) {
+      signal?.throwIfAborted()
+      await update(current => {
+        signal?.throwIfAborted()
+        return { ...current, notion: { connection: seal(JSON.stringify(connection)), ...identity } }
+      }, true, signal)
     },
 
-    async updateNotionConnection(connection) {
-      const sealed = seal(JSON.stringify(connection))
-      // Solo si sigue conectado: una renovación tardía no resucita una conexión quitada.
-      await update(current => (current.notion.connection ? { ...current, notion: { ...current.notion, connection: sealed } } : current), false)
+    async updateNotionConnection(connection, expectedRevision) {
+      await update(current => {
+        if (revision !== expectedRevision || !current.notion.connection) {
+          return current
+        }
+        return { ...current, notion: { ...current.notion, connection: seal(JSON.stringify(connection)) } }
+      }, false)
     },
 
     async disconnectNotion() {

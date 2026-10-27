@@ -97,7 +97,7 @@ export interface NotionMcp {
 export function createNotionMcp(settings: SettingsStore, serverUrl: () => string = () => NOTION_MCP_URL): NotionMcp {
   let session: { revision: number; client: Promise<Client> } | null = null
 
-  function provider(connection: NotionConnection): OAuthClientProvider {
+  function provider(connection: NotionConnection, revision: number): OAuthClientProvider {
     let current = connection
     const info = connection.client as OAuthClientInformationMixed & { redirect_uris?: string[] }
     const redirect = info.redirect_uris?.[0] ?? 'http://127.0.0.1/callback'
@@ -111,12 +111,18 @@ export function createNotionMcp(settings: SettingsStore, serverUrl: () => string
       clientInformation: () => current.client as OAuthClientInformationMixed,
       saveClientInformation: async client => {
         current = { ...current, client }
-        await settings.updateNotionConnection(current)
+        await settings.updateNotionConnection(current, revision)
+        if (settings.revision() !== revision) {
+          throw new UnauthorizedError('La conexión con Notion cambió')
+        }
       },
       tokens: () => current.tokens as OAuthTokens | undefined,
       saveTokens: async tokens => {
         current = { ...current, tokens }
-        await settings.updateNotionConnection(current)
+        await settings.updateNotionConnection(current, revision)
+        if (settings.revision() !== revision) {
+          throw new UnauthorizedError('La conexión con Notion cambió')
+        }
       },
       // Sin interacción: si la renovación falla, el usuario reconecta desde Ajustes.
       redirectToAuthorization: () => {
@@ -143,8 +149,17 @@ export function createNotionMcp(settings: SettingsStore, serverUrl: () => string
     }
     const created = connectClient()
     const ready = created
-      .connect(new StreamableHTTPClientTransport(new URL(serverUrl()), { authProvider: provider(connection) }))
-      .then(() => created)
+      .connect(new StreamableHTTPClientTransport(new URL(serverUrl()), { authProvider: provider(connection, revision) }))
+      .then(() => {
+        if (settings.revision() !== revision) {
+          throw new UnauthorizedError('La conexión con Notion cambió')
+        }
+        return created
+      })
+      .catch(async (error: unknown) => {
+        await created.close().catch(() => undefined)
+        throw error
+      })
     const entry = { revision, client: ready }
     session = entry
     // Un fallo al conectar no se queda en caché: el siguiente intento vuelve a probar.
@@ -158,13 +173,26 @@ export function createNotionMcp(settings: SettingsStore, serverUrl: () => string
 
   return {
     async read(tool, args) {
+      let active: typeof session = null
       try {
-        const connected = await client()
-        return toolText(await connected.callTool({ name: tool, arguments: args }, undefined, { timeout: CALL_TIMEOUT_MS }))
+        const pending = client()
+        active = session
+        const connected = await pending
+        if (active?.revision !== settings.revision()) {
+          throw new UnauthorizedError('La conexión con Notion cambió')
+        }
+        const result = await connected.callTool({ name: tool, arguments: args }, undefined, { timeout: CALL_TIMEOUT_MS })
+        if (active.revision !== settings.revision()) {
+          throw new UnauthorizedError('La conexión con Notion cambió')
+        }
+        return toolText(result)
       } catch (error) {
-        // Una sesión rota (red caída, servidor reiniciado) se descarta para reconectar la próxima vez.
+        // Un fallo antiguo no descarta una sesión nueva que ya está en uso.
         if (!(error instanceof NotionError)) {
-          session = null
+          if (session === active) {
+            session = null
+          }
+          void active?.client.then(old => old.close()).catch(() => undefined)
         }
         throw mapFailure(error)
       }
@@ -182,63 +210,120 @@ export async function authorizeNotion(
   signal: AbortSignal,
   serverUrl: string = NOTION_MCP_URL,
 ): Promise<{ connection: NotionConnection; identity: NotionIdentity }> {
-  const callback = await startCallbackServer()
-  const state = randomBytes(16).toString('hex')
-  let clientInfo: OAuthClientInformationMixed | undefined
-  let tokens: OAuthTokens | undefined
-  let verifier: string | undefined
-  const authProvider: OAuthClientProvider = {
-    get redirectUrl() {
-      return callback.redirectUri
-    },
-    get clientMetadata() {
-      return clientMetadata(callback.redirectUri)
-    },
-    state: () => state,
-    clientInformation: () => clientInfo,
-    saveClientInformation: info => {
-      clientInfo = info
-    },
-    tokens: () => tokens,
-    saveTokens: next => {
-      tokens = next
-    },
-    redirectToAuthorization: async url => {
-      await openExternal(url.toString())
-    },
-    saveCodeVerifier: next => {
-      verifier = next
-    },
-    codeVerifier: () => {
-      if (!verifier) {
-        throw new Error('Falta el verificador PKCE')
-      }
-      return verifier
-    },
+  const controller = new AbortController()
+  const onAbort = (): void => controller.abort(new NotionError('Conexión cancelada', 'cancelled'))
+  signal.addEventListener('abort', onAbort, { once: true })
+  if (signal.aborted) {
+    onAbort()
+  }
+  const timer = setTimeout(() => {
+    controller.abort(new NotionError('Se acabó el tiempo para autorizar en Notion', 'cancelled'))
+  }, AUTHORIZE_TIMEOUT_MS)
+  const authorization = controller.signal
+  const clients: Client[] = []
+  const transports: StreamableHTTPClientTransport[] = []
+  let callback: CallbackServer | undefined
+  let authorized: { connection: NotionConnection; identity: NotionIdentity }
+
+  /** La cancelación también corta operaciones cuyo proveedor tarde en responder. */
+  async function step<T>(run: () => Promise<T>): Promise<T> {
+    authorization.throwIfAborted()
+    const cancelled = Promise.withResolvers<never>()
+    const abort = (): void => cancelled.reject(authorization.reason)
+    authorization.addEventListener('abort', abort, { once: true })
+    try {
+      const value = await Promise.race([run(), cancelled.promise])
+      authorization.throwIfAborted()
+      return value
+    } finally {
+      authorization.removeEventListener('abort', abort)
+    }
   }
 
   try {
-    const first = new StreamableHTTPClientTransport(new URL(serverUrl), { authProvider })
+    authorization.throwIfAborted()
+    callback = await startCallbackServer()
+    authorization.throwIfAborted()
+    const redirectUri = callback.redirectUri
+    const state = randomBytes(16).toString('hex')
+    let clientInfo: OAuthClientInformationMixed | undefined
+    let tokens: OAuthTokens | undefined
+    let verifier: string | undefined
+    const authProvider: OAuthClientProvider = {
+      get redirectUrl() {
+        return redirectUri
+      },
+      get clientMetadata() {
+        return clientMetadata(redirectUri)
+      },
+      state: () => state,
+      clientInformation: () => clientInfo,
+      saveClientInformation: info => {
+        authorization.throwIfAborted()
+        clientInfo = info
+      },
+      tokens: () => tokens,
+      saveTokens: next => {
+        authorization.throwIfAborted()
+        tokens = next
+      },
+      redirectToAuthorization: async url => {
+        authorization.throwIfAborted()
+        await openExternal(url.toString())
+        authorization.throwIfAborted()
+      },
+      saveCodeVerifier: next => {
+        authorization.throwIfAborted()
+        verifier = next
+      },
+      codeVerifier: () => {
+        authorization.throwIfAborted()
+        if (!verifier) {
+          throw new Error('Falta el verificador PKCE')
+        }
+        return verifier
+      },
+    }
+    function connection(): { client: Client; transport: StreamableHTTPClientTransport } {
+      const client = connectClient()
+      const transport = new StreamableHTTPClientTransport(new URL(serverUrl), {
+        authProvider,
+        // finishAuth no acepta signal: hay que propagarlo también al fetch de OAuth.
+        fetch: (url, init) => fetch(url, {
+          ...init,
+          signal: init?.signal ? AbortSignal.any([authorization, init.signal]) : authorization,
+        }),
+      })
+      clients.push(client)
+      transports.push(transport)
+      return { client, transport }
+    }
+    const first = connection()
     try {
-      await connectClient().connect(first)
+      await step(() => first.client.connect(first.transport, { signal: authorization }))
     } catch (error) {
       if (!(error instanceof UnauthorizedError)) {
         throw error
       }
-      const code = await callback.waitForCode(state, signal)
-      await first.finishAuth(code)
+      const code = await callback.waitForCode(state, authorization)
+      await step(() => first.transport.finishAuth(code))
     }
-    const client = connectClient()
-    await client.connect(new StreamableHTTPClientTransport(new URL(serverUrl), { authProvider }))
-    const self = JSON.parse(toolText(await client.callTool({ name: 'notion-get-self', arguments: {} }, undefined, { timeout: CALL_TIMEOUT_MS }))) as {
+    const { client, transport } = connection()
+    await step(() => client.connect(transport, { signal: authorization }))
+    const result = await step(() => client.callTool(
+      { name: 'notion-get-self', arguments: {} },
+      undefined,
+      { timeout: CALL_TIMEOUT_MS, signal: authorization },
+    ))
+    const self = JSON.parse(toolText(result)) as {
       workspace?: { name?: unknown }
       user?: { name?: unknown }
     }
-    await client.close()
     if (!clientInfo || !tokens) {
       throw new NotionError('Notion no completó la autorización', 'unexpected')
     }
-    return {
+    authorization.throwIfAborted()
+    authorized = {
       connection: { client: clientInfo, tokens },
       identity: {
         workspaceName: typeof self.workspace?.name === 'string' && self.workspace.name ? self.workspace.name : null,
@@ -246,10 +331,19 @@ export async function authorizeNotion(
       },
     }
   } catch (error) {
-    throw error instanceof NotionError ? error : mapFailure(error)
+    throw authorization.aborted ? authorization.reason : mapFailure(error)
   } finally {
-    callback.close()
+    clearTimeout(timer)
+    signal.removeEventListener('abort', onAbort)
+    controller.abort()
+    callback?.close()
+    // El SDK puede soltar su transporte al fallar connect; se cierran ambos explícitamente.
+    await Promise.allSettled([...clients.map(client => client.close()), ...transports.map(transport => transport.close())])
   }
+  if (signal.aborted) {
+    throw new NotionError('Conexión cancelada', 'cancelled')
+  }
+  return authorized
 }
 
 interface CallbackServer {
@@ -284,10 +378,8 @@ async function startCallbackServer(): Promise<CallbackServer> {
     redirectUri: `http://127.0.0.1:${port}/callback`,
     waitForCode(state, signal) {
       return new Promise((resolveCode, rejectCode) => {
-        const timer = setTimeout(() => finish(new NotionError('Se acabó el tiempo para autorizar en Notion', 'cancelled')), AUTHORIZE_TIMEOUT_MS)
-        const onAbort = (): void => finish(new NotionError('Conexión cancelada', 'cancelled'))
+        const onAbort = (): void => finish(signal.reason instanceof Error ? signal.reason : new NotionError('Conexión cancelada', 'cancelled'))
         const finish = (result: string | Error): void => {
-          clearTimeout(timer)
           signal.removeEventListener('abort', onAbort)
           deliver = null
           if (typeof result === 'string') {
@@ -314,6 +406,7 @@ async function startCallbackServer(): Promise<CallbackServer> {
     },
     close() {
       server.close()
+      server.closeAllConnections()
     },
   }
 }

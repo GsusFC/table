@@ -43,10 +43,12 @@ export function createProjectService(settings: SettingsStore, mcp: NotionMcp, us
   const cacheDir = join(userData, 'notion-cache')
   /** Lecturas en curso por revisión de la conexión y página: reconectar no reutiliza una lectura vieja. */
   const inflight = new Map<string, Promise<ProjectState>>()
+  /** Una ficha ya invalidada no vuelve a servirse aunque falle el borrado de su copia. */
+  const invalidated = new Set<string>()
   /**
-   * Lo aprendido con la conexión actual: esquemas de base leídos (deciden si una
-   * página es una ficha) y bases de proyectos conocidas (acotan la búsqueda).
-   * Se vacía al conectar otra cuenta.
+   * Solo se comparten lecturas de esquema en curso; cada actualización o búsqueda
+   * vuelve a validar los tipos. Las bases conocidas acotan la búsqueda y se
+   * descartan si dejan de ser proyectos o cambia la cuenta.
    */
   let session: { revision: number; schemas: Map<string, Promise<DataSourceSchema>>; projectSources: Set<string> } = {
     revision: -1,
@@ -63,12 +65,12 @@ export function createProjectService(settings: SettingsStore, mcp: NotionMcp, us
   const cachePath = (pageId: string): string => join(cacheDir, `${pageId}.json`)
 
   async function readCache(pageId: string): Promise<ProjectSnapshot | null> {
-    if (!settings.notionView().connected) {
+    if (!settings.notionView().connected || invalidated.has(pageId)) {
       return null
     }
     try {
       const parsed = JSON.parse(await readFile(cachePath(pageId), 'utf8')) as Partial<CacheFile> | null
-      return typeof parsed?.dataSourceUrl === 'string' ? sanitizeSnapshot(parsed.snapshot, pageId) : null
+      return !invalidated.has(pageId) && typeof parsed?.dataSourceUrl === 'string' ? sanitizeSnapshot(parsed.snapshot, pageId) : null
     } catch {
       return null
     }
@@ -78,8 +80,7 @@ export function createProjectService(settings: SettingsStore, mcp: NotionMcp, us
     const { schemas } = sessionFor(revision)
     let schema = schemas.get(dataSourceUrl)
     if (!schema) {
-      schema = mcp.read('notion-fetch', { id: dataSourceUrl }).then(parseDataSourceSchema)
-      schema.catch(() => schemas.delete(dataSourceUrl))
+      schema = mcp.read('notion-fetch', { id: dataSourceUrl }).then(parseDataSourceSchema).finally(() => schemas.delete(dataSourceUrl))
       schemas.set(dataSourceUrl, schema)
     }
     return schema
@@ -98,13 +99,24 @@ export function createProjectService(settings: SettingsStore, mcp: NotionMcp, us
         return { status: 'not-configured' }
       }
       if (!page.dataSourceUrl || !schema || !isProjectSchema(schema)) {
-        await rm(cachePath(pageId), { force: true })
+        if (page.dataSourceUrl) {
+          sessionFor(revision).projectSources.delete(page.dataSourceUrl)
+        }
+        invalidated.add(pageId)
+        try {
+          await rm(cachePath(pageId), { force: true })
+        } catch {
+          log('notion-cache-invalidation-failed', { reason: 'delete-failed' })
+          return { status: 'error', message: 'La ficha ya no es un proyecto; no se pudo borrar su copia local', cached: null }
+        }
         return { status: 'not-project' }
       }
       sessionFor(revision).projectSources.add(page.dataSourceUrl)
       const snapshot = buildSnapshot(pageId, page, schema, new Date().toISOString())
       const cache: CacheFile = { dataSourceUrl: page.dataSourceUrl, snapshot }
-      await writeFileAtomic(cachePath(pageId), JSON.stringify(cache)).catch((error: unknown) => {
+      await writeFileAtomic(cachePath(pageId), JSON.stringify(cache)).then(() => {
+        invalidated.delete(pageId)
+      }).catch((error: unknown) => {
         log('notion-cache-write-failed', { message: error instanceof Error ? error.message : String(error) })
       })
       log('notion-project-read', { status: 'ready' })
@@ -169,16 +181,21 @@ export function createProjectService(settings: SettingsStore, mcp: NotionMcp, us
       const args: Record<string, unknown> = known.length > 0 ? { query: text, data_source_url: known[0] } : { query: text }
       const hits = parseSearchResults(await mcp.read('notion-search', args))
       const results: ProjectSearchResult[] = []
+      const schemas = new Map<string, Promise<DataSourceSchema>>()
       for (const hit of hits) {
         if (!hit.dataSourceUrl) {
           continue
         }
-        if (!projectSources.has(hit.dataSourceUrl)) {
-          if (!isProjectSchema(await schemaOf(hit.dataSourceUrl, revision))) {
-            continue
-          }
-          projectSources.add(hit.dataSourceUrl)
+        let schema = schemas.get(hit.dataSourceUrl)
+        if (!schema) {
+          schema = schemaOf(hit.dataSourceUrl, revision)
+          schemas.set(hit.dataSourceUrl, schema)
         }
+        if (!isProjectSchema(await schema)) {
+          projectSources.delete(hit.dataSourceUrl)
+          continue
+        }
+        projectSources.add(hit.dataSourceUrl)
         const { dataSourceUrl: _source, ...result } = hit
         results.push(result)
       }

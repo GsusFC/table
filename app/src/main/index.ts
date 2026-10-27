@@ -413,7 +413,8 @@ function registerNotionIpc(): void {
     connectingNotion = controller
     try {
       const { connection, identity } = await authorizeNotion(url => shell.openExternal(url), controller.signal)
-      await requireSettings().connectNotion(connection, identity)
+      controller.signal.throwIfAborted()
+      await requireSettings().connectNotion(connection, identity, controller.signal)
       log('settings-notion', { action: 'connected' })
       return requireSettings().notionView()
     } finally {
