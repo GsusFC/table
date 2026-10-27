@@ -1,6 +1,6 @@
 # Fases y estado
 
-Fecha: 2026-10-27. **Estado actual: Fase 1 cerrada ([D-018](decisions.md)). Fase 2 en curso: [T-007](tasks/007-terminal-universal.md), panel de agentes con sesiones de terminal.**
+Fecha: 2026-10-27. **Estado actual: Fase 1 cerrada ([D-018](decisions.md)). Fase 2 en curso: terminal (T-007), contexto y resultados por archivos (T-008, T-009) y MCP de Figma, Notion y navegador en cada agente (T-010, [D-019](decisions.md)).**
 
 Los hitos preservan el orden acordado. Los hallazgos de una prueba pueden cambiar una propuesta técnica sin ampliar la fase entera.
 
@@ -36,9 +36,9 @@ Salida: una sesión de trabajo real que pueda retomarse, con resultados de uso y
 
 - [x] Integrar PTY y perfiles de arnés configurables. T-007 (falta la prueba con los arneses reales).
 - [ ] Probar al menos dos arneses disponibles con la autenticación oficial de cada usuario; uno alternativo a Codex/Claude Code si está disponible y autorizado.
-- [ ] Consultar contexto filtrado de Notion y entregar la selección explícita del lienzo.
-- [ ] Ofrecer exportación temporal para arneses sin MCP.
-- [ ] Registrar resultados como tarjetas con sus fuentes mediante contrato explícito o importación.
+- [x] Consultar contexto filtrado de Notion y entregar la selección explícita del lienzo. T-008 («Enviar al agente»), T-009 (contenido completo filtrado y elegible) y T-010 (MCP de Notion opcional por mesa).
+- [x] Ofrecer exportación temporal para arneses sin MCP. T-008/T-009 (`TABLE.md` y `notion/`).
+- [ ] Registrar resultados como tarjetas con sus fuentes mediante contrato explícito o importación. T-008 los registra desde `resultados/`; faltan las fuentes (MCP de Table).
 - [ ] Preservar solicitudes de permiso, errores y estados de los arneses.
 - [ ] Validar dos sesiones, procesos hijos, recuperación y limpieza de recursos.
 - [ ] Probar los límites de exclusión de datos y documentar accesos que Table no controla.
@@ -65,4 +65,4 @@ Salida: publicación deliberada y trazable de un resultado revisado. Workers y e
 
 ## Próxima tarea
 
-[T-007](tasks/007-terminal-universal.md) está implementada: falta que el usuario pruebe los arneses reales. Siguiente propuesta: entregar al agente el contexto de la mesa (ficha filtrada de Notion y selección explícita de tarjetas, con enlaces de Figma) y registrar sus resultados como tarjetas. No ejecutar toda la hoja de ruta de forma automática. Cada sesión debe terminar con un resultado verificable y el estado real de su tarea.
+T-007 a T-010 están implementadas; falta que el usuario las pruebe con los arneses reales (autorizar Figma, Notion y el navegador). Pendiente de proponer: MCP propio de Table (selección, resultados con sus fuentes) y la validación de la Fase 2. No ejecutar toda la hoja de ruta de forma automática. Cada sesión debe terminar con un resultado verificable y el estado real de su tarea.
