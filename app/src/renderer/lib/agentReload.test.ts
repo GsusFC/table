@@ -74,6 +74,44 @@ describe('lecturas tras un cambio del agente', () => {
     expect(fresh.notes[0]?.text).toBe('Cambiado por el agente')
   })
 
+  it('protege una lectura iniciada durante varios guardados incluso si todos terminan antes de responder', () => {
+    const writes = new LocalWrites()
+    const first = writes.begin('n', ['text'])
+    const second = writes.begin('n', ['text'])
+    const mark = writes.mark()
+    second()
+    const between = writes.mark()
+    expect(writes.protects('n', 'text', between)).toBe(true)
+    first()
+    const current = mesa({ notes: [note('n', 'Local')] })
+    const loaded = mesa({ notes: [note('n', 'Anterior'), note('agente', 'Nueva')] })
+    for (const readMark of [mark, between]) {
+      const merged = mergeReloadedMesa(current, loaded, (id, field) => writes.protects(id, field, readMark))
+      expect(merged.notes.map(item => item.text)).toEqual(['Local', 'Nueva'])
+    }
+    const later = writes.mark()
+    first()
+    second()
+    const fresh = mergeReloadedMesa(current, loaded, (id, field) => writes.protects(id, field, later))
+    expect(fresh.notes.map(item => item.text)).toEqual(['Anterior', 'Nueva'])
+  })
+
+  it('una lectura durante altas y bajas no las revierte tras completar sus guardados', () => {
+    const writes = new LocalWrites()
+    const created = writes.begin('creada', ['exists'])
+    const removed = writes.begin('borrada', ['exists'])
+    const mark = writes.mark()
+    created()
+    removed()
+    const current = mesa({ notes: [note('creada', '')] })
+    const loaded = mesa({ notes: [note('borrada', ''), note('agente', '')] })
+    expect(mergeReloadedMesa(current, loaded, (id, field) => writes.protects(id, field, mark)).notes.map(item => item.id))
+      .toEqual(['agente', 'creada'])
+    const later = writes.mark()
+    expect(mergeReloadedMesa(current, loaded, (id, field) => writes.protects(id, field, later)).notes.map(item => item.id))
+      .toEqual(['borrada', 'agente'])
+  })
+
   it('la geometría con un guardado local manda; la del agente se aplica en lo demás', () => {
     const writes = new LocalWrites()
     const mark = writes.mark()

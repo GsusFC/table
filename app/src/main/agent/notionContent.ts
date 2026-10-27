@@ -1055,20 +1055,25 @@ export function createNotionContent(options: NotionContentOptions): NotionConten
     const folder = await options.workFolder(mesa)
     check()
     const dir = await notionDir(folder, snapshot.projects.length > 0)
+    // Una publicación incompleta no puede conservar un resumen de exclusiones ya obsoleto.
+    check()
+    await writeFileAtomic(cachePath(mesaId), JSON.stringify({ version: 2, pages, snapshot, summary: null } satisfies CacheFile))
     if (dir) {
+      check()
+      await writeFileAtomic(join(dir, NOTION_INDEX), '# Contexto de Notion pendiente\n\nLa publicación no ha terminado. Los archivos presentes pueden corresponder a distintas selecciones; las exclusiones aún no están confirmadas. Vuelve a aplicar la selección antes de usar este contexto.\n')
+      // Lo que ya no está en el árbol (o en la selección) se quita: la carpeta es de Table.
+      for (const entry of await readdir(dir, { withFileTypes: true })) {
+        if (entry.name.endsWith('.md') && entry.name !== NOTION_INDEX && !files.has(entry.name) && (entry.isFile() || entry.isSymbolicLink())) {
+          check()
+          await unlink(join(dir, entry.name))
+        }
+      }
       for (const [name, text] of files) {
         check()
         await writeFileAtomic(join(dir, name), text)
       }
       check()
       await writeFileAtomic(join(dir, NOTION_INDEX), formatIndex({ generatedAt: readAt, projects: indexProjects, summary }))
-      // Lo que ya no está en el árbol (o en la selección) se quita: la carpeta es de Table.
-      for (const entry of await readdir(dir, { withFileTypes: true })) {
-        if (entry.name.endsWith('.md') && entry.name !== NOTION_INDEX && !files.has(entry.name) && (entry.isFile() || entry.isSymbolicLink())) {
-          check()
-          await unlink(join(dir, entry.name)).catch(() => undefined)
-        }
-      }
     }
     // Se guardan las páginas leídas de todas las filas del árbol: volver a marcar una no exige leerla.
     const kept: Record<string, PageRecord> = {}
@@ -1187,10 +1192,16 @@ export function createNotionContent(options: NotionContentOptions): NotionConten
   async function publishLocal(mesaId: MesaId, signal: AbortSignal): Promise<void> {
     const check = guard(signal, null)
     const cache = await readCache(mesaId)
+    const mesa = await options.getMesa(mesaId)
     if (!cache.snapshot) {
+      const folder = await options.workFolder(mesa)
+      check()
+      const dir = await notionDir(folder, false)
+      if (dir && (await readdir(dir)).some(name => name.endsWith('.md'))) {
+        throw new Error('Hay archivos de Notion publicados, pero falta la lectura guardada necesaria para aplicar la selección. Actualiza el contexto de Notion y vuelve a intentarlo.')
+      }
       return
     }
-    const mesa = await options.getMesa(mesaId)
     const selections = await readSelections(mesaId)
     check()
     await publish(mesaId, mesa, cache.snapshot, cache.pages, selections, [], check)
@@ -1267,11 +1278,11 @@ export function createNotionContent(options: NotionContentOptions): NotionConten
         loop.again = true
         loop.current?.abort()
       }
-      await serial(mesaId, new AbortController(), signal => publishLocal(mesaId, signal)).catch((error: unknown) => {
-        if (!(error instanceof CancelledError)) {
-          log('notion-content-local-failed', { message: error instanceof Error ? error.message : String(error) })
-        }
-      })
+      try {
+        await serial(mesaId, new AbortController(), signal => publishLocal(mesaId, signal))
+      } catch (error) {
+        throw new Error('No se pudieron aplicar las exclusiones de Notion. Pueden quedar archivos legibles en la carpeta de la mesa. Actualiza el contexto de Notion y vuelve a intentarlo.', { cause: error })
+      }
       void service.request(mesaId)
     },
 

@@ -35,6 +35,7 @@ let kept: Set<string>
 let session: AbortController
 /** Confirmación a medida (por defecto, contesta `answer` al momento). */
 let confirmWith: ((signal: AbortSignal) => Promise<boolean>) | null
+let unloadWith: ((cardId: string) => Promise<'unloaded' | 'kept'>) | null
 
 beforeEach(async () => {
   base = await mkdtemp(join(tmpdir(), 'table-tools-'))
@@ -48,12 +49,13 @@ beforeEach(async () => {
   kept = new Set()
   session = new AbortController()
   confirmWith = null
+  unloadWith = null
   vi.spyOn(console, 'log').mockImplementation(() => undefined)
   handlers = createTableToolHandlers({
     store,
     workFolder: async () => work,
     cachedProject: async url => (url === NOTION_URL ? SNAPSHOT : null),
-    unloadCard: async cardId => (kept.has(cardId) ? 'kept' : 'unloaded'),
+    unloadCard: async cardId => unloadWith ? unloadWith(cardId) : kept.has(cardId) ? 'kept' : 'unloaded',
     ui: {
       isOpen: mesaId => ui.open === mesaId,
       selection: mesaId => (ui.open === mesaId ? ui.selection : []),
@@ -262,6 +264,60 @@ describe('borrar', () => {
     expect(sawAbort).toBe(true)
     expect((await store.get(mesa.id)).notes).toHaveLength(1)
     expect(changes).toEqual([])
+  })
+
+  it.each([false, true])('cancelar durante la descarga conserva la tarjeta y comunica borrados parciales: %s', async partial => {
+    const { mesa, cardId, noteId } = await sampleMesa()
+    const other = await store.addCard(mesa.id, { url: 'https://example.org/', serviceId: 'web', position: { x: 400, y: 0 } })
+    const waiting = Promise.withResolvers<void>()
+    const unload = Promise.withResolvers<'unloaded' | 'kept'>()
+    unloadWith = async id => {
+      if (id === other.id) return 'kept'
+      waiting.resolve()
+      return unload.promise
+    }
+    const removal = call(mesa, 'table_remove_items', { ids: partial ? [noteId, other.id, cardId] : [cardId] })
+    await waiting.promise
+    session.abort()
+    unload.resolve('unloaded')
+    const outcome = await removal
+    expect(outcome).toMatchObject({
+      rejected: true,
+      removed: partial ? [noteId] : [],
+      ...(partial ? { kept: [other.id] } : {}),
+      message: expect.stringContaining('se canceló'),
+    })
+    if (outcome.removed.length > 0) {
+      expect(outcome.message).not.toContain('no se ha borrado nada')
+      expect(outcome.message).toContain(String(outcome.removed.length))
+    } else {
+      expect(outcome.message).toContain('no se ha borrado nada')
+    }
+    const saved = await store.get(mesa.id)
+    expect(saved.cards.map(card => card.id)).toEqual([cardId, other.id])
+    expect(saved.notes).toHaveLength(partial ? 0 : 1)
+    expect(changes).toHaveLength(partial ? 1 : 0)
+  })
+
+  it('table_disconnect comunica la cancelación parcial y no borra las conexiones restantes', async () => {
+    const { mesa, cardId, noteId } = await sampleMesa()
+    const other = await store.addNote(mesa.id, { x: 400, y: 400 }, 'Otra')
+    const first = await call(mesa, 'table_connect', { source: cardId, target: noteId })
+    const second = await call(mesa, 'table_connect', { source: cardId, target: other.id })
+    const removeEdge = store.removeEdge.bind(store)
+    vi.spyOn(store, 'removeEdge').mockImplementation(async (mesaId, edgeId) => {
+      await removeEdge(mesaId, edgeId)
+      session.abort()
+    })
+    const outcome = await call(mesa, 'table_disconnect', { edgeIds: [first.id, second.id] })
+    expect(outcome).toMatchObject({
+      removed: [first.id],
+      rejected: true,
+      message: expect.stringContaining('se canceló'),
+    })
+    expect(outcome.message).not.toContain('no se ha borrado nada')
+    expect(outcome.message).toContain(String(outcome.removed.length))
+    expect((await store.get(mesa.id)).edges.map(edge => edge.id)).toEqual([second.id])
   })
 
   it('table_remove_items: pide confirmación con el agente y lo que se borra; rechazada, no cambia nada', async () => {

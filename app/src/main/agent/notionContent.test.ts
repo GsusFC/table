@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises'
+import type * as FsPromises from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -28,6 +29,11 @@ import {
 import { NotionError, toolError, type NotionMcp } from '../notion/mcp'
 import { buildSnapshot, parseDataSourceSchema, parseFetchedPage } from '../notion/project'
 import { createNotionContent, type NotionContentLimits } from './notionContent'
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof FsPromises>()
+  return { ...actual, unlink: vi.fn(actual.unlink) }
+})
 
 const AT = '2026-10-27T10:00:00.000Z'
 const MESA_ID = '00000000-0000-4000-8000-000000000000'
@@ -413,6 +419,79 @@ describe('contenido completo de Notion', () => {
     const files = await notionFiles()
     expect(Object.keys(files)).not.toContain('concepto-20000000.md')
     expect(files['index.md']).toContain('1 página fuera por elección')
+    expect((await content.summary(MESA_ID))?.excludedByChoice).toBe(1)
+  })
+
+  it('rechaza la selección si no puede quitar un archivo excluido y permite reintentar sin anunciar éxito', async () => {
+    const content = service()
+    await content.request(MESA_ID)
+    const excluded = join(folder, 'notion', 'concepto-20000000.md')
+    const before = await readFile(excluded, 'utf8')
+    const writtenBefore = written
+    const selections = {
+      [FIXTURE_PROJECT_PAGE]: { body: true, bases: { [FIXTURE_PROCESS_SOURCE]: { mode: 'all-except' as const, pages: [FIXTURE_ROWS.concept] } } },
+    }
+    vi.mocked(unlink).mockRejectedValueOnce(Object.assign(new Error('No se pudo eliminar la página excluida'), { code: 'EACCES' }))
+    await expect(content.setSelection(MESA_ID, selections)).rejects.toMatchObject({
+      message: expect.stringContaining('Pueden quedar archivos legibles'),
+      cause: { code: 'EACCES' },
+    })
+    expect(await readFile(excluded, 'utf8')).toBe(before)
+    expect(await readFile(join(folder, 'notion', 'index.md'), 'utf8')).toContain('exclusiones aún no están confirmadas')
+    expect(await content.summary(MESA_ID)).toBeNull()
+    expect(written).toBe(writtenBefore)
+    // La elección queda guardada para reintentar; no se finge una publicación aplicada.
+    await content.request(MESA_ID)
+    expect(existsSync(excluded)).toBe(false)
+    expect((await content.summary(MESA_ID))?.excludedByChoice).toBe(1)
+    expect(await readFile(join(folder, 'notion', 'index.md'), 'utf8')).toContain('1 página fuera por elección')
+    expect(written).toBe(writtenBefore + 1)
+  })
+
+  it('no incorpora una página antes de retirar otra y deja pendiente el índice si falla la exclusión', async () => {
+    const content = service()
+    await content.request(MESA_ID)
+    await content.setSelection(MESA_ID, {
+      [FIXTURE_PROJECT_PAGE]: { body: true, bases: { [FIXTURE_PROCESS_SOURCE]: { mode: 'all-except', pages: [FIXTURE_ROWS.concept] } } },
+    })
+    await content.request(MESA_ID)
+    const include = join(folder, 'notion', 'concepto-20000000.md')
+    const exclude = join(folder, 'notion', 'investigacion-10000000.md')
+    expect(existsSync(include)).toBe(false)
+    expect(existsSync(exclude)).toBe(true)
+    const writtenBefore = written
+    vi.mocked(unlink).mockRejectedValueOnce(Object.assign(new Error('Permiso denegado'), { code: 'EACCES' }))
+    await expect(content.setSelection(MESA_ID, {
+      [FIXTURE_PROJECT_PAGE]: { body: true, bases: { [FIXTURE_PROCESS_SOURCE]: { mode: 'all-except', pages: [FIXTURE_ROWS.research] } } },
+    })).rejects.toThrow('No se pudieron aplicar las exclusiones')
+    expect(existsSync(include)).toBe(false)
+    expect(await readFile(exclude, 'utf8')).not.toBe('')
+    expect(await content.summary(MESA_ID)).toBeNull()
+    expect(await readFile(join(folder, 'notion', 'index.md'), 'utf8')).toContain('exclusiones aún no están confirmadas')
+    expect(written).toBe(writtenBefore)
+    await content.request(MESA_ID)
+    expect(existsSync(include)).toBe(true)
+    expect(existsSync(exclude)).toBe(false)
+    expect((await content.summary(MESA_ID))?.excludedByChoice).toBe(1)
+  })
+
+  it('no acepta exclusiones sin snapshot si quedan archivos de una exportación anterior', async () => {
+    const content = service()
+    await content.request(MESA_ID)
+    const excluded = join(folder, 'notion', 'concepto-20000000.md')
+    const before = await readFile(excluded, 'utf8')
+    await rm(join(root, 'userData', 'notion-content', `${MESA_ID}.json`))
+    const writtenBefore = written
+    await expect(content.setSelection(MESA_ID, {
+      [FIXTURE_PROJECT_PAGE]: { body: true, bases: { [FIXTURE_PROCESS_SOURCE]: { mode: 'all-except', pages: [FIXTURE_ROWS.concept] } } },
+    })).rejects.toMatchObject({
+      message: expect.stringContaining('Pueden quedar archivos legibles'),
+      cause: { message: expect.stringContaining('falta la lectura guardada') },
+    })
+    expect(await readFile(excluded, 'utf8')).toBe(before)
+    expect(written).toBe(writtenBefore)
+    await content.request(MESA_ID)
+    expect(existsSync(excluded)).toBe(false)
     expect((await content.summary(MESA_ID))?.excludedByChoice).toBe(1)
   })
 

@@ -240,10 +240,10 @@ function summarize(lines: readonly string[]): string[] {
   return lines.length <= CONFIRM_LINES ? [...lines] : [...lines.slice(0, CONFIRM_LINES), `y ${lines.length - CONFIRM_LINES} más`]
 }
 
-/** Por qué no se borró nada: la persona no aceptó, o la petición se canceló (sesión cerrada, agente que dejó de esperar). */
-function rejectedMessage(signal: AbortSignal): string {
+/** Explica el rechazo o la cancelación sin ocultar lo que ya se borró. */
+function rejectedMessage(signal: AbortSignal, removed = 0): string {
   return signal.aborted
-    ? 'La petición se canceló (la sesión terminó o el agente dejó de esperar): no se ha borrado nada.'
+    ? `La petición se canceló (la sesión terminó o el agente dejó de esperar): ${removed > 0 ? `se completaron ${removed} borrados antes de cancelar; no se continuará borrando.` : 'no se ha borrado nada.'}`
     : 'La persona no aceptó el borrado: no se ha borrado nada.'
 }
 
@@ -470,7 +470,12 @@ export function createTableToolHandlers(deps: TableToolDeps): Readonly<Record<Me
           break
         }
         if (item.kind === 'card') {
-          if ((await deps.unloadCard(item.id)) === 'kept') {
+          const unloaded = await deps.unloadCard(item.id)
+          if (signal.aborted) {
+            if (unloaded === 'kept') kept.push(item.id)
+            break
+          }
+          if (unloaded === 'kept') {
             kept.push(item.id)
             continue
           }
@@ -488,8 +493,11 @@ export function createTableToolHandlers(deps: TableToolDeps): Readonly<Record<Me
       }
       return {
         removed,
-        rejected: false,
-        ...(kept.length > 0 ? { kept, message: 'Algunas tarjetas no se borraron: su web avisó de cambios sin guardar.' } : {}),
+        rejected: signal.aborted,
+        ...(kept.length > 0 ? { kept } : {}),
+        ...(signal.aborted
+          ? { message: rejectedMessage(signal, removed.length) }
+          : kept.length > 0 ? { message: 'Algunas tarjetas no se borraron: su web avisó de cambios sin guardar.' } : {}),
       }
     },
 
@@ -530,7 +538,7 @@ export function createTableToolHandlers(deps: TableToolDeps): Readonly<Record<Me
       if (removed.length > 0) {
         deps.changed(mesaId, removed.length === 1 ? 'El agente borró una conexión' : `El agente borró ${removed.length} conexiones`)
       }
-      return { removed, rejected: false }
+      return { removed, rejected: signal.aborted, ...(signal.aborted ? { message: rejectedMessage(signal, removed.length) } : {}) }
     },
   }
 }

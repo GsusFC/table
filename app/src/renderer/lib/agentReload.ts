@@ -12,7 +12,7 @@ import type { Card, Edge, Mesa, Note, Result } from '../../shared/model'
 export type LocalField = 'exists' | 'text' | 'geometry'
 
 interface LocalEntry {
-  /** Momento del último cambio local (contador, no reloj). */
+  /** Momento del último cambio local o finalización de guardado (contador, no reloj). */
   seq: number
   /** Guardados en curso. */
   pending: number
@@ -38,8 +38,10 @@ export class LocalWrites {
     return () => {
       if (!ended) {
         ended = true
+        this.#seq += 1
         for (const entry of entries) {
           entry.pending -= 1
+          entry.seq = this.#seq
         }
       }
     }
