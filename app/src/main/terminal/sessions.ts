@@ -107,9 +107,19 @@ export interface SessionManager {
 }
 
 /**
+ * Variables con las que una terminal se identifica. Table las hereda de la
+ * terminal desde la que se arrancó (`npm run dev` en Ghostty, kitty, tmux…) y
+ * con ellas un arnés creería estar en esa terminal: omp, por ejemplo, pinta
+ * imágenes con el protocolo de kitty, que xterm.js no entiende, y llena la
+ * pantalla de caracteres basura. La terminal de una sesión es la de Table.
+ */
+const INHERITED_TERMINAL = /^(TERM_PROGRAM|TERM_PROGRAM_VERSION|TERM_SESSION_ID|LC_TERMINAL|LC_TERMINAL_VERSION|COLORFGBG|VTE_VERSION|WT_SESSION|TMUX|TMUX_PANE|STY|KITTY_.*|GHOSTTY_.*|WEZTERM_.*|ITERM_.*|ALACRITTY_.*|KONSOLE_.*|VSCODE_.*|TERMINAL_EMULATOR)$/
+
+/**
  * Entorno de una sesión: el del usuario, sin variables de Electron ni de
- * Table ni las que añade `npm run` al arrancar Table en desarrollo (`npm_*`,
- * `INIT_CWD`; confunden a nvm y otras herramientas). Terminal de 256 colores.
+ * Table, sin las que añade `npm run` al arrancar Table en desarrollo (`npm_*`,
+ * `INIT_CWD`; confunden a nvm y otras herramientas) y sin la identidad de la
+ * terminal desde la que se abrió Table. Terminal de 256 colores.
  * Nunca se añaden credenciales.
  */
 export function sessionEnvironment(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -117,7 +127,7 @@ export function sessionEnvironment(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   for (const [key, value] of Object.entries(base)) {
     const fromTable = key.startsWith('ELECTRON_') || key.startsWith('TABLE_')
     const fromNpmRun = key.startsWith('npm_') || key === 'INIT_CWD'
-    if (value !== undefined && !fromTable && !fromNpmRun) {
+    if (value !== undefined && !fromTable && !fromNpmRun && !INHERITED_TERMINAL.test(key)) {
       env[key] = value
     }
   }

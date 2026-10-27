@@ -309,7 +309,7 @@ describe('sesiones', () => {
 })
 
 describe('sessionEnvironment', () => {
-  it('quita variables de Electron, de Table y de npm run, y fija el terminal', () => {
+  it('quita variables de Electron, de Table, de npm run y de la terminal de origen, y fija el terminal', () => {
     const env = sessionEnvironment({
       PATH: '/bin',
       ELECTRON_RUN_AS_NODE: '1',
@@ -317,8 +317,22 @@ describe('sessionEnvironment', () => {
       npm_config_prefix: '/opt/otro-node',
       INIT_CWD: '/tmp',
       LANG: 'es_ES.UTF-8',
+      // Table arrancado desde Ghostty dentro de tmux: el arnés no debe creerse en ellas.
+      TERM: 'xterm-ghostty',
+      TERM_PROGRAM: 'ghostty',
+      TERM_PROGRAM_VERSION: '1.3.0',
+      GHOSTTY_RESOURCES_DIR: '/Applications/Ghostty.app/Contents/Resources/ghostty',
+      KITTY_WINDOW_ID: '1',
+      TMUX: '/tmp/tmux-501/default,1,0',
+      TERMINFO_DIRS: '/usr/share/terminfo',
     })
-    expect(env).toEqual({ PATH: '/bin', LANG: 'es_ES.UTF-8', TERM: 'xterm-256color', COLORTERM: 'truecolor' })
+    expect(env).toEqual({
+      PATH: '/bin',
+      LANG: 'es_ES.UTF-8',
+      TERMINFO_DIRS: '/usr/share/terminfo',
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+    })
     expect(sessionEnvironment({}).LC_CTYPE).toBe('UTF-8')
   })
 })
