@@ -1009,6 +1009,51 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
       )
       await shot('17-agentes-terminal')
 
+      // ⌘+clic en una URL de la salida: la añade como tarjeta a la mesa. La orden no contiene
+      // la URL entera (la arma `printf`), así que solo la línea de salida la tiene.
+      const terminalUrl = 'https://example.com/desde-terminal'
+      await typeLine('.agents-terminal', "printf 'https://example.com/desde-%s\\n' terminal")
+      await waitFor(() => rowsText('.agents-terminal'), text => text.includes(terminalUrl), 'URL en la salida', 20_000)
+      await delay(300)
+      const linkPoint = await inUi<{ x: number; y: number } | null>(`(() => {
+        const rows = [...document.querySelectorAll('.agents-terminal .xterm-rows > div')]
+        const row = rows.find(r => r.textContent.trimStart().startsWith(${JSON.stringify(terminalUrl)}))
+        if (!row) return null
+        const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT)
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const index = node.textContent.indexOf('https')
+          if (index >= 0) {
+            const range = document.createRange()
+            range.setStart(node, index)
+            range.setEnd(node, index + 6)
+            const r = range.getBoundingClientRect()
+            return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }
+          }
+        }
+        return null
+      })()`)
+      if (linkPoint) {
+        ui.sendInputEvent({ type: 'mouseMove', x: linkPoint.x, y: linkPoint.y })
+        await delay(300)
+        ui.sendInputEvent({ type: 'mouseMove', x: linkPoint.x + 2, y: linkPoint.y, modifiers: ['meta'] })
+        await delay(200)
+        ui.sendInputEvent({ type: 'mouseDown', x: linkPoint.x + 2, y: linkPoint.y, button: 'left', clickCount: 1, modifiers: ['meta'] })
+        ui.sendInputEvent({ type: 'mouseUp', x: linkPoint.x + 2, y: linkPoint.y, button: 'left', clickCount: 1, modifiers: ['meta'] })
+      }
+      const linked = await waitFor(
+        () => inUi<Mesa>(`window.table.mesas.get(${agentsArg})`),
+        current => current.cards.some(card => card.url === terminalUrl),
+        'tarjeta desde la terminal',
+      ).then(
+        () => true,
+        () => false,
+      )
+      record('agentes: ⌘+clic en una URL de la terminal la añade a la mesa', linked, { found: linkPoint !== null })
+      // La tarjeta sobra para lo que sigue (la mesa debe quedar sin tarjetas).
+      for (const card of (await inUi<Mesa>(`window.table.mesas.get(${agentsArg})`)).cards) {
+        await inUi(`window.table.cards.remove(${agentsArg}, ${JSON.stringify(card.id)})`)
+      }
+
       // Desacoplar: el mismo terminal pasa a una tarjeta del lienzo, sin guardarse en la mesa.
       await inUi(`[...document.querySelectorAll('.agents-session-bar button')].find(b => b.textContent.includes('Desacoplar')).click()`)
       await waitFor(() => rowsText('.react-flow__node-terminal'), text => text.includes('ui-2'), 'tarjeta de terminal con la salida')

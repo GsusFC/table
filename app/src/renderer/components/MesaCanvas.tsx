@@ -81,7 +81,14 @@ import { notifyFigmaThumbnailsChanged } from '../lib/figmaThumbnails'
 import { displayHost } from '../lib/format'
 import { cardStatus } from '../lib/status'
 import { alignEdge, arrangeInGrid, magnetSnap, NO_GUIDES, snapToGrid, type Guides, type Rect } from '../lib/layout'
-import { isInTerminal, moveDetached, useDetached, useMesaSessions, type DetachedTerminal } from '../lib/terminals'
+import {
+  isInTerminal,
+  moveDetached,
+  setTerminalLinkOpener,
+  useDetached,
+  useMesaSessions,
+  type DetachedTerminal,
+} from '../lib/terminals'
 import { readPastedUrls } from '../lib/url'
 import { AddUrlField } from './AddUrlField'
 import { CanvasContext, type CanvasContextValue } from './canvasContext'
@@ -695,6 +702,27 @@ function CanvasInner({
       setAddField({ ...slot, centered: true })
     }
   }, [visibleCenterSlot])
+
+  // ⌘+clic en una URL de la terminal: tarjeta en el centro de la vista, o la existente si ya está.
+  useEffect(() => {
+    setTerminalLinkOpener(url => {
+      const existing = mesa.cards.find(card => card.url === url)
+      if (existing) {
+        setNodes(current => current.map(node => ({ ...node, selected: node.id === existing.id })))
+        void flow.fitView({ nodes: [{ id: existing.id }], duration: 300, maxZoom: 1 })
+        notify('Ese enlace ya está en la mesa', 'info')
+        return
+      }
+      const slot = visibleCenterSlot()
+      if (slot) {
+        onAddCard(url, slot.flow).then(
+          () => notify('Enlace añadido a la mesa', 'info'),
+          (error: unknown) => notify(errorMessage(error)),
+        )
+      }
+    })
+    return () => setTerminalLinkOpener(null)
+  }, [mesa.cards, flow, notify, onAddCard, visibleCenterSlot])
 
   const handledRequest = useRef(addUrlRequest)
   useEffect(() => {

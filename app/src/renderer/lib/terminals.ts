@@ -6,6 +6,7 @@
  * eso no va a la mesa, porque las sesiones no sobreviven a cerrar Table.
  */
 import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal, type ITheme } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { useMemo, useSyncExternalStore } from 'react'
@@ -241,6 +242,36 @@ export function setExitShortcutReserved(reserved: boolean): void {
   exitShortcutReserved = reserved
 }
 
+/** Quien abre en la mesa los enlaces de la terminal; lo fija el lienzo de la mesa abierta. */
+let linkOpener: ((url: string) => void) | null = null
+
+export function setTerminalLinkOpener(opener: ((url: string) => void) | null): void {
+  linkOpener = opener
+}
+
+/**
+ * ⌘+clic (o Ctrl+clic) en una URL de la terminal la abre como tarjeta en la mesa,
+ * como en otras terminales; un clic suelto sigue sirviendo para seleccionar texto.
+ * Solo http(s): nada de `file:` ni esquemas de apps.
+ */
+function openLink(event: MouseEvent, uri: string): void {
+  if (!(event.metaKey || event.ctrlKey)) {
+    return
+  }
+  let url: URL
+  try {
+    url = new URL(uri)
+  } catch {
+    return
+  }
+  if (url.protocol === 'http:' || url.protocol === 'https:') {
+    event.preventDefault()
+    linkOpener?.(url.href)
+  }
+}
+
+const LINK_HINT = '⌘+clic para abrir en la mesa'
+
 // Una sola suscripción a la salida de todas las sesiones. Cada trozo se confirma
 // (`ack`) cuando xterm lo ha procesado: así el proceso principal pausa la sesión
 // si la interfaz no da abasto, en lugar de que xterm descarte salida.
@@ -318,9 +349,21 @@ function ensureTerminal(sessionId: SessionId): TerminalEntry {
     lineHeight: LINE_HEIGHT,
     theme: terminalTheme(),
     cursorBlink: true,
+    // Enlaces explícitos (OSC 8) que algunos programas escriben con texto distinto de la URL.
+    linkHandler: {
+      activate: openLink,
+      hover: () => term.element?.setAttribute('title', LINK_HINT),
+      leave: () => term.element?.removeAttribute('title'),
+    },
   })
   const fit = new FitAddon()
   term.loadAddon(fit)
+  term.loadAddon(
+    new WebLinksAddon(openLink, {
+      hover: () => term.element?.setAttribute('title', LINK_HINT),
+      leave: () => term.element?.removeAttribute('title'),
+    }),
+  )
   const entry: TerminalEntry = {
     term,
     fit,
