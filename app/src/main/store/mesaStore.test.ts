@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DEFAULT_CARD_SIZE, DEFAULT_NOTE_SIZE, DEFAULT_VIEWPORT, SCHEMA_VERSION } from '../../shared/model'
+import { DEFAULT_CARD_SIZE, DEFAULT_NOTE_SIZE, DEFAULT_RESULT_SIZE, DEFAULT_VIEWPORT, SCHEMA_VERSION } from '../../shared/model'
 import { createMesaStore } from './mesaStore'
 import type { MesaStore } from './types'
 
@@ -30,6 +30,11 @@ function setNow(iso: string): void {
 }
 
 const card = { url: 'https://example.com/', serviceId: 'web', position: { x: 10, y: 20 } }
+
+/** Solo añade resultados (sin tocar ni olvidar descartes); devuelve los añadidos. */
+async function addResults(mesaId: string, add: Parameters<MesaStore['reconcileResults']>[1]['add']) {
+  return (await store.reconcileResults(mesaId, { add, touch: [], undismiss: [] })).added
+}
 
 describe('mesas', () => {
   it('crea, obtiene y guarda en disco con la versión de esquema', async () => {
@@ -489,22 +494,24 @@ describe('migración de la versión 1', () => {
     const { id, path, v1 } = await writeV1()
     const content = await readFile(path, 'utf8')
     const mesa = await store.get(id)
-    expect(mesa).toEqual({ ...v1, schemaVersion: SCHEMA_VERSION, notes: [], edges: [] })
+    expect(mesa).toEqual({ ...v1, schemaVersion: SCHEMA_VERSION, notes: [], edges: [], results: [], dismissedResults: [] })
     expect((await store.list()).mesas).toEqual([expect.objectContaining({ id, name: 'Mesa antigua', cardCount: 1 })])
     expect(await readFile(path, 'utf8')).toBe(content)
   })
 
-  it('la siguiente escritura la guarda como versión 2 conservando todo', async () => {
+  it('la siguiente escritura la guarda en la versión actual conservando todo', async () => {
     const { id, path, v1 } = await writeV1()
     setNow('2026-10-26T10:00:00.000Z')
     const note = await store.addNote(id, { x: 400, y: 48 })
     const raw = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>
     expect(raw).toEqual({
       ...v1,
-      schemaVersion: 2,
+      schemaVersion: SCHEMA_VERSION,
       updatedAt: '2026-10-26T10:00:00.000Z',
       notes: [note],
       edges: [],
+      results: [],
+      dismissedResults: [],
     })
     expect(await createMesaStore(baseDir).get(id)).toEqual(raw)
   })
@@ -515,6 +522,190 @@ describe('migración de la versión 1', () => {
     await writeFile(path, content)
     expect(await store.list()).toEqual({ mesas: [], unreadable: [id] })
     await expect(store.addNote(id, { x: 0, y: 0 })).rejects.toThrow('no es válido')
+    expect(await readFile(path, 'utf8')).toBe(content)
+  })
+})
+
+describe('migración de la versión 2', () => {
+  /** Mesa sintética guardada con el esquema 2: tarjeta, nota y conexión, sin resultados. */
+  async function writeV2(): Promise<{ id: string; path: string; v2: Record<string, unknown> }> {
+    const id = randomUUID()
+    const cardId = randomUUID()
+    const noteId = randomUUID()
+    const v2 = {
+      schemaVersion: 2,
+      id,
+      name: 'Mesa de la versión 2',
+      createdAt: '2026-10-22T09:00:00.000Z',
+      updatedAt: '2026-10-23T09:00:00.000Z',
+      viewport: { x: 0, y: 0, zoom: 1 },
+      cards: [
+        {
+          id: cardId,
+          url: 'https://example.com/',
+          serviceId: 'web',
+          title: null,
+          position: { x: 0, y: 0 },
+          size: { width: 320, height: 220 },
+          capturedAt: null,
+          createdAt: '2026-10-22T09:01:00.000Z',
+          updatedAt: '2026-10-22T09:01:00.000Z',
+        },
+      ],
+      notes: [
+        {
+          id: noteId,
+          text: 'Idea',
+          position: { x: 400, y: 0 },
+          size: { width: 240, height: 144 },
+          createdAt: '2026-10-22T09:02:00.000Z',
+          updatedAt: '2026-10-22T09:02:00.000Z',
+        },
+      ],
+      edges: [{ id: randomUUID(), source: cardId, target: noteId, createdAt: '2026-10-22T09:03:00.000Z' }],
+    }
+    await mkdir(join(baseDir, 'mesas'), { recursive: true })
+    const path = join(baseDir, 'mesas', `${id}.json`)
+    await writeFile(path, JSON.stringify(v2))
+    return { id, path, v2 }
+  }
+
+  it('se abre sin pérdida, con la lista de resultados vacía, sin reescribir al leer', async () => {
+    const { id, path, v2 } = await writeV2()
+    const content = await readFile(path, 'utf8')
+    expect(await store.get(id)).toEqual({ ...v2, schemaVersion: SCHEMA_VERSION, results: [], dismissedResults: [] })
+    expect(await readFile(path, 'utf8')).toBe(content)
+  })
+
+  it('la siguiente escritura la guarda como versión 3 conservando todo', async () => {
+    const { id, path, v2 } = await writeV2()
+    setNow('2026-10-27T10:00:00.000Z')
+    const [result] = await addResults(id, [{ file: 'plan.md', kind: 'text', position: { x: 800, y: 0 } }])
+    const raw = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>
+    expect(raw).toEqual({ ...v2, schemaVersion: 3, updatedAt: '2026-10-27T10:00:00.000Z', results: [result], dismissedResults: [] })
+    expect(await createMesaStore(baseDir).get(id)).toEqual(raw)
+  })
+
+  it('una versión 2 con resultados no es legible', async () => {
+    const { id, path, v2 } = await writeV2()
+    const content = JSON.stringify({ ...v2, results: [] })
+    await writeFile(path, content)
+    expect(await store.list()).toEqual({ mesas: [], unreadable: [id] })
+    expect(await readFile(path, 'utf8')).toBe(content)
+  })
+})
+
+describe('resultados', () => {
+  it('añade con tamaño por defecto y omite archivos que ya tienen tarjeta', async () => {
+    const mesa = await store.create('Resultados')
+    setNow('2026-10-27T10:00:00.000Z')
+    const added = await addResults(mesa.id, [
+      { file: 'plan.md', kind: 'text', position: { x: 10, y: 20 } },
+      { file: 'boceto.png', kind: 'image', position: { x: 10, y: 260 } },
+      { file: 'PLAN.md', kind: 'text', position: { x: 10, y: 500 } },
+    ])
+    expect(added).toEqual([
+      {
+        id: expect.any(String),
+        file: 'plan.md',
+        kind: 'text',
+        position: { x: 10, y: 20 },
+        size: DEFAULT_RESULT_SIZE,
+        createdAt: '2026-10-27T10:00:00.000Z',
+        updatedAt: '2026-10-27T10:00:00.000Z',
+      },
+      expect.objectContaining({ file: 'boceto.png', kind: 'image' }),
+    ])
+    expect(await addResults(mesa.id, [{ file: 'plan.md', kind: 'text', position: { x: 0, y: 0 } }])).toEqual([])
+    expect((await store.get(mesa.id)).results).toEqual(added)
+  })
+
+  it.each(['', '.oculto', '..', 'a/b.md', 'a\\b.md', 'a:b', 'nul\u0000.md', ' espacio.md', 'x'.repeat(256)])(
+    'rechaza el nombre de archivo %j',
+    async file => {
+      const mesa = await store.create('Nombres')
+      await expect(addResults(mesa.id, [{ file, kind: 'file', position: { x: 0, y: 0 } }])).rejects.toThrow(
+        'Nombre de archivo de resultado no válido',
+      )
+      expect((await store.get(mesa.id)).results).toEqual([])
+    },
+  )
+
+  it('se mueve, se conecta y al quitarlo se borran sus conexiones', async () => {
+    const mesa = await store.create('Conectar resultados')
+    const note = await store.addNote(mesa.id, { x: 0, y: 0 })
+    const [result] = await addResults(mesa.id, [{ file: 'datos.csv', kind: 'text', position: { x: 400, y: 0 } }])
+    const moved = await store.updateResult(mesa.id, result!.id, { position: { x: 500, y: 40 }, size: { width: 300, height: 200 } })
+    expect(moved).toMatchObject({ position: { x: 500, y: 40 }, size: { width: 300, height: 200 } })
+    await store.addEdge(mesa.id, note.id, result!.id)
+    expect((await store.get(mesa.id)).edges).toHaveLength(1)
+    await store.removeResult(mesa.id, result!.id)
+    const after = await store.get(mesa.id)
+    expect(after.results).toEqual([])
+    expect(after.edges).toEqual([])
+    await expect(store.removeResult(mesa.id, result!.id)).rejects.toThrow('El resultado no existe')
+  })
+
+  it('quitar una tarjeta descarta su archivo hasta que se olvide el descarte', async () => {
+    const mesa = await store.create('Descartes')
+    const [result] = await addResults(mesa.id, [{ file: 'plan.md', kind: 'text', position: { x: 0, y: 0 } }])
+    await store.removeResult(mesa.id, result!.id)
+    expect((await store.get(mesa.id)).dismissedResults).toEqual(['plan.md'])
+    expect(await addResults(mesa.id, [{ file: 'Plan.md', kind: 'text', position: { x: 0, y: 0 } }])).toEqual([])
+    const back = await store.reconcileResults(mesa.id, {
+      add: [{ file: 'plan.md', kind: 'text', position: { x: 0, y: 0 } }],
+      touch: [],
+      undismiss: ['plan.md'],
+    })
+    expect(back.added).toHaveLength(1)
+    expect((await store.get(mesa.id)).dismissedResults).toEqual([])
+  })
+
+  it('touch renueva updatedAt; sin cambios no se escribe', async () => {
+    const mesa = await store.create('Tocar')
+    setNow('2026-10-27T10:00:00.000Z')
+    const [result] = await addResults(mesa.id, [{ file: 'plan.md', kind: 'text', position: { x: 0, y: 0 } }])
+    setNow('2026-10-27T11:00:00.000Z')
+    const { touched } = await store.reconcileResults(mesa.id, { add: [], touch: [result!.id], undismiss: [] })
+    expect(touched).toEqual([{ ...result, updatedAt: '2026-10-27T11:00:00.000Z' }])
+    const path = join(baseDir, 'mesas', `${mesa.id}.json`)
+    const content = await readFile(path, 'utf8')
+    setNow('2026-10-27T12:00:00.000Z')
+    await store.reconcileResults(mesa.id, { add: [], touch: [], undismiss: [] })
+    expect(await readFile(path, 'utf8')).toBe(content)
+  })
+
+  it.each([
+    ['resultado con ruta', (m: Record<string, unknown>) => ((m['results'] as [Record<string, unknown>])[0]['file'] = '../fuera.md')],
+    ['resultado de tipo desconocido', (m: Record<string, unknown>) => ((m['results'] as [Record<string, unknown>])[0]['kind'] = 'exe')],
+    [
+      'dos resultados del mismo archivo',
+      (m: Record<string, unknown>) => {
+        const [first] = m['results'] as [Record<string, unknown>]
+        m['results'] = [first, { ...first, id: randomUUID(), file: 'PLAN.MD' }]
+      },
+    ],
+    [
+      'ID de resultado repetido en una nota',
+      (m: Record<string, unknown>) => {
+        const [first] = m['results'] as [Record<string, unknown>]
+        ;(m['notes'] as Record<string, unknown>[]).push({ ...(m['notes'] as [Record<string, unknown>])[0], id: first['id'] })
+      },
+    ],
+    ['sin lista de resultados', (m: Record<string, unknown>) => delete m['results']],
+    ['sin lista de descartes', (m: Record<string, unknown>) => delete m['dismissedResults']],
+    ['descarte de un archivo con tarjeta', (m: Record<string, unknown>) => (m['dismissedResults'] = ['PLAN.md'])],
+    ['descarte con ruta', (m: Record<string, unknown>) => (m['dismissedResults'] = ['../x.md'])],
+  ])('%s: no es legible y no se toca', async (_label, tamper) => {
+    const mesa = await store.create('Original')
+    await store.addNote(mesa.id, { x: 0, y: 0 })
+    await addResults(mesa.id, [{ file: 'plan.md', kind: 'text', position: { x: 400, y: 0 } }])
+    const path = join(baseDir, 'mesas', `${mesa.id}.json`)
+    const json = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>
+    tamper(json)
+    const content = JSON.stringify(json)
+    await writeFile(path, content)
+    await expect(store.get(mesa.id)).rejects.toThrow('no es válido')
     expect(await readFile(path, 'utf8')).toBe(content)
   })
 })

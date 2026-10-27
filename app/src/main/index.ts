@@ -14,10 +14,10 @@ import {
 } from 'electron'
 import { existsSync, mkdtempSync } from 'node:fs'
 import { homedir, tmpdir, userInfo } from 'node:os'
-import { isAbsolute, join } from 'node:path'
+import { extname, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { figmaFileKey } from '../shared/figma'
-import { CAPTURE_PROTOCOL, IPC, type PersistenceError } from '../shared/ipc'
+import { CAPTURE_PROTOCOL, IPC, RESULT_PROTOCOL, type PersistenceError } from '../shared/ipc'
 import type { MesaId } from '../shared/model'
 import { recognizeService } from '../shared/services'
 import {
@@ -29,11 +29,14 @@ import {
   parseNotePatch,
   parsePanelBounds,
   parsePoint,
+  parseResultPatch,
   parseProfileId,
   parseTerminalInput,
   parseTerminalSize,
   parseViewport,
 } from '../shared/validate'
+import { createAgentContext, type AgentContext } from './agent/context'
+import { createResultsWatcher, IMAGE_MIME, type ResultEntry, type ResultsWatcher } from './agent/results'
 import { log } from './log'
 import { authorizeNotion, createNotionMcp, NOTION_MCP_URL } from './notion/mcp'
 import { createProjectService, type ProjectService } from './notion/projects'
@@ -63,6 +66,7 @@ if (smokeMode) {
 protocol.registerSchemesAsPrivileged([
   { scheme: CAPTURE_PROTOCOL, privileges: { standard: true, secure: true } },
   { scheme: FIGMA_THUMB_PROTOCOL, privileges: { standard: true, secure: true } },
+  { scheme: RESULT_PROTOCOL, privileges: { standard: true, secure: true } },
 ])
 
 // Una sola instancia: dos procesos sobre el mismo almacén podrían pisarse cambios.
@@ -82,6 +86,8 @@ let frames: FrameService | null = null
 let profileCatalog: ProfileCatalog | null = null
 let terminals: SessionManager | null = null
 let workFolders: WorkFolders | null = null
+let agentContext: AgentContext | null = null
+let resultsWatcher: ResultsWatcher | null = null
 /** Autorización con Notion en curso (navegador abierto); se puede cancelar. */
 let connectingNotion: AbortController | null = null
 /** Escrituras iniciadas por el proceso principal (capturas, títulos); se esperan al cerrar. */
@@ -241,18 +247,21 @@ function registerIpc(): void {
     if ((await surfaceManager.openMesa(null)) === 'kept') {
       throw new Error('Una web de la mesa avisó de cambios sin guardar; no se ha borrado')
     }
+    await resultsWatcher?.watch(null)
     try {
       await requireStore().remove(mesaId)
     } catch (error) {
       // La interfaz sigue mostrando la mesa: la superficie vuelve a tenerla abierta.
       if (previouslyOpen) {
         await surfaceManager.openMesa(previouslyOpen)
+        await resultsWatcher?.watch(previouslyOpen)
       }
       throw error
     }
     // Sus sesiones de terminal no tienen ya mesa: se terminan. Su carpeta de trabajo se conserva en disco.
     await terminals?.closeMesa(mesaId)
     await workFolders?.forget(mesaId)
+    agentContext?.forget(mesaId)
   })
   handle(IPC.mesasSetViewport, (id, viewport) => requireStore().setViewport(parseId(id), parseViewport(viewport)))
 
@@ -287,7 +296,17 @@ function registerIpc(): void {
   )
   handle(IPC.edgesRemove, (mesaId, edgeId) => requireStore().removeEdge(parseId(mesaId), parseId(edgeId)))
 
-  handle(IPC.surfaceOpenMesa, mesaId => requireSurface().openMesa(mesaId === null ? null : parseId(mesaId)))
+  handle(IPC.surfaceOpenMesa, async mesaId => {
+    const parsed = mesaId === null ? null : parseId(mesaId)
+    const outcome = await requireSurface().openMesa(parsed)
+    if (outcome !== 'kept') {
+      // La carpeta `resultados/` de la mesa abierta se vigila; un fallo no impide abrirla.
+      await resultsWatcher?.watch(parsed).catch((error: unknown) => {
+        log('results-watch-failed', { message: error instanceof Error ? error.message : String(error) })
+      })
+    }
+    return outcome
+  })
   handle(IPC.surfaceEnter, async (mesaId, cardId) => {
     const parsedMesa = parseId(mesaId)
     const parsedCard = parseId(cardId)
@@ -452,6 +471,111 @@ function registerFigmaIpc(): void {
   })
 }
 
+function requireAgent(): { context: AgentContext; results: ResultsWatcher } {
+  if (!agentContext || !resultsWatcher) {
+    throw new Error('El contexto de los agentes no está listo')
+  }
+  return { context: agentContext, results: resultsWatcher }
+}
+
+/** Elementos máximos en una selección enviada al agente. */
+const MAX_SELECTION_ITEMS = 500
+/** Bytes de la vista previa de un resultado de texto. */
+const PREVIEW_BYTES = 4096
+/**
+ * Extensiones que el sistema ejecutaría al abrirlas: Table no las abre con
+ * doble clic (no ejecutar artefactos recibidos); se pueden mostrar en Finder.
+ */
+const EXECUTABLE_EXTENSIONS: Readonly<Record<string, true>> = {
+  '.app': true,
+  '.command': true,
+  '.tool': true,
+  '.terminal': true,
+  '.sh': true,
+  '.zsh': true,
+  '.bash': true,
+  '.csh': true,
+  '.scpt': true,
+  '.applescript': true,
+  '.workflow': true,
+  '.action': true,
+  '.jar': true,
+  '.pkg': true,
+  '.mpkg': true,
+  '.dmg': true,
+  '.webloc': true,
+  '.inetloc': true,
+  '.fileloc': true,
+}
+
+/** Archivo comprobado de un resultado de la mesa; lanza si falta o no es un archivo normal de `resultados/`. */
+async function resultEntryOf(mesaId: MesaId, resultId: string): Promise<ResultEntry> {
+  const resolved = await requireAgent().results.resolve(mesaId, resultId)
+  if (!resolved) {
+    throw new Error('Archivo no encontrado')
+  }
+  return resolved.entry
+}
+
+/** Tamaño máximo de una imagen de resultado servida al lienzo. */
+const MAX_RESULT_IMAGE_BYTES = 32 * 1024 * 1024
+
+/** Contexto para los agentes y tarjetas de resultado (T-008). */
+function registerAgentIpc(): void {
+  handle(IPC.agentRefreshContext, async mesaId => {
+    await requireAgent().context.write(parseId(mesaId))
+  })
+  handle(IPC.agentSelectionText, (mesaId, itemIds) => {
+    if (!Array.isArray(itemIds) || itemIds.length === 0 || itemIds.length > MAX_SELECTION_ITEMS) {
+      throw new Error('Selección no válida')
+    }
+    return requireAgent().context.selectionText(parseId(mesaId), itemIds.map(parseId))
+  })
+  handle(IPC.resultsUpdate, (mesaId, resultId, patch) =>
+    requireStore().updateResult(parseId(mesaId), parseId(resultId), parseResultPatch(patch)),
+  )
+  // Solo la tarjeta: el archivo se queda en `resultados/`.
+  handle(IPC.resultsRemove, (mesaId, resultId) => requireStore().removeResult(parseId(mesaId), parseId(resultId)))
+  handle(IPC.resultsOpen, async (mesaId, resultId) => {
+    const parsedMesa = parseId(mesaId)
+    const parsedResult = parseId(resultId)
+    const entry = await resultEntryOf(parsedMesa, parsedResult)
+    if ((entry.mode & 0o111) !== 0 || Object.hasOwn(EXECUTABLE_EXTENSIONS, extname(entry.path).toLowerCase())) {
+      throw new Error('Table no abre archivos ejecutables; usa «Mostrar en Finder»')
+    }
+    // Se vuelve a comprobar justo antes de abrir: si el archivo se cambió por otro, no se abre.
+    const again = await resultEntryOf(parsedMesa, parsedResult)
+    if (again.dev !== entry.dev || again.ino !== entry.ino || again.mode !== entry.mode) {
+      throw new Error('El archivo cambió mientras se abría; vuelve a intentarlo')
+    }
+    const failure = await shell.openPath(entry.path)
+    if (failure) {
+      throw new Error(`No se pudo abrir el archivo: ${failure}`)
+    }
+  })
+  handle(IPC.resultsReveal, async (mesaId, resultId) => {
+    shell.showItemInFolder((await resultEntryOf(parseId(mesaId), parseId(resultId))).path)
+  })
+  handle(IPC.resultsPreview, async (mesaId, resultId) => {
+    const opened = await requireAgent().results.open(parseId(mesaId), parseId(resultId))
+    if (!opened) {
+      return null
+    }
+    try {
+      if (opened.result.kind !== 'text') {
+        return null
+      }
+      const buffer = Buffer.alloc(PREVIEW_BYTES)
+      const { bytesRead } = await opened.handle.read(buffer, 0, PREVIEW_BYTES, 0)
+      // `stream`: un carácter partido al final del bloque no se convierte en «�».
+      return new TextDecoder('utf-8').decode(buffer.subarray(0, bytesRead), { stream: true })
+    } finally {
+      await opened.handle.close()
+    }
+  })
+  handle(IPC.resultsMissing, mesaId => requireAgent().results.missing(parseId(mesaId)))
+}
+
 function requireTerminals(): { catalog: ProfileCatalog; sessions: SessionManager } {
   if (!profileCatalog || !terminals) {
     throw new Error('Las terminales no están listas')
@@ -547,6 +671,43 @@ function registerCaptureProtocol(): void {
       return net.fetch(pathToFileURL(path).href)
     } catch {
       return new Response(null, { status: 400 })
+    }
+  })
+}
+
+/** `table-result://<mesaId>/<resultId>`: imágenes de `resultados/` de la mesa, solo lectura. */
+function registerResultProtocol(): void {
+  protocol.handle(RESULT_PROTOCOL, async request => {
+    let mesaId: string
+    let resultId: string
+    try {
+      const url = new URL(request.url)
+      mesaId = parseId(url.hostname)
+      resultId = parseId(url.pathname.replace(/^\//, ''))
+    } catch {
+      return new Response(null, { status: 400 })
+    }
+    try {
+      const opened = await requireAgent().results.open(mesaId, resultId)
+      if (!opened) {
+        return new Response(null, { status: 404 })
+      }
+      try {
+        const mime = IMAGE_MIME[extname(opened.result.file).toLowerCase()]
+        if (opened.result.kind !== 'image' || !mime) {
+          return new Response(null, { status: 404 })
+        }
+        if (opened.size > MAX_RESULT_IMAGE_BYTES) {
+          return new Response(null, { status: 413 })
+        }
+        // Se lee del descriptor ya comprobado, no por nombre.
+        const data = await opened.handle.readFile()
+        return new Response(new Uint8Array(data), { headers: { 'content-type': mime, 'x-content-type-options': 'nosniff' } })
+      } finally {
+        await opened.handle.close()
+      }
+    } catch {
+      return new Response(null, { status: 404 })
     }
   })
 }
@@ -719,6 +880,7 @@ void app.whenReady().then(async () => {
   Menu.setApplicationMenu(buildMenu())
   registerCaptureProtocol()
   registerFigmaProtocol()
+  registerResultProtocol()
   registerIpc()
   registerNotionIpc()
   registerFigmaIpc()
@@ -734,15 +896,39 @@ void app.whenReady().then(async () => {
     smokeMode ? join(app.getPath('userData'), 'Table') : join(homedir(), 'Table'),
   )
   workFolders = folders
+  const mesaFolder = async (mesaId: MesaId): Promise<string> =>
+    folders.folderFor(mesaId, (await requireStore().get(mesaId)).name)
+  const frameService = frames
+  const projectService = projects
+  const context = createAgentContext({
+    getMesa: mesaId => requireStore().get(mesaId),
+    workFolder: mesa => folders.folderFor(mesa.id, mesa.name),
+    cachedProject: url => projectService.cached(url),
+    frame: url => frameService.thumbnail(url),
+  })
+  agentContext = context
+  resultsWatcher = createResultsWatcher({
+    store: requireStore(),
+    workFolder: mesaFolder,
+    onChanged: mesaId => sendToRenderer(IPC.resultsChanged, mesaId),
+  })
   terminals = createSessionManager({
     shell,
     env: sessionEnv,
-    workFolder: async mesaId => folders.folderFor(mesaId, (await requireStore().get(mesaId)).name),
+    workFolder: async mesaId => {
+      const folder = await mesaFolder(mesaId)
+      // `TABLE.md` al día antes de arrancar el arnés; si no se puede escribir, la sesión se abre igual.
+      await context.write(mesaId).catch((error: unknown) => {
+        log('agent-context-failed', { message: error instanceof Error ? error.message : String(error) })
+      })
+      return folder
+    },
     profile: id => catalog.get(id),
     onData: (sessionId, data) => sendToRenderer(IPC.terminalData, sessionId, data),
     onSession: session => sendToRenderer(IPC.terminalSession, session),
   })
   registerTerminalIpc()
+  registerAgentIpc()
   if (smokeMode) {
     const sessions = terminals
     smokeHooks.terminalPid = sessionId => sessions.pidOf(sessionId)

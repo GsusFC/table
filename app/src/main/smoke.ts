@@ -1,5 +1,5 @@
 import { app, webContents, type BrowserWindow, type WebContents } from 'electron'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
@@ -408,7 +408,11 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
       canvas.focus()
       canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', metaKey: true, ctrlKey: true, bubbles: true }))
     })()`)
-    await waitFor(() => inUi<boolean>(`!!document.querySelector('.selection-bar')`), Boolean, 'barra de selección')
+    await waitFor(
+      () => inUi<boolean>(`[...document.querySelectorAll('.selection-bar button')].some(b => b.textContent.includes('Ordenar en cuadrícula'))`),
+      Boolean,
+      'barra de selección',
+    )
     await shot('07-seleccion')
     await inUi(`[...document.querySelectorAll('.selection-bar button')].find(b => b.textContent.includes('Ordenar en cuadrícula')).click()`)
     const arranged = await waitFor(
@@ -486,7 +490,7 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
       canvas.focus()
       canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', metaKey: true, ctrlKey: true, bubbles: true }))
     })()`)
-    await waitFor(() => inUi<boolean>(`!!document.querySelector('.selection-bar')`), Boolean, 'barra de selección con la nota')
+    await waitFor(() => inUi<boolean>(`!!document.querySelector('.selection-bar [aria-label="Alinear arriba"]')`), Boolean, 'barra de selección con la nota')
     await inUi(`document.querySelector('.selection-bar [aria-label="Alinear arriba"]').click()`)
     const aligned = await waitFor(
       getMesa,
@@ -1111,6 +1115,211 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
     }
     // fin T-007 interfaz
 
+    // T-008: interfaz de «Enviar al agente» y tarjetas de resultado, con la terminal normal.
+    {
+      const resultsMesa = await inUi<Mesa>(`window.table.mesas.create('Mesa de resultados')`)
+      const resultsArg = JSON.stringify(resultsMesa.id)
+      const marker = 'notaparaelagente42'
+      const resultsNote = await inUi<{ id: string }>(`window.table.notes.add(${resultsArg}, { x: 0, y: 0 })`)
+      await inUi(`window.table.notes.update(${resultsArg}, ${JSON.stringify(resultsNote.id)}, { text: ${JSON.stringify(`Revisar ${marker}`)} })`)
+      await inUi(`window.table.cards.add(${resultsArg}, ${JSON.stringify(fixtureUrl)}, { x: 300, y: 0 })`)
+      // Ya se está en el inicio: recargar vuelve a listar las mesas creadas por la API.
+      ui.reload()
+      await waitFor(
+        () => inUi<boolean>(`[...document.querySelectorAll('.mesa-row-open')].some(b => b.textContent.includes('Mesa de resultados'))`),
+        Boolean,
+        'mesa de resultados en el inicio',
+      )
+      await inUi(`[...document.querySelectorAll('.mesa-row-open')].find(b => b.textContent.includes('Mesa de resultados')).click()`)
+      await waitFor(nodeCount, count => count === 2, 'nota y tarjeta en el lienzo')
+      const selectAll = (): Promise<unknown> =>
+        inUi(`(() => {
+          const canvas = document.querySelector('.canvas')
+          canvas.focus()
+          canvas.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', metaKey: true, ctrlKey: true, bubbles: true }))
+        })()`)
+      const clickSend = async (): Promise<void> => {
+        await waitFor(
+          () => inUi<boolean>(`[...document.querySelectorAll('.selection-bar button')].some(b => b.textContent.includes('Enviar al agente'))`),
+          Boolean,
+          '«Enviar al agente» en la barra de selección',
+        )
+        await inUi(`[...document.querySelectorAll('.selection-bar button')].find(b => b.textContent.includes('Enviar al agente')).click()`)
+      }
+      const contextMenuOn = (nodeExpression: string): Promise<unknown> =>
+        inUi(`(() => {
+          const node = ${nodeExpression}
+          const r = node.getBoundingClientRect()
+          node.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 20, button: 2 }))
+        })()`)
+
+      // Sin sesión: lo dice y abre el panel (estaba plegado).
+      const panelClosed = !(await inUi<boolean>(`!!document.querySelector('.agents')`))
+      await selectAll()
+      await clickSend()
+      const noSession = await waitFor(
+        () => inUi<{ notice: string; panel: boolean }>(`({ notice: document.querySelector('.notice-text')?.textContent ?? '', panel: !!document.querySelector('.agents') })`),
+        state => state.notice.includes('Abre una sesión en el panel de agentes') && state.panel,
+        'aviso sin sesión',
+      ).then(
+        () => true,
+        () => false,
+      )
+      record('enviar al agente: sin sesión en marcha lo avisa y abre el panel', panelClosed && noSession)
+
+      // Con una terminal abierta y el panel plegado: lo abre y pega la selección sin ejecutarla.
+      const shellName = (await inUi<HarnessProfile[]>(`window.table.terminal.profiles()`)).find(profile => profile.id === 'shell')!.name
+      await waitFor(() => inUi<number>(`document.querySelectorAll('.agents-profile').length`), count => count > 0, 'perfiles en el panel')
+      await inUi(`[...document.querySelectorAll('.agents-profile')].find(b => b.textContent.includes(${JSON.stringify(shellName)})).click()`)
+      const [resultsSession] = await waitFor(
+        () => inUi<SessionInfo[]>(`window.table.terminal.sessions(${resultsArg})`),
+        list => list.length === 1,
+        'sesión de la mesa de resultados',
+      )
+      const sessionArg = JSON.stringify(resultsSession!.id)
+      const rows = (selector: string): Promise<string> =>
+        inUi(`(document.querySelector(${JSON.stringify(`${selector} .xterm-rows`)})?.textContent ?? '').replace(/\\u00a0/g, ' ')`)
+      await waitFor(() => rows('.agents-terminal'), text => text.trim().length > 0, 'prompt en el terminal', 20_000)
+      await delay(500)
+      await inUi(`document.querySelector('.agents [aria-label="Plegar agentes"]').click()`)
+      await waitFor(() => inUi<boolean>(`!document.querySelector('.agents')`), Boolean, 'panel plegado')
+      await selectAll()
+      await clickSend()
+      const pasted = await waitFor(() => rows('.agents-terminal'), text => text.includes(marker), 'selección pegada en el terminal', 20_000).catch(() => '')
+      // Si se hubiera pulsado Intro, el shell intentaría ejecutarla y respondería.
+      await delay(1500)
+      const afterPaste = await rows('.agents-terminal')
+      const executed = /not found|no encontrado|parse error|syntax error|no such file/i.test(afterPaste)
+      record(
+        'enviar al agente: abre el panel y pega la selección (nota y tarjeta) en la sesión sin ejecutarla',
+        pasted.includes(marker) && !executed && (await inUi<boolean>(`!!document.querySelector('.agents')`)),
+        { pasted: pasted.includes(marker), executed },
+      )
+      await shot('20-enviar-al-agente')
+      // Ctrl+C descarta lo pegado sin ejecutarlo.
+      await inUi(`window.table.terminal.write(${sessionArg}, '\\x03')`)
+
+      // Una nota con `ESC [201~` y retornos de carro no cierra el pegado ni ejecuta lo que sigue.
+      await inUi(
+        `window.table.notes.update(${resultsArg}, ${JSON.stringify(resultsNote.id)}, { text: ${JSON.stringify(`Revisar ${marker}\x1b[201~\rprintf PWNED\r`)} })`,
+      )
+      await selectAll()
+      await clickSend()
+      const injectedPasted = await waitFor(() => rows('.agents-terminal'), text => text.includes('printf PWNED'), 'nota con secuencias pegada', 20_000).then(
+        () => true,
+        () => false,
+      )
+      await delay(1500)
+      // `printf PWNED` ejecutado dejaría una fila que empieza por PWNED (su salida, sin salto de línea).
+      const injectedExecuted = await inUi<boolean>(
+        `[...document.querySelectorAll('.agents-terminal .xterm-rows > div')].some(row => row.textContent.replace(/\\u00a0/g, ' ').trimStart().startsWith('PWNED'))`,
+      )
+      record('enviar al agente: las secuencias de control de una nota no cierran el pegado ni ejecutan nada', injectedPasted && !injectedExecuted, {
+        injectedPasted,
+        injectedExecuted,
+      })
+      await inUi(`window.table.terminal.write(${sessionArg}, '\\x03')`)
+
+      // Sesión desacoplada en una tarjeta: se pega en la misma terminal, ahora en el lienzo.
+      await inUi(`[...document.querySelectorAll('.agents-session-bar button')].find(b => b.textContent.includes('Desacoplar')).click()`)
+      await waitFor(() => rows('.react-flow__node-terminal'), text => text.includes(marker), 'tarjeta de terminal')
+      const occurrences = (text: string): number => text.split(marker).length - 1
+      const before = occurrences(await rows('.react-flow__node-terminal'))
+      await contextMenuOn(`document.querySelector(${JSON.stringify(`.react-flow__node[data-id="${resultsNote.id}"]`)})`)
+      await clickMenuItem('Enviar al agente')
+      const inCard = await waitFor(
+        () => rows('.react-flow__node-terminal'),
+        text => occurrences(text) > before,
+        'selección pegada en la tarjeta de terminal',
+      ).then(
+        () => true,
+        () => false,
+      )
+      record('enviar al agente: desde el menú de la nota, también con la sesión desacoplada en el lienzo', inCard)
+      await inUi(`window.table.terminal.write(${sessionArg}, '\\x03')`)
+      await inUi(`[...document.querySelectorAll('.terminal-card-header button')].find(b => b.textContent.includes('Volver al panel')).click()`)
+      await clearSelection()
+
+      // Resultados: lo que se guarda en `resultados/` aparece como tarjeta con vista previa.
+      const resultsFolder = join(resultsSession!.cwd, 'resultados')
+      mkdirSync(resultsFolder, { recursive: true })
+      writeFileSync(join(resultsFolder, 'grafico.png'), TINY_PNG)
+      writeFileSync(join(resultsFolder, 'informe.md'), '# Informe\n\nPrimera línea del informe sintético.\n')
+      const resultNodes = await waitFor(
+        () => inUi<number>(`document.querySelectorAll('.react-flow__node-result').length`),
+        count => count === 2,
+        'tarjetas de resultado',
+        20_000,
+      ).catch(() => 0)
+      const resultNode = (file: string): string =>
+        `[...document.querySelectorAll('.react-flow__node-result')].find(n => n.querySelector('.result-file')?.textContent === ${JSON.stringify(file)})`
+      const imageLoaded = await waitFor(
+        () => inUi<number>(`${resultNode('grafico.png')}?.querySelector('img.result-image')?.naturalWidth ?? 0`),
+        width => width > 0,
+        'vista previa de la imagen',
+      ).then(
+        () => true,
+        () => false,
+      )
+      const textShown = await waitFor(
+        () => inUi<string>(`${resultNode('informe.md')}?.querySelector('.result-text')?.textContent ?? ''`),
+        text => text.includes('Primera línea del informe'),
+        'vista previa del texto',
+      ).then(
+        () => true,
+        () => false,
+      )
+      record(
+        'resultados: los archivos de resultados/ aparecen como tarjetas con vista previa de imagen y texto',
+        resultNodes === 2 && imageLoaded && textShown,
+        { resultNodes, imageLoaded, textShown },
+      )
+      await shot('21-resultados')
+
+      // «Quitar de la mesa»: la tarjeta se va y el archivo se queda.
+      await contextMenuOn(resultNode('informe.md'))
+      await clickMenuItem('Quitar de la mesa')
+      await waitFor(() => inUi<boolean>(`!!document.querySelector('dialog[open]')`), Boolean, 'confirmación de quitar')
+      const removeText = await inUi<string>(`document.querySelector('dialog[open]').textContent`)
+      await shot('22-quitar-resultado')
+      await inUi(`document.querySelector('dialog[open] button[type="submit"]').click()`)
+      const removed = await waitFor(
+        () => inUi<number>(`document.querySelectorAll('.react-flow__node-result').length`),
+        count => count === 1,
+        'tarjeta de resultado quitada',
+      ).then(
+        () => true,
+        () => false,
+      )
+      const savedResults = (await inUi<Mesa>(`window.table.mesas.get(${resultsArg})`)).results
+      record(
+        'resultados: «Quitar de la mesa» quita la tarjeta y conserva el archivo',
+        removeText.includes('El archivo se queda') && removed && savedResults.length === 1 && existsSync(join(resultsFolder, 'informe.md')),
+        { removed, saved: savedResults.length },
+      )
+
+      // Si el archivo desaparece, la tarjeta lo indica sin recargar.
+      rmSync(join(resultsFolder, 'grafico.png'))
+      const missingShown = await waitFor(
+        () => inUi<boolean>(`!!${resultNode('grafico.png')}?.querySelector('.result-missing')`),
+        Boolean,
+        'resultado sin archivo',
+        20_000,
+      ).then(
+        () => true,
+        () => false,
+      )
+      record('resultados: si el archivo ya no está, la tarjeta dice «Archivo no encontrado»', missingShown)
+      await shot('23-resultado-no-encontrado')
+
+      await inUi(`window.table.terminal.close(${sessionArg})`)
+      await inUi(`document.querySelector('.agents [aria-label="Plegar agentes"]')?.click()`)
+      await inUi(`document.querySelector('.rail [aria-label="Inicio"]').click()`)
+      await waitFor(() => inUi<boolean>(`!!document.querySelector('.home')`), Boolean, 'inicio')
+      await inUi(`window.table.mesas.remove(${resultsArg})`)
+    }
+    // fin T-008 interfaz
+
     // T-007: sesiones de terminal por la API del preload (proceso principal), con el shell real del usuario.
     {
       const termMesa = await inUi<Mesa>(`window.table.mesas.create('Agentes/../prueba')`)
@@ -1216,6 +1425,123 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
       const remaining = await inUi<HarnessProfile[]>(`window.table.terminal.removeCustomProfile(${JSON.stringify(exiting!.id)})`)
       record('terminal: quitar perfiles propios', remaining.every(profile => profile.source === 'builtin'))
     }
+
+    // T-008: contexto para el agente (TABLE.md) y resultados por la API del preload, con la terminal normal.
+    {
+      const notionServer = await startNotionMcpServer()
+      smokeHooks.notionMcpUrl = notionServer.url
+      let contextFolder: string | null = null
+      try {
+        await settings.connectNotion(
+          { client: { client_id: 'smoke', redirect_uris: ['http://127.0.0.1/callback'] }, tokens: { access_token: 'credencial-sintetica', token_type: 'Bearer' } },
+          { workspaceName: 'Estudio de prueba', userName: 'Persona de prueba' },
+        )
+        const ctxMesa = await inUi<Mesa>(`window.table.mesas.create('Contexto de prueba')`)
+        const ctxArg = JSON.stringify(ctxMesa.id)
+        const projectCard = await inUi<Card>(
+          `window.table.cards.add(${ctxArg}, 'https://www.notion.so/equipo/Proyecto-${NOTION_PROJECT}', { x: 0, y: 0 })`,
+        )
+        const webCard = await inUi<Card>(`window.table.cards.add(${ctxArg}, ${JSON.stringify(fixtureUrl)}, { x: 380, y: 0 })`)
+        const note = await inUi<{ id: string }>(`window.table.notes.add(${ctxArg}, { x: 0, y: 300 })`)
+        await inUi(`window.table.notes.update(${ctxArg}, ${JSON.stringify(note.id)}, { text: 'Nota para el agente' })`)
+        const project = await inUi<{ status: string }>(`window.table.notion.refreshProject(${ctxArg}, ${JSON.stringify(projectCard.id)})`)
+
+        const session = await inUi<SessionInfo>(`window.table.terminal.start(${ctxArg}, 'shell', { cols: 80, rows: 24 })`)
+        contextFolder = session.cwd
+        const folder = session.cwd
+        const tablePath = join(folder, 'TABLE.md')
+        const table = existsSync(tablePath) ? readFileSync(tablePath, 'utf8') : ''
+        record(
+          'contexto: al abrir una sesión, TABLE.md tiene la mesa, la ficha, enlaces y notas, sin campos excluidos',
+          project.status === 'ready' &&
+            table.startsWith('# Contexto de prueba') &&
+            table.includes('- Estado: In progress') &&
+            table.includes(fixtureUrl) &&
+            table.includes('```text\nNota para el agente\n```') &&
+            !table.includes('SECRETO'),
+          { project: project.status, length: table.length },
+        )
+        const pointers = ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md']
+        const pointersCreated = pointers.every(file => readFileSync(join(folder, file), 'utf8').includes('TABLE.md'))
+        writeFileSync(join(folder, 'CLAUDE.md'), 'propio\n')
+        await inUi(`window.table.agent.refreshContext(${ctxArg})`)
+        record(
+          'contexto: crea AGENTS.md, CLAUDE.md y GEMINI.md si faltan y no toca los que existen',
+          pointersCreated && readFileSync(join(folder, 'CLAUDE.md'), 'utf8') === 'propio\n',
+        )
+
+        const selection = await inUi<string>(
+          `window.table.agent.selectionText(${ctxArg}, [${JSON.stringify(note.id)}, ${JSON.stringify(webCard.id)}])`,
+        )
+        const foreign = await inUi<boolean>(
+          `window.table.agent.selectionText(${ctxArg}, ['00000000-0000-4000-8000-000000000000']).then(() => false, () => true)`,
+        )
+        record(
+          'contexto: la selección da una línea por elemento y queda anotada en TABLE.md',
+          selection.split('\n').length === 3 &&
+            selection.includes('- Nota · Nota para el agente') &&
+            foreign &&
+            readFileSync(tablePath, 'utf8').includes(selection),
+          { lines: selection.split('\n').length, foreign },
+        )
+        await inUi(`window.table.terminal.close(${JSON.stringify(session.id)})`)
+
+        // Resultados: la mesa abierta vigila `resultados/`.
+        await inUi(`window.table.surface.openMesa(${ctxArg})`)
+        const resultsDir = join(folder, 'resultados')
+        writeFileSync(join(resultsDir, 'plan.md'), '# Plan\n\nPrimer paso.\n')
+        writeFileSync(join(resultsDir, 'boceto.png'), TINY_PNG)
+        writeFileSync(join(resultsDir, 'a-medias.crdownload'), 'x')
+        const withResults = await waitFor(
+          () => inUi<Mesa>(`window.table.mesas.get(${ctxArg})`),
+          current => current.results.length >= 2,
+          'resultados importados',
+          10_000,
+        )
+        const kinds = withResults.results.map(result => `${result.file}:${result.kind}`).sort().join()
+        record('resultados: archivos nuevos en resultados/ aparecen como tarjetas en segundos', kinds === 'boceto.png:image,plan.md:text', { kinds })
+        const plan = withResults.results.find(result => result.file === 'plan.md')!
+        const image = withResults.results.find(result => result.file === 'boceto.png')!
+        const preview = await inUi<string | null>(`window.table.results.preview(${ctxArg}, ${JSON.stringify(plan.id)})`)
+        const imageWidth = await inUi<number>(`new Promise(resolve => {
+          const img = new Image()
+          img.onload = () => resolve(img.naturalWidth)
+          img.onerror = () => resolve(-1)
+          img.src = 'table-result://${ctxMesa.id}/${image.id}?v=1'
+        })`)
+        record('resultados: vista previa del texto y de la imagen', preview?.startsWith('# Plan') === true && imageWidth === 1, { imageWidth })
+
+        await inUi(`window.table.results.remove(${ctxArg}, ${JSON.stringify(plan.id)})`)
+        // Aunque el archivo cambie, una tarjeta quitada no vuelve mientras el archivo siga ahí.
+        writeFileSync(join(resultsDir, 'plan.md'), '# Plan\n\nSegundo paso.\n')
+        await delay(2_000)
+        const afterRemove = await inUi<Mesa>(`window.table.mesas.get(${ctxArg})`)
+        record(
+          'resultados: quitar la tarjeta no borra el archivo y no vuelve a la mesa',
+          afterRemove.results.length === 1 && afterRemove.dismissedResults.includes('plan.md') && existsSync(join(resultsDir, 'plan.md')),
+        )
+        rmSync(join(resultsDir, 'boceto.png'))
+        const missing = await waitFor(
+          () => inUi<string[]>(`window.table.results.missing(${ctxArg})`),
+          ids => ids.length === 1,
+          'resultado sin archivo',
+        )
+        const stillThere = (await inUi<Mesa>(`window.table.mesas.get(${ctxArg})`)).results.length
+        record('resultados: si el archivo desaparece la tarjeta se queda y se marca', missing[0] === image.id && stillThere === 1)
+
+        await inUi(`window.table.surface.openMesa(null)`)
+        await inUi(`window.table.mesas.remove(${ctxArg})`)
+      } finally {
+        await settings.disconnectNotion().catch(() => undefined)
+        smokeHooks.notionMcpUrl = undefined
+        notionServer.server.close()
+        notionServer.server.closeAllConnections()
+        if (contextFolder) {
+          rmSync(contextFolder, { recursive: true, force: true })
+        }
+      }
+    }
+    // fin T-008 API
 
     await inUi(`window.table.surface.openMesa(null)`)
     await inUi(`window.table.mesas.remove(${JSON.stringify(mesa.id)})`)

@@ -7,6 +7,7 @@ import {
   type CardPatch,
   type Edge,
   type EdgeId,
+  type ItemId,
   type Mesa,
   type MesaId,
   type MesaListing,
@@ -15,6 +16,8 @@ import {
   type NoteId,
   type NotePatch,
   type Point,
+  type ResultId,
+  type ResultPatch,
 } from '../shared/model'
 import { serviceById } from '../shared/services'
 import type { SurfaceCardState, UnloadResult } from '../shared/surface'
@@ -32,7 +35,15 @@ import { errorMessage } from './lib/errors'
 import { cardCountLabel, displayHost } from './lib/format'
 import { isExitShortcut } from './lib/shortcut'
 import { cardStatus } from './lib/status'
-import { attachSession, forgetMesaSessions, loadSessions, setExitShortcutReserved, useMesaSessions } from './lib/terminals'
+import {
+  attachSession,
+  forgetMesaSessions,
+  loadSessions,
+  pasteIntoSession,
+  runningSession,
+  setExitShortcutReserved,
+  useMesaSessions,
+} from './lib/terminals'
 
 const api = window.table
 const isMac = api.platform === 'darwin'
@@ -98,8 +109,8 @@ let noticeCounter = 0
 type FailureKey = string
 const failureKey = (mesaId: MesaId | null, operation: string): FailureKey => `${mesaId ?? '*'}|${operation}`
 
-/** Operaciones de guardado de una tarjeta o nota según los campos que cambian. */
-function patchOperations(kind: 'card' | 'note', id: CardId | NoteId, patch: NotePatch): string[] {
+/** Operaciones de guardado de una tarjeta, nota o resultado según los campos que cambian. */
+function patchOperations(kind: 'card' | 'note' | 'result', id: ItemId, patch: NotePatch): string[] {
   return (['text', 'position', 'size'] as const)
     .filter(field => patch[field] !== undefined)
     .map(field => `${kind}:${id}:${field}`)
@@ -551,10 +562,11 @@ export function App() {
     [mesaId, track, patchMesa],
   )
 
+  /** Guarda el cambio; la promesa (que falla si no se guardó) deja esperar a la escritura. El error ya se avisa aquí. */
   const updateNote = useCallback(
-    (noteId: NoteId, patch: NotePatch) => {
+    (noteId: NoteId, patch: NotePatch): Promise<void> => {
       if (!mesaId) {
-        return
+        return Promise.resolve()
       }
       // El texto se ve ya, sin esperar al disco (se acaba de editar en la nota).
       const { text } = patch
@@ -564,7 +576,10 @@ export function App() {
           notes: current.notes.map(existing => (existing.id === noteId ? { ...existing, text } : existing)),
         }))
       }
-      track(api.notes.update(mesaId, noteId, patch), { mesaId, operations: patchOperations('note', noteId, patch) }).then(
+      const saved = track(api.notes.update(mesaId, noteId, patch), {
+        mesaId,
+        operations: patchOperations('note', noteId, patch),
+      }).then(
         // El texto local manda: ya se puso al escribir y las escrituras van en orden. Una
         // respuesta de un guardado anterior no debe pisar lo escrito después.
         note =>
@@ -572,8 +587,9 @@ export function App() {
             ...current,
             notes: current.notes.map(existing => (existing.id === note.id ? { ...note, text: existing.text } : existing)),
           })),
-        notifyError,
       )
+      saved.catch(notifyError)
+      return saved
     },
     [mesaId, track, patchMesa, notifyError],
   )
@@ -596,8 +612,90 @@ export function App() {
     [mesaId, track, patchMesa, clearFailures],
   )
 
+  const updateResult = useCallback(
+    (resultId: ResultId, patch: ResultPatch) => {
+      if (!mesaId) {
+        return
+      }
+      track(api.results.update(mesaId, resultId, patch), {
+        mesaId,
+        operations: patchOperations('result', resultId, patch),
+      }).then(
+        result =>
+          patchMesa(mesaId, current => ({
+            ...current,
+            results: current.results.map(existing => (existing.id === result.id ? result : existing)),
+          })),
+        notifyError,
+      )
+    },
+    [mesaId, track, patchMesa, notifyError],
+  )
+
+  /** Quita la tarjeta de resultado; el archivo se queda en `resultados/`. */
+  const removeResult = useCallback(
+    async (resultId: ResultId): Promise<void> => {
+      if (!mesaId) {
+        throw new Error('No hay ninguna mesa abierta')
+      }
+      await track(api.results.remove(mesaId, resultId))
+      // El almacén borró también sus conexiones.
+      patchMesa(mesaId, current => ({
+        ...current,
+        results: current.results.filter(existing => existing.id !== resultId),
+        edges: current.edges.filter(edge => edge.source !== resultId && edge.target !== resultId),
+      }))
+      const prefix = failureKey(mesaId, `result:${resultId}:`)
+      clearFailures(key => key.startsWith(prefix))
+    },
+    [mesaId, track, patchMesa, clearFailures],
+  )
+
+  // Resultados nuevos o cambiados en `resultados/`: se vuelve a leer la mesa y se
+  // toman sus resultados (el lienzo conserva la geometría local de lo que se arrastra).
+  useEffect(() => {
+    if (!mesaId) {
+      return
+    }
+    let active = true
+    const unsubscribe = api.results.onChanged(changedId => {
+      if (changedId !== mesaId) {
+        return
+      }
+      api.mesas.get(mesaId).then(loaded => {
+        if (active) {
+          patchMesa(mesaId, current => ({ ...current, results: loaded.results }))
+        }
+      }, notifyError)
+    })
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [mesaId, patchMesa, notifyError])
+
+  /**
+   * «Enviar al agente»: pega la selección en la sesión en marcha de la mesa,
+   * sin Intro (la persona escribe su petición). Abre el panel si está plegado.
+   */
+  const sendToAgent = useCallback(
+    (itemIds: readonly ItemId[]) => {
+      if (!mesaId || itemIds.length === 0) {
+        return
+      }
+      setAgentsOpen(true)
+      const session = runningSession(mesaId)
+      if (!session) {
+        notify('Abre una sesión en el panel de agentes para enviarle la selección', 'info')
+        return
+      }
+      api.agent.selectionText(mesaId, itemIds).then(text => pasteIntoSession(session.id, text), notifyError)
+    },
+    [mesaId, notify, notifyError],
+  )
+
   const addEdge = useCallback(
-    async (source: CardId | NoteId, target: CardId | NoteId): Promise<Edge> => {
+    async (source: ItemId, target: ItemId): Promise<Edge> => {
       if (!mesaId) {
         throw new Error('No hay ninguna mesa abierta')
       }
@@ -752,6 +850,9 @@ export function App() {
               onAttachTerminal={attachTerminal}
               notify={notify}
               registerFlush={registerFlush}
+              onUpdateResult={updateResult}
+              onRemoveResult={removeResult}
+              onSendToAgent={sendToAgent}
             />
           </div>
         )}

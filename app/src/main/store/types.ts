@@ -7,10 +7,15 @@ import type {
   Mesa,
   MesaId,
   MesaListing,
+  ItemId,
   Note,
   NoteId,
   NotePatch,
   Point,
+  Result,
+  ResultId,
+  ResultKind,
+  ResultPatch,
   Viewport,
 } from '../../shared/model'
 
@@ -22,10 +27,11 @@ import type {
  *   <baseDir>/mesas/<mesaId>.json          una mesa (SCHEMA_VERSION)
  *   <baseDir>/captures/<mesaId>/<cardId>.jpg
  *
- * Escrituras atómicas (archivo temporal + rename). Un archivo de la versión
- * de esquema 1 se lee migrado a la actual (sin notas ni conexiones) y se
- * guarda en la actual con la siguiente escritura. Un archivo de otra versión,
- * JSON inválido o forma inválida (URL no http(s), geometría o IDs incorrectos,
+ * Escrituras atómicas (archivo temporal + rename). Un archivo de las versiones
+ * de esquema 1 (sin notas ni conexiones) o 2 (sin resultados) se lee migrado a
+ * la actual y se guarda en la actual con la siguiente escritura. Un archivo de
+ * otra versión, JSON inválido o forma inválida (URL no http(s), geometría o IDs
+ * incorrectos, nombres de archivo de resultado que no son un solo segmento,
  * conexiones a elementos que no existen) no se sobrescribe: `list` lo cuenta
  * como ilegible y `get` lanza error.
  *
@@ -61,13 +67,36 @@ export interface MesaStore {
   removeNote(mesaId: MesaId, noteId: NoteId): Promise<void>
 
   /**
-   * Conecta dos elementos (tarjetas o notas) de la mesa. Rechaza conectar un
-   * elemento consigo, repetir una conexión (en cualquier sentido) o IDs que no
-   * están en la mesa.
+   * Conecta dos elementos (tarjetas, notas o resultados) de la mesa. Rechaza
+   * conectar un elemento consigo, repetir una conexión (en cualquier sentido)
+   * o IDs que no están en la mesa.
    */
-  addEdge(mesaId: MesaId, source: CardId | NoteId, target: CardId | NoteId): Promise<Edge>
+  addEdge(mesaId: MesaId, source: ItemId, target: ItemId): Promise<Edge>
   /** Borra solo la conexión; los elementos no cambian. */
   removeEdge(mesaId: MesaId, edgeId: EdgeId): Promise<void>
+
+  /**
+   * Aplica en una sola escritura lo que encontró la vigilancia de `resultados/`
+   * (nombres ya validados con `parseResultFile`): `add` crea tarjetas salvo
+   * para archivos que ya tienen una o están descartados; `touch` marca como
+   * modificado el archivo de esos resultados (`updatedAt`); `undismiss` olvida
+   * descartes de archivos que ya no están. Sin cambios, no escribe.
+   */
+  reconcileResults(
+    mesaId: MesaId,
+    changes: {
+      readonly add: readonly { file: string; kind: ResultKind; position: Point }[]
+      readonly touch: readonly ResultId[]
+      readonly undismiss: readonly string[]
+    },
+  ): Promise<{ added: Result[]; touched: Result[] }>
+  /** `patch` ya validado con `parseResultPatch`. */
+  updateResult(mesaId: MesaId, resultId: ResultId, patch: ResultPatch): Promise<Result>
+  /**
+   * Quita la tarjeta y sus conexiones en la misma escritura; el archivo no se
+   * toca y queda descartado (no se vuelve a importar mientras siga ahí).
+   */
+  removeResult(mesaId: MesaId, resultId: ResultId): Promise<void>
 
   /** Guarda la captura JPEG y actualiza `capturedAt`. */
   saveCapture(mesaId: MesaId, cardId: CardId, jpeg: Buffer): Promise<Card>

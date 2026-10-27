@@ -4,6 +4,8 @@ import {
   type CardPatch,
   type NotePatch,
   type Point,
+  type ResultKind,
+  type ResultPatch,
   type Size,
   type Viewport,
 } from './model'
@@ -153,6 +155,42 @@ export function parseNotePatch(value: unknown): NotePatch {
     ...(record['position'] === undefined ? {} : { position: parsePoint(record['position']) }),
     ...(record['size'] === undefined ? {} : { size: parseSize(record['size']) }),
   }
+}
+
+/** Longitud máxima del nombre de archivo de un resultado (límite de macOS). */
+export const MAX_RESULT_FILE_LENGTH = 255
+
+/**
+ * Nombre de archivo de un resultado: un solo segmento dentro de `resultados/`.
+ * Sin separadores (`/`, `\`, `:`), caracteres de control, espacios al principio
+ * o al final ni punto inicial (`.`, `..` y los archivos ocultos no se importan).
+ */
+export function parseResultFile(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > MAX_RESULT_FILE_LENGTH ||
+    /[\u0000-\u001f\u007f/\\:]/.test(value) ||
+    value.startsWith('.') ||
+    value.trim() !== value
+  ) {
+    throw new Error('Nombre de archivo de resultado no válido')
+  }
+  return value
+}
+
+const RESULT_KINDS: readonly ResultKind[] = ['image', 'text', 'file']
+
+export function parseResultKind(value: unknown): ResultKind {
+  if (typeof value !== 'string' || !(RESULT_KINDS as readonly string[]).includes(value)) {
+    throw new Error('Tipo de resultado no válido')
+  }
+  return value as ResultKind
+}
+
+/** Igual que el de una tarjeta: posición y tamaño. */
+export function parseResultPatch(value: unknown): ResultPatch {
+  return parseCardPatch(value)
 }
 
 export function parsePanelBounds(value: unknown): PanelBounds {

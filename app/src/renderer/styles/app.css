@@ -915,6 +915,7 @@ kbd {
   margin-right: var(--space-2);
   color: var(--color-text-muted);
   font-size: var(--font-size-sm);
+  white-space: nowrap;
 }
 
 .canvas-empty {
@@ -1072,6 +1073,38 @@ kbd {
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Tarjeta de resultado (T-008) ---------- */
+
+.result-icon {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+}
+
+.result-file {
+  color: var(--color-text);
+}
+
+.result-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+}
+
+.result-text {
+  height: 100%;
+  margin: 0;
+  padding: var(--space-3);
+  overflow: hidden;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* ---------- Estado de la web y distintivo ---------- */

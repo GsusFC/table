@@ -118,6 +118,25 @@ const api: TableApi = {
       }
     },
   },
+  agent: {
+    refreshContext: mesaId => ipcRenderer.invoke(IPC.agentRefreshContext, mesaId),
+    selectionText: (mesaId, itemIds) => ipcRenderer.invoke(IPC.agentSelectionText, mesaId, itemIds),
+  },
+  results: {
+    update: (mesaId, resultId, patch) => ipcRenderer.invoke(IPC.resultsUpdate, mesaId, resultId, patch),
+    remove: (mesaId, resultId) => ipcRenderer.invoke(IPC.resultsRemove, mesaId, resultId),
+    open: (mesaId, resultId) => ipcRenderer.invoke(IPC.resultsOpen, mesaId, resultId),
+    reveal: (mesaId, resultId) => ipcRenderer.invoke(IPC.resultsReveal, mesaId, resultId),
+    preview: (mesaId, resultId) => ipcRenderer.invoke(IPC.resultsPreview, mesaId, resultId),
+    missing: mesaId => ipcRenderer.invoke(IPC.resultsMissing, mesaId),
+    onChanged: listener => {
+      const handler = (_event: IpcRendererEvent, mesaId: MesaId): void => listener(mesaId)
+      ipcRenderer.on(IPC.resultsChanged, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC.resultsChanged, handler)
+      }
+    },
+  },
 }
 
 contextBridge.exposeInMainWorld('table', api)

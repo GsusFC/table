@@ -25,7 +25,9 @@ import {
   AlignStartHorizontal,
   AlignStartVertical,
   Copy,
+  ExternalLink,
   FileSearch,
+  FolderOpen,
   Frame,
   Download,
   LayoutGrid,
@@ -34,6 +36,7 @@ import {
   PencilLine,
   Plus,
   RefreshCw,
+  Send,
   StickyNote,
   Trash2,
 } from 'lucide-react'
@@ -50,17 +53,22 @@ import {
 import {
   DEFAULT_CARD_SIZE,
   DEFAULT_NOTE_SIZE,
+  DEFAULT_RESULT_SIZE,
   edgeKey,
   type Card,
   type CardId,
   type CardPatch,
   type Edge,
   type EdgeId,
+  type ItemId,
   type Mesa,
   type Note,
   type NoteId,
   type NotePatch,
   type Point,
+  type Result,
+  type ResultId,
+  type ResultPatch,
 } from '../../shared/model'
 import { figmaFileKey, figmaFrameUrl, figmaNodeId, type FigmaFrame } from '../../shared/figma'
 import { notionPageIdFromUrl, type ProjectSearchResult } from '../../shared/notion'
@@ -83,6 +91,7 @@ import { FramesDialog } from './FramesDialog'
 import { LinkProjectDialog } from './LinkProjectDialog'
 import { Menu, type MenuItem } from './Menu'
 import { NoteNode, type NoteNodeType } from './NoteNode'
+import { ResultNode, type ResultNodeType } from './ResultNode'
 import { TerminalNode, type TerminalNodeType } from './TerminalNode'
 
 export type Notify = (text: string, tone?: 'info' | 'error') => void
@@ -97,10 +106,16 @@ interface MesaCanvasProps {
   readonly onUpdateCard: (cardId: CardId, patch: CardPatch) => void
   readonly onRemoveCard: (cardId: CardId) => Promise<UnloadResult>
   readonly onAddNote: (position: Point) => Promise<Note>
-  readonly onUpdateNote: (noteId: NoteId, patch: NotePatch) => void
+  /** La promesa termina cuando el cambio está guardado y falla si no se pudo guardar (el aviso ya se da fuera). */
+  readonly onUpdateNote: (noteId: NoteId, patch: NotePatch) => Promise<void>
   readonly onRemoveNote: (noteId: NoteId) => Promise<void>
-  readonly onAddEdge: (source: CardId | NoteId, target: CardId | NoteId) => Promise<Edge>
+  readonly onAddEdge: (source: ItemId, target: ItemId) => Promise<Edge>
   readonly onRemoveEdge: (edgeId: EdgeId) => Promise<void>
+  readonly onUpdateResult: (resultId: ResultId, patch: ResultPatch) => void
+  /** Quita la tarjeta de resultado; el archivo se queda. */
+  readonly onRemoveResult: (resultId: ResultId) => Promise<void>
+  /** Pega el texto de esos elementos en la sesión activa del panel de agentes, sin Intro. */
+  readonly onSendToAgent: (itemIds: readonly ItemId[]) => void
   readonly onSaveViewport: (viewport: Viewport) => void
   readonly onEnter: (cardId: CardId) => void
   /** Devuelve una sesión desacoplada (tarjeta de terminal) al panel de agentes. */
@@ -111,7 +126,8 @@ interface MesaCanvasProps {
 }
 
 /** Las tarjetas de terminal son sesiones desacopladas: no son de la mesa ni se ordenan, conectan o guardan. */
-type MesaNode = CardNodeType | NoteNodeType | TerminalNodeType
+type MesaNode = CardNodeType | NoteNodeType | ResultNodeType | TerminalNodeType
+type MesaItemNode = CardNodeType | NoteNodeType | ResultNodeType
 
 /** Tarjeta web con asas de conexión; `CardNode` solo dibuja la tarjeta. */
 const ConnectableCardNode = memo(function ConnectableCardNode(props: NodeProps<CardNodeType>) {
@@ -131,7 +147,7 @@ const FRAME_GRID_GAP = 24
 /** Tarjetas por petición de miniaturas (el proceso principal acepta hasta 200). */
 const THUMBNAIL_BATCH = 50
 
-const NODE_TYPES: NodeTypes = { card: ConnectableCardNode, note: NoteNode, terminal: TerminalNode }
+const NODE_TYPES: NodeTypes = { card: ConnectableCardNode, note: NoteNode, result: ResultNode, terminal: TerminalNode }
 const EDGE_TYPES: EdgeTypes = { connection: ConnectionEdge }
 const VIEWPORT_SAVE_DELAY_MS = 400
 /** Retardo del guardado del texto de una nota mientras se escribe. */
@@ -145,8 +161,8 @@ const ARIA_LABELS = {
   'controls.zoomIn.ariaLabel': 'Acercar',
   'controls.zoomOut.ariaLabel': 'Alejar',
   'controls.fitView.ariaLabel': 'Ver todo',
-  'node.a11yDescription.default': 'Enter para entrar en la web o editar la nota.',
-  'node.a11yDescription.keyboardDisabled': 'Enter para entrar en la web o editar la nota.',
+  'node.a11yDescription.default': 'Enter para entrar en la web, editar la nota o abrir el resultado.',
+  'node.a11yDescription.keyboardDisabled': 'Enter para entrar en la web, editar la nota o abrir el resultado.',
   'edge.a11yDescription.default': 'Conexión. ⌫ para borrarla.',
 }
 
@@ -172,6 +188,17 @@ function noteNode(note: Note): NoteNodeType {
   }
 }
 
+function resultNode(result: Result): ResultNodeType {
+  return {
+    id: result.id,
+    type: 'result',
+    position: result.position,
+    width: result.size.width,
+    height: result.size.height,
+    data: { result },
+  }
+}
+
 function terminalNode(sessionId: SessionId, position: Point, detached: DetachedTerminal): TerminalNodeType {
   return {
     id: sessionId,
@@ -191,13 +218,18 @@ function terminalNode(sessionId: SessionId, position: Point, detached: DetachedT
 }
 
 function initialNodes(mesa: Mesa): MesaNode[] {
-  return [...mesa.cards.map(cardNode), ...mesa.notes.map(noteNode)]
+  return [...mesa.cards.map(cardNode), ...mesa.notes.map(noteNode), ...mesa.results.map(resultNode)]
 }
 
-const isMesaItem = (node: MesaNode): node is CardNodeType | NoteNodeType => node.type !== 'terminal'
+const isMesaItem = (node: MesaNode): node is MesaItemNode => node.type !== 'terminal'
 
 /** Mantiene la geometría local (el usuario puede estar arrastrando) y toma el resto del disco. */
-function mergeNodes(previous: readonly MesaNode[], cards: readonly Card[], notes: readonly Note[]): MesaNode[] {
+function mergeNodes(
+  previous: readonly MesaNode[],
+  cards: readonly Card[],
+  notes: readonly Note[],
+  results: readonly Result[],
+): MesaNode[] {
   const byId = new Map(previous.map(node => [node.id, node]))
   const mergedCards = cards.map((card): MesaNode => {
     const existing = byId.get(card.id)
@@ -213,7 +245,14 @@ function mergeNodes(previous: readonly MesaNode[], cards: readonly Card[], notes
     }
     return existing.data.note === note ? existing : { ...existing, data: { note } }
   })
-  return [...mergedCards, ...mergedNotes, ...previous.filter(node => node.type === 'terminal')]
+  const mergedResults = results.map((result): MesaNode => {
+    const existing = byId.get(result.id)
+    if (existing?.type !== 'result') {
+      return resultNode(result)
+    }
+    return existing.data.result === result ? existing : { ...existing, data: { result } }
+  })
+  return [...mergedCards, ...mergedNotes, ...mergedResults, ...previous.filter(node => node.type === 'terminal')]
 }
 
 function connectionEdge(edge: Edge, selected = false): ConnectionEdgeType {
@@ -226,7 +265,7 @@ const roundPoint = (point: Point): Point => ({ x: Math.round(point.x), y: Math.r
 const MAGNET_SCREEN_PX = 8
 
 function rectOf(node: MesaNode): Rect {
-  const fallback = node.type === 'note' ? DEFAULT_NOTE_SIZE : DEFAULT_CARD_SIZE
+  const fallback = node.type === 'note' ? DEFAULT_NOTE_SIZE : node.type === 'result' ? DEFAULT_RESULT_SIZE : DEFAULT_CARD_SIZE
   return {
     id: node.id,
     x: node.position.x,
@@ -256,13 +295,16 @@ interface AddFieldState {
   readonly flow: Point
 }
 
-/** Menú de un elemento (tarjeta o nota), anclado en coordenadas de la ventana. */
+/** Menú de un elemento (tarjeta, nota o resultado), anclado en coordenadas de la ventana. */
 interface ItemMenuState {
-  readonly id: CardId | NoteId
+  readonly id: ItemId
   readonly anchor: Point
 }
 
-type RemovalState = { readonly kind: 'card'; readonly card: Card } | { readonly kind: 'note'; readonly note: Note }
+type RemovalState =
+  | { readonly kind: 'card'; readonly card: Card }
+  | { readonly kind: 'note'; readonly note: Note }
+  | { readonly kind: 'result'; readonly result: Result }
 
 function CanvasInner({
   mesa,
@@ -277,6 +319,9 @@ function CanvasInner({
   onRemoveNote,
   onAddEdge,
   onRemoveEdge,
+  onUpdateResult,
+  onRemoveResult,
+  onSendToAgent,
   onSaveViewport,
   onEnter,
   onAttachTerminal,
@@ -314,8 +359,26 @@ function CanvasInner({
   }, [])
 
   useEffect(() => {
-    setNodes(previous => mergeNodes(previous, mesa.cards, mesa.notes))
-  }, [mesa.cards, mesa.notes])
+    setNodes(previous => mergeNodes(previous, mesa.cards, mesa.notes, mesa.results))
+  }, [mesa.cards, mesa.notes, mesa.results])
+
+  // Resultados sin archivo: se vuelven a consultar cada vez que la lista cambia
+  // (el proceso principal avisa también cuando un archivo desaparece o vuelve).
+  const [missingResults, setMissingResults] = useState<ReadonlySet<ResultId>>(() => new Set())
+  useEffect(() => {
+    if (mesa.results.length === 0) {
+      setMissingResults(previous => (previous.size === 0 ? previous : new Set()))
+      return
+    }
+    let active = true
+    window.table.results.missing(mesa.id).then(
+      ids => active && setMissingResults(new Set(ids)),
+      (error: unknown) => active && notify(errorMessage(error)),
+    )
+    return () => {
+      active = false
+    }
+  }, [mesa.id, mesa.results, notify])
 
   // Sesiones desacopladas de esta mesa: tarjetas de terminal. Las nuevas se
   // colocan cerca del centro visible; las que ya están conservan su geometría local.
@@ -391,12 +454,19 @@ function CanvasInner({
   useEffect(() => {
     updateNoteRef.current = onUpdateNote
   })
+  /** Guardados del texto de notas en curso: «Enviar al agente» los espera. */
+  const textSaves = useRef(new Set<Promise<void>>())
   const flushNoteTexts = useCallback(() => {
     window.clearTimeout(textTimer.current)
     const pending = [...pendingTexts.current]
     pendingTexts.current.clear()
     for (const [noteId, text] of pending) {
-      updateNoteRef.current(noteId, { text })
+      const save = updateNoteRef.current(noteId, { text })
+      textSaves.current.add(save)
+      const forget = (): void => {
+        textSaves.current.delete(save)
+      }
+      save.then(forget, forget)
     }
   }, [])
   const changeNoteText = useCallback(
@@ -500,25 +570,30 @@ function CanvasInner({
 
   const cardsById = useMemo(() => new Map(mesa.cards.map(card => [card.id, card])), [mesa.cards])
   const notesById = useMemo(() => new Map(mesa.notes.map(note => [note.id, note])), [mesa.notes])
+  const resultsById = useMemo(() => new Map(mesa.results.map(result => [result.id, result])), [mesa.results])
 
   /** Guarda las posiciones que cambiaron respecto a lo guardado. */
   const savePositions = useCallback(
-    (positions: Iterable<readonly [CardId | NoteId, Point]>) => {
+    (positions: Iterable<readonly [ItemId, Point]>) => {
       for (const [id, raw] of positions) {
         const position = roundPoint(raw)
         const card = cardsById.get(id)
-        const saved = (card ?? notesById.get(id))?.position
+        const note = notesById.get(id)
+        const result = resultsById.get(id)
+        const saved = (card ?? note ?? result)?.position
         if (saved && saved.x === position.x && saved.y === position.y) {
           continue
         }
         if (card) {
           onUpdateCard(id, { position })
-        } else if (notesById.has(id)) {
+        } else if (note) {
           onUpdateNote(id, { position })
+        } else if (result) {
+          onUpdateResult(id, { position })
         }
       }
     },
-    [cardsById, notesById, onUpdateCard, onUpdateNote],
+    [cardsById, notesById, resultsById, onUpdateCard, onUpdateNote, onUpdateResult],
   )
 
   const onNodeDragStop = useCallback<OnNodeDrag<MesaNode>>(
@@ -534,7 +609,8 @@ function CanvasInner({
     [savePositions],
   )
 
-  const selectedCount = nodes.filter(node => node.selected).length
+  const selectedIds = useMemo(() => nodes.filter(node => node.selected && isMesaItem(node)).map(node => node.id), [nodes])
+  const selectedCount = selectedIds.length
 
   /** Ordena o alinea los elementos seleccionados y guarda sus posiciones. */
   const arrangeSelection = useCallback(
@@ -768,6 +844,35 @@ function CanvasInner({
     [removeNote],
   )
 
+  /** Abre el archivo del resultado con la app del sistema. */
+  const openResult = useCallback(
+    (resultId: ResultId) => {
+      window.table.results.open(mesa.id, resultId).catch((error: unknown) => notify(errorMessage(error)))
+    },
+    [mesa.id, notify],
+  )
+
+  /**
+   * «Enviar al agente»: desde el menú de un elemento seleccionado se envía toda
+   * la selección; si no, solo ese elemento. Antes se guarda y se espera el texto
+   * de las notas (el proceso principal lee la mesa guardada), para que
+   * `TABLE.md` y lo pegado lleven lo último escrito; si no se guarda, no se envía.
+   */
+  const sendToAgent = useCallback(
+    (itemIds: readonly ItemId[]) => {
+      flushNoteTexts()
+      Promise.all([...textSaves.current]).then(
+        () => onSendToAgent(itemIds),
+        () => notify('No se ha enviado al agente: no se pudo guardar el texto de una nota'),
+      )
+    },
+    [flushNoteTexts, onSendToAgent, notify],
+  )
+  const sendFromMenu = useCallback(
+    (id: ItemId) => sendToAgent(selectedIds.includes(id) && selectedIds.length > 1 ? selectedIds : [id]),
+    [sendToAgent, selectedIds],
+  )
+
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     // Lo que se teclea en un terminal es del terminal: ningún atajo del lienzo.
     if (isInTerminal(event.target)) {
@@ -808,6 +913,9 @@ function CanvasInner({
       } else if (id && cardsById.has(id)) {
         event.preventDefault()
         onEnter(id)
+      } else if (id && resultsById.has(id)) {
+        event.preventDefault()
+        openResult(id)
       }
     }
   }
@@ -818,41 +926,58 @@ function CanvasInner({
   }, [])
 
   const resizeEnd = useCallback(
-    (id: CardId | NoteId, params: ResizeParams) => {
+    (id: ItemId, params: ResizeParams) => {
       const patch = {
         position: roundPoint(params),
         size: { width: Math.round(params.width), height: Math.round(params.height) },
       }
-      if (flow.getNode(id)?.type === 'note') {
+      const type = flow.getNode(id)?.type
+      if (type === 'note') {
         onUpdateNote(id, patch)
+      } else if (type === 'result') {
+        onUpdateResult(id, patch)
       } else {
         onUpdateCard(id, patch)
       }
     },
-    [flow, onUpdateCard, onUpdateNote],
+    [flow, onUpdateCard, onUpdateNote, onUpdateResult],
   )
 
   const menuCard = itemMenu ? cardsById.get(itemMenu.id) : undefined
   const menuNote = itemMenu ? notesById.get(itemMenu.id) : undefined
+  const menuResult = itemMenu ? resultsById.get(itemMenu.id) : undefined
+  const menuItemId = itemMenu?.id ?? null
 
   const context = useMemo<CanvasContextValue>(
     () => ({
       mesaId: mesa.id,
       states,
-      menuCardId: menuCard?.id ?? null,
+      menuItemId,
       editingNoteId,
+      missingResults,
       enter: onEnter,
-      openMenu: (cardId, anchor) => {
+      openMenu: (itemId, anchor) => {
         setAddField(null)
         setPaneMenu(null)
-        setItemMenu(current => (current?.id === cardId ? null : { id: cardId, anchor }))
+        setItemMenu(current => (current?.id === itemId ? null : { id: itemId, anchor }))
       },
       resizeEnd,
       changeNoteText,
       stopEditingNote,
       attachTerminal: onAttachTerminal,
     }),
-    [mesa.id, states, menuCard?.id, editingNoteId, onEnter, resizeEnd, changeNoteText, stopEditingNote, onAttachTerminal],
+    [
+      mesa.id,
+      states,
+      menuItemId,
+      editingNoteId,
+      missingResults,
+      onEnter,
+      resizeEnd,
+      changeNoteText,
+      stopEditingNote,
+      onAttachTerminal,
+    ],
   )
 
   /** Pide a Figma las miniaturas de esas tarjetas de frame y avisa a las tarjetas. */
@@ -908,13 +1033,36 @@ function CanvasInner({
   )
 
   const menuItems = useMemo((): MenuItem[] => {
-    if (menuNote) {
+    const send: MenuItem | null = menuItemId
+      ? { label: 'Enviar al agente', icon: Send, onSelect: () => sendFromMenu(menuItemId) }
+      : null
+    if (menuNote && send) {
       return [
         { label: 'Editar texto', icon: PencilLine, onSelect: () => setEditingNoteId(menuNote.id) },
+        send,
         { label: 'Eliminar', icon: Trash2, danger: true, onSelect: () => requestRemoveNote(menuNote) },
       ]
     }
-    if (!menuCard) {
+    if (menuResult && send) {
+      return [
+        { label: 'Abrir', icon: ExternalLink, onSelect: () => openResult(menuResult.id) },
+        {
+          label: 'Mostrar en Finder',
+          icon: FolderOpen,
+          onSelect: () => {
+            window.table.results.reveal(mesa.id, menuResult.id).catch((error: unknown) => notify(errorMessage(error)))
+          },
+        },
+        send,
+        {
+          label: 'Quitar de la mesa',
+          icon: Trash2,
+          danger: true,
+          onSelect: () => setConfirmRemove({ kind: 'result', result: menuResult }),
+        },
+      ]
+    }
+    if (!menuCard || !send) {
       return []
     }
     const status = cardStatus(states.get(menuCard.id))
@@ -946,6 +1094,7 @@ function CanvasInner({
           )
         },
       },
+      send,
       { label: 'Eliminar', icon: Trash2, danger: true, onSelect: () => setConfirmRemove({ kind: 'card', card: menuCard }) },
     )
     // Figma: un archivo ofrece sus frames; un frame, actualizar su miniatura.
@@ -955,7 +1104,20 @@ function CanvasInner({
         : { label: 'Añadir frames…', icon: Frame, onSelect: () => setFramesFor(menuCard) })
     }
     return items
-  }, [menuCard, menuNote, states, onEnter, notify, requestRemoveNote, fetchThumbnails])
+  }, [
+    menuItemId,
+    menuCard,
+    menuNote,
+    menuResult,
+    mesa.id,
+    states,
+    onEnter,
+    notify,
+    requestRemoveNote,
+    fetchThumbnails,
+    sendFromMenu,
+    openResult,
+  ])
 
   const paneMenuItems = useMemo((): MenuItem[] => {
     if (!paneMenu) {
@@ -983,7 +1145,12 @@ function CanvasInner({
     [mesa.cards, onAddCard],
   )
 
-  const removedId = confirmRemove?.kind === 'card' ? confirmRemove.card.id : confirmRemove?.note.id
+  const removedId =
+    confirmRemove?.kind === 'card'
+      ? confirmRemove.card.id
+      : confirmRemove?.kind === 'note'
+        ? confirmRemove.note.id
+        : confirmRemove?.result.id
   const removedEdgeCount = removedId
     ? mesa.edges.filter(edge => edge.source === removedId || edge.target === removedId).length
     : 0
@@ -994,7 +1161,8 @@ function CanvasInner({
         ? 'También se borrará su conexión.'
         : `También se borrarán sus ${removedEdgeCount} conexiones.`
   const removeLoaded = confirmRemove?.kind === 'card' ? cardStatus(states.get(confirmRemove.card.id)).loaded : false
-  const isEmpty = mesa.cards.length === 0 && mesa.notes.length === 0 && terminalCards.length === 0
+  const isEmpty =
+    mesa.cards.length === 0 && mesa.notes.length === 0 && mesa.results.length === 0 && terminalCards.length === 0
 
   return (
     <CanvasContext.Provider value={context}>
@@ -1030,6 +1198,8 @@ function CanvasInner({
               setEditingNoteId(node.id)
             } else if (node.type === 'card') {
               onEnter(node.id)
+            } else if (node.type === 'result') {
+              openResult(node.id)
             }
           }}
           onNodeContextMenu={(event, node) => {
@@ -1090,31 +1260,41 @@ function CanvasInner({
           </ViewportPortal>
         </ReactFlow>
 
-        {selectedCount >= 2 && !enteredCardId && (
-          <div className="selection-bar" role="toolbar" aria-label="Ordenar la selección">
-            <span className="selection-bar-count tabular">{selectedCount} seleccionados</span>
-            <button type="button" className="button button-small" onClick={() => arrangeSelection('grid')}>
-              <LayoutGrid aria-hidden size={14} strokeWidth={1.75} />
-              Ordenar en cuadrícula
+        {selectedCount >= 1 && !enteredCardId && (
+          <div className="selection-bar" role="toolbar" aria-label="Acciones de la selección">
+            <span className="selection-bar-count tabular">
+              {selectedCount === 1 ? '1 seleccionado' : `${selectedCount} seleccionados`}
+            </span>
+            <button type="button" className="button button-small" onClick={() => sendToAgent(selectedIds)}>
+              <Send aria-hidden size={14} strokeWidth={1.75} />
+              Enviar al agente
             </button>
-            <button
-              type="button"
-              className="icon-button"
-              aria-label="Alinear a la izquierda"
-              title="Alinear a la izquierda"
-              onClick={() => arrangeSelection('left')}
-            >
-              <AlignStartVertical aria-hidden size={15} strokeWidth={1.75} />
-            </button>
-            <button
-              type="button"
-              className="icon-button"
-              aria-label="Alinear arriba"
-              title="Alinear arriba"
-              onClick={() => arrangeSelection('top')}
-            >
-              <AlignStartHorizontal aria-hidden size={15} strokeWidth={1.75} />
-            </button>
+            {selectedCount >= 2 && (
+              <>
+                <button type="button" className="button button-small" onClick={() => arrangeSelection('grid')}>
+                  <LayoutGrid aria-hidden size={14} strokeWidth={1.75} />
+                  Ordenar en cuadrícula
+                </button>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="Alinear a la izquierda"
+                  title="Alinear a la izquierda"
+                  onClick={() => arrangeSelection('left')}
+                >
+                  <AlignStartVertical aria-hidden size={15} strokeWidth={1.75} />
+                </button>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="Alinear arriba"
+                  title="Alinear arriba"
+                  onClick={() => arrangeSelection('top')}
+                >
+                  <AlignStartHorizontal aria-hidden size={15} strokeWidth={1.75} />
+                </button>
+              </>
+            )}
           </div>
         )}
 
@@ -1160,11 +1340,17 @@ function CanvasInner({
         <Menu anchor={paneMenu} label="Añadir al lienzo" items={paneMenuItems} onClose={closeMenus} />
       )}
 
-      {itemMenu && (menuCard || menuNote) && (
+      {itemMenu && (menuCard || menuNote || menuResult) && (
         <Menu
           anchor={itemMenu.anchor}
           align="end"
-          label={menuCard ? `Acciones de ${menuCard.title ?? displayHost(menuCard.url)}` : 'Acciones de la nota'}
+          label={
+            menuCard
+              ? `Acciones de ${menuCard.title ?? displayHost(menuCard.url)}`
+              : menuResult
+                ? `Acciones de ${menuResult.file}`
+                : 'Acciones de la nota'
+          }
           items={menuItems}
           onClose={closeMenus}
         />
@@ -1211,11 +1397,26 @@ function CanvasInner({
           onClose={() => setConfirmRemove(null)}
         />
       )}
+
+      {confirmRemove?.kind === 'result' && (
+        <ConfirmDialog
+          title="Quitar de la mesa"
+          confirmLabel="Quitar"
+          description={
+            <p>
+              Se quitará la tarjeta de «{confirmRemove.result.file}». El archivo se queda en la carpeta resultados.
+              {edgesNotice && ` ${edgesNotice}`}
+            </p>
+          }
+          onConfirm={() => onRemoveResult(confirmRemove.result.id)}
+          onClose={() => setConfirmRemove(null)}
+        />
+      )}
     </CanvasContext.Provider>
   )
 }
 
-/** Lienzo de una mesa: React Flow con tarjetas web, notas y conexiones. Montar con `key={mesa.id}`. */
+/** Lienzo de una mesa: React Flow con tarjetas web, notas, resultados y conexiones. Montar con `key={mesa.id}`. */
 export function MesaCanvas(props: MesaCanvasProps) {
   return (
     <ReactFlowProvider>

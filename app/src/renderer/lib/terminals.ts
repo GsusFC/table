@@ -19,6 +19,7 @@ import {
   type SessionInfo,
   type TerminalSize,
 } from '../../shared/terminal'
+import { sanitizePaste } from './paste'
 import { isExitShortcut } from './shortcut'
 
 const api = window.table
@@ -226,6 +227,10 @@ interface TerminalEntry {
   /** Contenedor donde se ve ahora (panel o tarjeta); null si no se ve. */
   host: HTMLElement | null
   fitTimer: number | undefined
+  /** Ya pintó la salida guardada: sus modos (pegado entre corchetes) son los del proceso. */
+  ready: boolean
+  /** Textos de «Enviar al agente» que esperan a que el terminal esté abierto y listo. */
+  queuedPaste: string[]
 }
 
 const entries = new Map<SessionId, TerminalEntry>()
@@ -316,7 +321,16 @@ function ensureTerminal(sessionId: SessionId): TerminalEntry {
   })
   const fit = new FitAddon()
   term.loadAddon(fit)
-  const entry: TerminalEntry = { term, fit, opened: false, pending: [], host: null, fitTimer: undefined }
+  const entry: TerminalEntry = {
+    term,
+    fit,
+    opened: false,
+    pending: [],
+    host: null,
+    fitTimer: undefined,
+    ready: false,
+    queuedPaste: [],
+  }
   entries.set(sessionId, entry)
 
   term.onData(data => sendInput(sessionId, data))
@@ -324,18 +338,22 @@ function ensureTerminal(sessionId: SessionId): TerminalEntry {
   term.attachCustomKeyEventHandler(event => !(exitShortcutReserved && isExitShortcut(event)))
 
   // Lo recibido antes de la respuesta ya va incluido en ella (el orden de los mensajes se conserva).
+  const markReady = (): void => {
+    entry.ready = true
+    flushPaste(entry)
+  }
   api.terminal.replay(sessionId).then(
     output => {
       if (entries.get(sessionId) === entry) {
         entry.pending = null
-        term.write(output)
+        term.write(output, markReady)
       }
     },
     () => {
       if (entries.get(sessionId) === entry) {
         const pending = entry.pending ?? []
         entry.pending = null
-        term.write(pending.join(''))
+        term.write(pending.join(''), markReady)
       }
     },
   )
@@ -349,6 +367,47 @@ function disposeTerminal(sessionId: SessionId): void {
     window.clearTimeout(entry.fitTimer)
     entry.term.dispose()
   }
+}
+
+/**
+ * Pega el texto como si la persona lo pegara: entre corchetes si el programa
+ * lo activó (los arneses y zsh o bash lo hacen) y nunca con Intro. Antes se
+ * quitan las secuencias de control (`sanitizePaste`): un `ESC [201~` en una
+ * nota cerraría el pegado y su salto de línea ejecutaría lo que sigue. Sin
+ * pegado entre corchetes, cada salto de línea ejecutaría una línea: se pega en una sola.
+ */
+function flushPaste(entry: TerminalEntry): void {
+  if (!entry.opened || !entry.ready || entry.queuedPaste.length === 0) {
+    return
+  }
+  const text = sanitizePaste(entry.queuedPaste.join('\n\n')).replace(/\s+$/, '')
+  entry.queuedPaste = []
+  const { term } = entry
+  term.paste(term.modes.bracketedPasteMode ? text : text.replace(/\s*\n\s*/g, ' '))
+  term.focus()
+}
+
+/** Sesión en marcha que recibe «Enviar al agente»: la pestaña elegida o, si no está en marcha, la última que sí. */
+export function runningSession(mesaId: MesaId): SessionInfo | undefined {
+  const running = [...snapshot.sessions.values()]
+    .filter(session => session.mesaId === mesaId && session.status === 'running')
+    .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+  const chosen = snapshot.active.get(mesaId)
+  return running.find(session => session.id === chosen) ?? running[running.length - 1]
+}
+
+/**
+ * Pega el texto en el terminal de la sesión (en el panel o en su tarjeta del
+ * lienzo) y elige su pestaña. Si el terminal aún no se ve, se pega al montarse.
+ */
+export function pasteIntoSession(sessionId: SessionId, text: string): void {
+  const session = snapshot.sessions.get(sessionId)
+  if (session) {
+    selectSession(session)
+  }
+  const entry = ensureTerminal(sessionId)
+  entry.queuedPaste.push(text)
+  flushPaste(entry)
 }
 
 /** Ajusta columnas y filas al contenedor; si cambian, se avisa al proceso (onResize). */
@@ -401,6 +460,7 @@ export function mountTerminal(sessionId: SessionId, container: HTMLElement, font
   const observer = new ResizeObserver(() => fitSoon(entry))
   observer.observe(container)
   fitTerminal(entry)
+  flushPaste(entry)
   return () => {
     observer.disconnect()
     if (entry.host === container) {

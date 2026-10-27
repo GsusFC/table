@@ -1,4 +1,4 @@
-import { PanelRightClose, Plus, SquareArrowOutUpRight, SquareTerminal, X } from 'lucide-react'
+import { Ellipsis, PanelRightClose, Plus, RefreshCw, SquareArrowOutUpRight, SquareTerminal, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 import type { MesaId } from '../../shared/model'
 import type { HarnessProfile, SessionInfo } from '../../shared/terminal'
@@ -39,7 +39,7 @@ interface AgentsPanelProps {
   /** Web en el panel principal: un diálogo la cerraría antes (la vista nativa lo taparía). */
   readonly entered: boolean
   readonly onExitWeb: () => Promise<void>
-  readonly notify: (text: string) => void
+  readonly notify: (text: string, tone?: 'info' | 'error') => void
 }
 
 /**
@@ -53,6 +53,8 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
   const active = useActiveSession(mesaId, sessions)
   const [profiles, setProfiles] = useState<readonly HarnessProfile[] | null>(null)
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(null)
+  /** Menú «Más acciones» del panel (p. ej. «Actualizar contexto»). */
+  const [moreAnchor, setMoreAnchor] = useState<{ x: number; y: number } | null>(null)
   const [confirmClose, setConfirmClose] = useState<SessionInfo | null>(null)
   const [starting, setStarting] = useState(false)
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -220,6 +222,24 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
           >
             <Plus aria-hidden size={16} strokeWidth={1.75} />
           </button>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Más acciones de agentes"
+            title="Más acciones"
+            aria-haspopup="menu"
+            aria-expanded={moreAnchor !== null}
+            onClick={event => {
+              if (moreAnchor) {
+                setMoreAnchor(null)
+                return
+              }
+              const rect = event.currentTarget.getBoundingClientRect()
+              setMoreAnchor({ x: rect.right, y: rect.bottom + 4 })
+            }}
+          >
+            <Ellipsis aria-hidden size={16} strokeWidth={1.75} />
+          </button>
           <button type="button" className="icon-button" aria-label="Plegar agentes" title="Plegar" onClick={onCollapse}>
             <PanelRightClose aria-hidden size={16} strokeWidth={1.75} />
           </button>
@@ -287,6 +307,27 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
           label="Abrir sesión con"
           items={profileItems}
           onClose={() => setMenuAnchor(null)}
+        />
+      )}
+
+      {moreAnchor && (
+        <Menu
+          anchor={moreAnchor}
+          align="end"
+          label="Más acciones de agentes"
+          items={[
+            {
+              label: 'Actualizar contexto',
+              icon: RefreshCw,
+              onSelect: () => {
+                api.agent.refreshContext(mesaId).then(
+                  () => notify('Contexto actualizado en TABLE.md', 'info'),
+                  (error: unknown) => notify(errorMessage(error)),
+                )
+              },
+            },
+          ]}
+          onClose={() => setMoreAnchor(null)}
         />
       )}
 

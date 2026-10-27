@@ -11,7 +11,11 @@ import type {
   NoteId,
   NotePatch,
   Point,
+  Result,
+  ResultId,
+  ResultPatch,
   Viewport,
+  ItemId,
 } from './model'
 import type { FigmaFileFrames, FigmaSettingsView, FrameThumbnail } from './figma'
 import type { NotionSettingsView, ProjectSearchResult, ProjectSnapshot, ProjectState } from './notion'
@@ -77,6 +81,16 @@ export const IPC = {
   /** main → renderer */
   terminalData: 'terminal:data',
   terminalSession: 'terminal:session',
+  agentRefreshContext: 'agent:refresh-context',
+  agentSelectionText: 'agent:selection-text',
+  resultsUpdate: 'results:update',
+  resultsRemove: 'results:remove',
+  resultsOpen: 'results:open',
+  resultsReveal: 'results:reveal',
+  resultsPreview: 'results:preview',
+  resultsMissing: 'results:missing',
+  /** main → renderer: cambió la lista de resultados de una mesa (archivo nuevo o desaparecido). */
+  resultsChanged: 'results:changed',
 } as const
 
 /**
@@ -84,6 +98,12 @@ export const IPC = {
  * El parámetro `v` solo invalida la caché del renderer.
  */
 export const CAPTURE_PROTOCOL = 'table-capture'
+
+/**
+ * Protocolo de solo lectura para la vista previa de imágenes de resultados:
+ * `table-result://<mesaId>/<resultId>?v=<updatedAt>`.
+ */
+export const RESULT_PROTOCOL = 'table-result'
 
 export interface TableApi {
   readonly platform: string
@@ -197,6 +217,35 @@ export interface TableApi {
     onData(listener: (sessionId: SessionId, data: string) => void): () => void
     /** Cambios de estado de una sesión (arranque, salida). */
     onSession(listener: (session: SessionInfo) => void): () => void
+  }
+  /**
+   * Contexto de la mesa para los agentes, por archivos (T-008). Table escribe
+   * `TABLE.md` en la carpeta de trabajo de la mesa; nunca campos excluidos.
+   */
+  readonly agent: {
+    /** Reescribe `TABLE.md` (y crea los punteros que falten). */
+    refreshContext(mesaId: MesaId): Promise<void>
+    /**
+     * Texto de la selección para pegarlo en la sesión; también lo anota en
+     * `TABLE.md` como última selección enviada.
+     */
+    selectionText(mesaId: MesaId, itemIds: readonly ItemId[]): Promise<string>
+  }
+  /** Tarjetas de resultado: archivos de `resultados/` en la carpeta de la mesa (T-008). */
+  readonly results: {
+    update(mesaId: MesaId, resultId: ResultId, patch: ResultPatch): Promise<Result>
+    /** Quita la tarjeta (y sus conexiones); el archivo se queda. */
+    remove(mesaId: MesaId, resultId: ResultId): Promise<void>
+    /** Abre el archivo con la app del sistema. */
+    open(mesaId: MesaId, resultId: ResultId): Promise<void>
+    /** Lo muestra en Finder. */
+    reveal(mesaId: MesaId, resultId: ResultId): Promise<void>
+    /** Primeras líneas de un resultado de texto (acotado), o null si no es texto o falta. */
+    preview(mesaId: MesaId, resultId: ResultId): Promise<string | null>
+    /** Resultados cuyo archivo ya no está en `resultados/` («Archivo no encontrado»). */
+    missing(mesaId: MesaId): Promise<ResultId[]>
+    /** La lista de resultados de la mesa cambió en disco: la interfaz vuelve a leer la mesa. */
+    onChanged(listener: (mesaId: MesaId) => void): () => void
   }
 }
 

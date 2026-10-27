@@ -4,13 +4,14 @@
  * sincronizar más adelante sin reescribir los datos.
  */
 
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 /** UUID v4 en minúsculas. */
 export type MesaId = string
 export type CardId = string
 export type NoteId = string
 export type EdgeId = string
+export type ResultId = string
 
 /** Fecha ISO 8601 en UTC, p. ej. `2026-10-26T15:00:00.000Z`. */
 export type IsoDate = string
@@ -58,20 +59,41 @@ export interface Note {
   readonly updatedAt: IsoDate
 }
 
+/** Tipo de archivo de un resultado: decide la vista previa de su tarjeta. */
+export type ResultKind = 'image' | 'text' | 'file'
+
 /**
- * Conexión entre dos elementos de la misma mesa (tarjetas o notas). Sin
- * dirección: A→B y B→A son la misma conexión. Nunca une un elemento consigo.
+ * Resultado de un agente (T-008): un archivo de `resultados/` en la carpeta de
+ * trabajo de la mesa. La tarjeta apunta al archivo; borrarla no lo borra.
+ */
+export interface Result {
+  readonly id: ResultId
+  /** Nombre del archivo dentro de `resultados/` (un solo segmento, sin rutas). */
+  readonly file: string
+  readonly kind: ResultKind
+  readonly position: Point
+  readonly size: Size
+  readonly createdAt: IsoDate
+  readonly updatedAt: IsoDate
+}
+
+/** Cualquier elemento de la mesa que se puede conectar. */
+export type ItemId = CardId | NoteId | ResultId
+
+/**
+ * Conexión entre dos elementos de la misma mesa (tarjetas, notas o resultados).
+ * Sin dirección: A→B y B→A son la misma conexión. Nunca une un elemento consigo.
  */
 export interface Edge {
   readonly id: EdgeId
-  /** ID de una tarjeta o nota de la mesa. */
-  readonly source: CardId | NoteId
-  readonly target: CardId | NoteId
+  /** ID de una tarjeta, nota o resultado de la mesa. */
+  readonly source: ItemId
+  readonly target: ItemId
   readonly createdAt: IsoDate
 }
 
 /** Clave de una conexión sin dirección: igual para A→B y B→A. */
-export function edgeKey(a: CardId | NoteId, b: CardId | NoteId): string {
+export function edgeKey(a: ItemId, b: ItemId): string {
   return a < b ? `${a}|${b}` : `${b}|${a}`
 }
 
@@ -85,6 +107,13 @@ export interface Mesa {
   readonly cards: readonly Card[]
   readonly notes: readonly Note[]
   readonly edges: readonly Edge[]
+  /** Desde la versión 3; las mesas anteriores se leen con la lista vacía. */
+  readonly results: readonly Result[]
+  /**
+   * Desde la versión 3: archivos de `resultados/` cuya tarjeta se quitó; no se
+   * vuelven a importar mientras el archivo siga en la carpeta.
+   */
+  readonly dismissedResults: readonly string[]
 }
 
 /** Lo necesario para la lista del inicio, sin cargar tarjetas. */
@@ -116,8 +145,15 @@ export interface NotePatch {
   readonly size?: Size
 }
 
+/** Cambios admitidos sobre un resultado desde la interfaz. */
+export interface ResultPatch {
+  readonly position?: Point
+  readonly size?: Size
+}
+
 export const DEFAULT_CARD_SIZE: Size = { width: 320, height: 220 }
 export const DEFAULT_NOTE_SIZE: Size = { width: 240, height: 144 }
+export const DEFAULT_RESULT_SIZE: Size = { width: 280, height: 220 }
 export const MAX_NOTE_TEXT_LENGTH = 10_000
 export const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, zoom: 1 }
 export const MAX_MESA_NAME_LENGTH = 120

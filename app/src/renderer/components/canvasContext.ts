@@ -1,6 +1,6 @@
 import type { ResizeParams } from '@xyflow/react'
 import { createContext, useContext } from 'react'
-import type { CardId, MesaId, NoteId } from '../../shared/model'
+import type { CardId, ItemId, MesaId, NoteId, ResultId } from '../../shared/model'
 import type { SurfaceCardState } from '../../shared/surface'
 
 /**
@@ -10,14 +10,16 @@ import type { SurfaceCardState } from '../../shared/surface'
 export interface CanvasContextValue {
   readonly mesaId: MesaId
   readonly states: ReadonlyMap<CardId, SurfaceCardState>
-  /** Tarjeta cuyo menú está abierto, para `aria-expanded`. */
-  readonly menuCardId: CardId | null
+  /** Elemento (tarjeta, nota o resultado) cuyo menú está abierto, para `aria-expanded`. */
+  readonly menuItemId: ItemId | null
   /** Nota cuyo texto se está editando; como mucho una. */
   readonly editingNoteId: NoteId | null
+  /** Resultados cuyo archivo ya no está en `resultados/`. */
+  readonly missingResults: ReadonlySet<ResultId>
   enter(cardId: CardId): void
-  openMenu(cardId: CardId, anchor: { readonly x: number; readonly y: number }): void
-  /** Fin de redimensionar una tarjeta o una nota. */
-  resizeEnd(id: CardId | NoteId, params: ResizeParams): void
+  openMenu(itemId: ItemId, anchor: { readonly x: number; readonly y: number }): void
+  /** Fin de redimensionar una tarjeta, una nota o un resultado. */
+  resizeEnd(id: ItemId, params: ResizeParams): void
   /** Texto en edición: se guarda con retardo. */
   changeNoteText(noteId: NoteId, text: string): void
   /** Termina la edición y guarda ya el texto pendiente. */

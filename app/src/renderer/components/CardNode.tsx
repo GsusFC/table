@@ -40,7 +40,7 @@ export const CardNode = memo(function CardNode({ id, data, selected }: NodeProps
   // Si la captura no carga (borrada a mano, error de lectura) se muestra el marcador.
   const [brokenSrc, setBrokenSrc] = useState<string | null>(null)
   const showCapture = captureSrc !== null && brokenSrc !== captureSrc
-  const menuOpen = canvas.menuCardId === card.id
+  const menuOpen = canvas.menuItemId === card.id
 
   return (
     <>
