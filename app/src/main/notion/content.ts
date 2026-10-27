@@ -11,9 +11,12 @@ import { envelope, taggedJson, UnrecognizedResponseError, type DataSourceSchema 
  *   `page_last_edited_at`. Las bases del cuerpo aparecen como
  *   `<database url="…" data-source-url="collection://…">Título</database>`;
  *   las vistas enlazadas, sin `data-source-url`.
- * - `notion-fetch` de una base: `<data-source url="{{collection://…}}">`.
- * - `notion-query-data-sources` (modo `rows`): `{ results: [{ <propiedad>: valor, url }], has_more }`,
- *   hasta 100 filas y sin cursor.
+ * - `notion-fetch` de una base o vista enlazada: sus bases de origen
+ *   (`<data-source url="{{collection://…}}">`) y sus vistas (`view://…`).
+ * - `notion-query-data-sources` en modo `view`: las filas que muestra una vista
+ *   (con sus filtros), `{ results: [{ <propiedad>: valor, url }], has_more, next_cursor }`.
+ *   Table no usa los modos `rows` ni SQL: en planes sin Notion AI tienen una
+ *   cuota que se agota; el modo `view` no.
  */
 
 export interface PageContent {
@@ -65,12 +68,90 @@ export function parseLinkedDataSources(raw: string): string[] {
   return [...found]
 }
 
-export interface RowsPage {
-  readonly rows: readonly Record<string, unknown>[]
-  readonly hasMore: boolean
+const VIEW_URL = /view:\/\/([0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12})/i
+
+/** `view://` con el UUID en su forma con guiones y en minúsculas. */
+function viewUrl(id: string): string | null {
+  const hex = id.replace(/-/g, '').toLowerCase()
+  return /^[0-9a-f]{32}$/.test(hex) ? `view://${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}` : null
 }
 
-export function parseRows(raw: string): RowsPage {
+export interface DatabaseView {
+  readonly viewUrl: string
+  /** Base de la vista (`dataSourceUrl` de su JSON), si la respuesta lo dice. */
+  readonly dataSourceUrl: string | null
+  readonly name: string | null
+  /**
+   * La vista filtra filas (`simpleFilters` con valores o `advancedFilter`). Si
+   * su JSON no se reconoce, se supone que sí.
+   */
+  readonly filtered: boolean
+}
+
+function viewDetails(block: string): Pick<DatabaseView, 'dataSourceUrl' | 'name' | 'filtered'> {
+  const source = /collection:\/\/[0-9a-f-]{32,36}/i.exec(block)
+  const dataSourceUrl = source ? source[0].toLowerCase() : null
+  try {
+    const json = asRecord(JSON.parse(block.trim()))
+    if (!json) {
+      return { dataSourceUrl, name: null, filtered: true }
+    }
+    const simple = json['simpleFilters']
+    const advanced = asRecord(json['advancedFilter'])
+    // Un filtro simple sin valores (la ficha muestra el botón, pero no filtra) no cuenta.
+    const simpleFilters = Array.isArray(simple)
+      ? simple.some(item => {
+          const filter = asRecord(item)
+          const values = filter?.['values'] ?? filter?.['value']
+          return !filter || values === undefined || (Array.isArray(values) ? values.length > 0 : values !== null && values !== '')
+        })
+      : false
+    const advancedFilter =
+      json['advancedFilter'] !== undefined && json['advancedFilter'] !== null && (!advanced || Object.keys(advanced).length > 0)
+    const filtered = simpleFilters || advancedFilter
+    return { dataSourceUrl, name: typeof json['name'] === 'string' ? oneLine(json['name']) : null, filtered }
+  } catch {
+    return { dataSourceUrl, name: null, filtered: true }
+  }
+}
+
+/**
+ * Vistas de una base o vista enlazada (`notion-fetch` de su URL), en orden:
+ * bloques `<view url="{{view://…}}">{json}</view>` con su base, su nombre y si
+ * filtra. Sin bloques, se toman las `view://` del texto.
+ */
+export function parseDatabaseViews(raw: string): DatabaseView[] {
+  const text = envelope(raw)['text'] as string
+  const views: DatabaseView[] = []
+  const seen = new Set<string>()
+  for (const match of text.matchAll(/<view\b([^>]*)>([\s\S]*?)<\/view>/gi)) {
+    const url = viewUrl(VIEW_URL.exec(match[1]!)?.[1] ?? '')
+    if (url && !seen.has(url)) {
+      seen.add(url)
+      views.push({ viewUrl: url, ...viewDetails(match[2]!) })
+    }
+  }
+  if (views.length === 0) {
+    for (const match of text.matchAll(new RegExp(VIEW_URL.source, 'gi'))) {
+      const url = viewUrl(match[1]!)
+      if (url && !seen.has(url)) {
+        seen.add(url)
+        views.push({ viewUrl: url, dataSourceUrl: null, name: null, filtered: true })
+      }
+    }
+  }
+  return views
+}
+
+export interface QueryPage {
+  readonly rows: readonly Record<string, unknown>[]
+  readonly hasMore: boolean
+  /** Cursor de la página siguiente, si Notion lo da. */
+  readonly nextCursor: string | null
+}
+
+/** Una página de resultados de `notion-query-data-sources` (`{ results, has_more, next_cursor }`). */
+export function parseQueryPage(raw: string): QueryPage {
   let parsed: Record<string, unknown> | null
   try {
     parsed = asRecord(JSON.parse(raw))
@@ -80,9 +161,11 @@ export function parseRows(raw: string): RowsPage {
   if (!parsed || !Array.isArray(parsed['results'])) {
     throw new UnrecognizedResponseError()
   }
+  const cursor = parsed['next_cursor'] ?? parsed['nextCursor']
   return {
     rows: parsed['results'].map(asRecord).filter((row): row is Record<string, unknown> => row !== null),
     hasMore: parsed['has_more'] === true,
+    nextCursor: typeof cursor === 'string' && cursor.length > 0 ? cursor : null,
   }
 }
 
@@ -119,6 +202,8 @@ export interface DatabaseRef {
   readonly url: string | null
   /** `collection://…` en minúsculas; null en una vista enlazada (se resuelve con su URL). */
   readonly dataSourceUrl: string | null
+  /** Vista que muestra la ficha, si la etiqueta la lleva (atributo `view://` o `?v=` en su URL). */
+  readonly viewUrl: string | null
   readonly title: string
 }
 
@@ -129,12 +214,28 @@ function attribute(attributes: string, name: string): string | null {
   return match ? match[1]!.replace(/^\{\{/, '').replace(/\}\}$/, '') : null
 }
 
+/** Vista de una etiqueta de base: un atributo con `view://` o el parámetro `?v=` de su URL. */
+function refView(attributes: string, url: string | null): string | null {
+  const inTag = VIEW_URL.exec(attributes)
+  if (inTag) {
+    return viewUrl(inTag[1]!)
+  }
+  try {
+    const v = url ? new URL(url).searchParams.get('v') : null
+    return v ? viewUrl(v) : null
+  } catch {
+    return null
+  }
+}
+
 function databaseRef(match: RegExpMatchArray): DatabaseRef {
   const attributes = match[1] ?? match[2] ?? ''
   const source = /collection:\/\/[0-9a-f-]+/i.exec(attribute(attributes, 'data-source-url') ?? '')
+  const url = attribute(attributes, 'url')
   return {
-    url: attribute(attributes, 'url'),
+    url,
     dataSourceUrl: source ? source[0].toLowerCase() : null,
+    viewUrl: refView(attributes, url),
     title: oneLine((match[3] ?? '').replace(/<[^>]*>/g, '')),
   }
 }

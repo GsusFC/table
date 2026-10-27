@@ -3,27 +3,38 @@ import {
   contentToLines,
   filterProperties,
   findDatabaseRefs,
+  parseDatabaseViews,
   parseDataSource,
   parseLinkedDataSources,
   parsePageContent,
-  parseRows,
+  parseQueryPage,
   rowEntry,
 } from './content'
 import {
   FIXTURE_DELIVERY_SOURCE,
   FIXTURE_LINKED_VIEW,
+  FIXTURE_PROCESS_DATABASE,
   FIXTURE_PROCESS_SCHEMA,
   FIXTURE_PROCESS_SOURCE,
   FIXTURE_PROJECT_CONTENT,
   FIXTURE_PROJECT_PAGE,
   FIXTURE_ROWS,
+  FIXTURE_VIEWS,
   fixtureNotionResponse,
+  type FixtureResponse,
 } from './fixtures'
 import { OMITTED_MARK, redactMoney } from './filters'
 import { UnrecognizedResponseError } from './project'
 
-const fetch = (id: string): string => fixtureNotionResponse('notion-fetch', { id })!
-const rows = (url: string): string => fixtureNotionResponse('notion-query-data-sources', { data: { mode: 'rows', data_source_url: url, limit: 100 } })!
+const text = (response: FixtureResponse): string => {
+  if (typeof response !== 'string') {
+    throw new Error('respuesta sintética inesperada')
+  }
+  return response
+}
+const fetch = (id: string): string => text(fixtureNotionResponse('notion-fetch', { id }))
+const view = (url: string, cursor?: string): string =>
+  text(fixtureNotionResponse('notion-query-data-sources', { data: { mode: 'view', view_url: url, is_archived: false, ...(cursor ? { start_cursor: cursor } : {}) } }))
 
 describe('respuestas del MCP', () => {
   it('página: cuerpo, propiedades, título y fecha de edición', () => {
@@ -40,10 +51,32 @@ describe('respuestas del MCP', () => {
 
   it('bases del cuerpo, incrustadas y vistas enlazadas, en orden', () => {
     expect(findDatabaseRefs(FIXTURE_PROJECT_CONTENT)).toEqual([
-      { url: 'https://app.notion.com/p/77777777bbbb4ccc8dddeeeeeeeeeeee', dataSourceUrl: FIXTURE_PROCESS_SOURCE, title: 'Proceso sintético' },
-      { url: FIXTURE_LINKED_VIEW, dataSourceUrl: null, title: '' },
-      { url: 'https://app.notion.com/p/88888888bbbb4ccc8dddeeeeeeeeeeee', dataSourceUrl: FIXTURE_DELIVERY_SOURCE, title: 'Entregables sintéticos' },
+      { url: FIXTURE_PROCESS_DATABASE, dataSourceUrl: FIXTURE_PROCESS_SOURCE, viewUrl: null, title: 'Proceso sintético' },
+      { url: FIXTURE_LINKED_VIEW, dataSourceUrl: null, viewUrl: null, title: '' },
+      { url: 'https://app.notion.com/p/88888888bbbb4ccc8dddeeeeeeeeeeee', dataSourceUrl: FIXTURE_DELIVERY_SOURCE, viewUrl: null, title: 'Entregables sintéticos' },
     ])
+  })
+
+  it('la vista de una etiqueta: atributo `view://` o `?v=` en su URL', () => {
+    const refs = findDatabaseRefs(
+      [
+        `<database url="https://app.notion.com/p/77777777bbbb4ccc8dddeeeeeeeeeeee?v=77770000aaaa4bbb8ccc000000000001" data-source-url="${FIXTURE_PROCESS_SOURCE}">A</database>`,
+        `<database url="https://app.notion.com/p/77777777bbbb4ccc8dddeeeeeeeeeeee" view-url="{{${FIXTURE_VIEWS.processAll}}}">B</database>`,
+      ].join('\n'),
+    )
+    expect(refs.map(ref => ref.viewUrl)).toEqual([FIXTURE_VIEWS.processActive, FIXTURE_VIEWS.processAll])
+  })
+
+  it('vistas de una base: URL sin llaves, base, nombre y si filtra', () => {
+    expect(parseDatabaseViews(fetch(FIXTURE_PROCESS_DATABASE))).toEqual([
+      { viewUrl: FIXTURE_VIEWS.processActive, dataSourceUrl: FIXTURE_PROCESS_SOURCE, name: 'En marcha', filtered: true },
+      { viewUrl: FIXTURE_VIEWS.processAll, dataSourceUrl: FIXTURE_PROCESS_SOURCE, name: 'Tabla', filtered: false },
+    ])
+    // Un filtro simple sin valores no filtra; uno con valores, sí.
+    const block = (filters: unknown): string =>
+      JSON.stringify({ text: `<views>\n<view url="{{${FIXTURE_VIEWS.delivery}}}">\n${JSON.stringify({ dataSourceUrl: `{{${FIXTURE_DELIVERY_SOURCE}}}`, name: 'V', simpleFilters: filters })}\n</view>\n</views>` })
+    expect(parseDatabaseViews(block([{ property: 'Status', values: [] }]))[0]!.filtered).toBe(false)
+    expect(parseDatabaseViews(block([{ property: 'Status', values: ['Done'] }]))[0]!.filtered).toBe(true)
   })
 
   it('la vista enlazada lleva a su base de origen', () => {
@@ -56,28 +89,37 @@ describe('respuestas del MCP', () => {
     expect(info.schema).toEqual(FIXTURE_PROCESS_SCHEMA)
   })
 
-  it('filas: página, título y marca de edición si la base tiene esa propiedad', () => {
-    const page = parseRows(rows(FIXTURE_PROCESS_SOURCE))
-    expect(page.hasMore).toBe(false)
-    expect(page.rows.map(row => rowEntry(row, FIXTURE_PROCESS_SCHEMA))).toEqual([
+  it('filas de una vista, paginadas con next_cursor: página, título y marca de edición si la base tiene esa propiedad', () => {
+    const first = parseQueryPage(view(FIXTURE_VIEWS.processAll))
+    expect(first.hasMore).toBe(true)
+    expect(first.nextCursor).toBe('cursor-sintetico-2')
+    const second = parseQueryPage(view(FIXTURE_VIEWS.processAll, first.nextCursor!))
+    expect(second).toMatchObject({ hasMore: false, nextCursor: null })
+    expect([...first.rows, ...second.rows].map(row => rowEntry(row, FIXTURE_PROCESS_SCHEMA))).toEqual([
       { pageId: FIXTURE_ROWS.research, title: 'Investigación', editedAt: '2026-10-20T10:00:00.000Z' },
       { pageId: FIXTURE_ROWS.concept, title: 'Concepto', editedAt: '2026-10-20T10:00:00.000Z' },
       { pageId: FIXTURE_ROWS.invoice, title: 'Factura final SECRETO-TITULO', editedAt: '2026-10-20T10:00:00.000Z' },
     ])
-    const delivery = parseRows(rows(FIXTURE_DELIVERY_SOURCE))
+    const delivery = parseQueryPage(view(FIXTURE_VIEWS.delivery))
     expect(rowEntry(delivery.rows[0]!, { Name: { type: 'title' } })).toEqual({ pageId: FIXTURE_ROWS.logo, title: 'Logotipo', editedAt: null })
     expect(rowEntry({ Name: 'Sin URL' }, { Name: { type: 'title' } })).toBeNull()
   })
 
+  it('los modos rows y SQL fallan como en un plan sin Notion AI (el MCP falso no los admite)', () => {
+    expect(fixtureNotionResponse('notion-query-data-sources', { data: { mode: 'rows', data_source_url: FIXTURE_PROCESS_SOURCE } })).toMatchObject({
+      error: expect.stringContaining('allowance'),
+    })
+  })
+
   it('una respuesta que no se reconoce no se adivina', () => {
-    expect(() => parseRows('no es json')).toThrow(UnrecognizedResponseError)
-    expect(() => parseRows('{"rows":[]}')).toThrow(UnrecognizedResponseError)
+    expect(() => parseQueryPage('no es json')).toThrow(UnrecognizedResponseError)
+    expect(() => parseQueryPage('{"rows":[]}')).toThrow(UnrecognizedResponseError)
     expect(() => parseDataSource(JSON.stringify({ text: 'sin estado' }))).toThrow(UnrecognizedResponseError)
   })
 })
 
 describe('propiedades', () => {
-  const row = parseRows(rows(FIXTURE_PROCESS_SOURCE)).rows
+  const row = [...parseQueryPage(view(FIXTURE_VIEWS.processAll)).rows]
   const research = filterProperties(row[0]!, FIXTURE_PROCESS_SCHEMA)
   const concept = filterProperties(row[1]!, FIXTURE_PROCESS_SCHEMA)
 

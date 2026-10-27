@@ -124,8 +124,10 @@ const NOTION_OTHER = 'ffffffffbbbb4ccc8dddeeeeeeeeeeee'
  * ficha (T-009). Anota las páginas que se leen; las filas tardan un poco en
  * responder, para comprobar que la sesión no espera a la lectura.
  */
-async function startNotionMcpServer(): Promise<{ server: Server; url: string; fetched: string[] }> {
+async function startNotionMcpServer(): Promise<{ server: Server; url: string; fetched: string[]; queryModes: string[] }> {
   const fetched: string[] = []
+  /** Modo de cada `notion-query-data-sources`: Table solo debe usar `view`. */
+  const queryModes: string[] = []
   const rowIds: readonly string[] = Object.values(FIXTURE_ROWS)
   const server = createServer((request, response) => {
     const mcp = new McpServer({ name: 'notion-falso', version: '0.0.0' }, { capabilities: { tools: {} } })
@@ -155,16 +157,22 @@ async function startNotionMcpServer(): Promise<{ server: Server; url: string; fe
           await delay(400)
         }
       }
-      const text =
+      if (call.params.name === 'notion-query-data-sources') {
+        const data = args['data'] as Record<string, unknown> | undefined
+        queryModes.push(String(data?.['mode'] ?? ''))
+      }
+      const response =
         fixtureNotionResponse(call.params.name, args) ??
         (id === NOTION_OTHER
           ? fixturePageResponse(`https://www.notion.so/${id}`, FIXTURE_OTHER_SOURCE, { Name: 'Página suelta' })
           : id === FIXTURE_OTHER_SOURCE
             ? fixtureDataSourceResponse(id, { Name: { type: 'title' } })
             : null)
-      return text === null
-        ? { isError: true, content: [{ type: 'text' as const, text: '{"code":"object_not_found"}' }] }
-        : { content: [{ type: 'text' as const, text }] }
+      if (response === null || typeof response === 'object') {
+        // Como el MCP real: error con el motivo en el texto (cuota de rows/SQL agotada o página sin acceso).
+        return { isError: true, content: [{ type: 'text' as const, text: response?.error ?? '{"code":"object_not_found"}' }] }
+      }
+      return { content: [{ type: 'text' as const, text: response }] }
     })
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
     response.on('close', () => {
@@ -177,7 +185,7 @@ async function startNotionMcpServer(): Promise<{ server: Server; url: string; fe
   server.listen(0, '127.0.0.1', resolve)
   await promise
   const { port } = server.address() as AddressInfo
-  return { server, url: `http://127.0.0.1:${port}/mcp`, fetched }
+  return { server, url: `http://127.0.0.1:${port}/mcp`, fetched, queryModes }
 }
 
 const FIGMA_TOKEN = `figd_${'s'.repeat(40)}`
@@ -1630,6 +1638,13 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
         record(
           'notion: ninguna propiedad excluida, importe ni nombre de persona sale a notion/ ni a TABLE.md',
           !/SECRETO|Opportunity|Precio|Budget|Responsables/.test(allText) && !table.includes('SECRETO') && allText.includes('[omitido: posible información económica]'),
+        )
+        record(
+          'notion: las filas se leen solo en modo vista (paginadas), nunca en rows ni SQL, y el índice dice de qué vista salen',
+          notionServer.queryModes.length > 0 &&
+            notionServer.queryModes.every(mode => mode === 'view') &&
+            index.includes('Filas leídas de las vistas «Tabla» (sin filtro), «Solo en marcha» (con filtro: solo las filas que muestra).'),
+          { modes: [...new Set(notionServer.queryModes)] },
         )
 
         // Segunda lectura sin cambios: las filas con marca de edición no se vuelven a pedir.

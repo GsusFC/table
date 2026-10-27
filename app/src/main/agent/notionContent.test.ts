@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_CARD_SIZE, DEFAULT_VIEWPORT, type Mesa } from '../../shared/model'
-import type { NotionContextProgress } from '../../shared/notionContext'
+import { DEFAULT_NOTION_SELECTION, type NotionContextProgress } from '../../shared/notionContext'
 import {
   FIXTURE_DELIVERY_SOURCE,
   FIXTURE_LINKED_VIEW,
@@ -18,9 +18,14 @@ import {
   fixtureDataSourceResponse,
   fixtureNotionResponse,
   fixturePageResponse,
+  FIXTURE_DELIVERY_DATABASE,
+  FIXTURE_PROCESS_DATABASE,
+  FIXTURE_QUOTA_MESSAGE,
+  FIXTURE_VIEWS,
+  fixtureDatabaseResponse,
   type FixtureEdits,
 } from '../notion/fixtures'
-import { NotionError, type NotionMcp } from '../notion/mcp'
+import { NotionError, toolError, type NotionMcp } from '../notion/mcp'
 import { buildSnapshot, parseDataSourceSchema, parseFetchedPage } from '../notion/project'
 import { createNotionContent, type NotionContentLimits } from './notionContent'
 
@@ -54,7 +59,7 @@ const snapshot = buildSnapshot(
 describe('contenido completo de Notion', () => {
   let root: string
   let folder: string
-  let calls: { tool: string; id: string }[]
+  let calls: { tool: string; id: string; mode: string | null }[]
   let edits: Record<string, string>
   let progress: NotionContextProgress[]
   let written: number
@@ -89,14 +94,18 @@ describe('contenido completo de Notion', () => {
 
   const mcp: NotionMcp = {
     async read(tool, args) {
-      const id = String(args['id'] ?? (args['data'] as Record<string, unknown> | undefined)?.['data_source_url'] ?? '')
-      calls.push({ tool, id })
+      const data = args['data'] as Record<string, unknown> | undefined
+      const id = String(args['id'] ?? data?.['view_url'] ?? data?.['data_source_url'] ?? '')
+      calls.push({ tool, id, mode: typeof data?.['mode'] === 'string' ? data['mode'] : null })
       const replaced = intercept ? await intercept(tool, id) : undefined
-      const text = replaced ?? fixtureNotionResponse(tool, args, edits as FixtureEdits)
-      if (text === null) {
+      const response = replaced ?? fixtureNotionResponse(tool, args, edits as FixtureEdits)
+      if (response === null) {
         throw new NotionError('La página no existe o tu cuenta de Notion no tiene acceso', 'not-found')
       }
-      return text
+      if (typeof response === 'object') {
+        throw toolError(response.error)
+      }
+      return response
     },
   }
 
@@ -155,7 +164,14 @@ describe('contenido completo de Notion', () => {
     expect(index).toContain('4 páginas en esta carpeta; 0 páginas fuera por elección')
     // La vista enlazada a la misma base se resuelve, pero no se vuelve a leer la base.
     expect(fetchesOf(FIXTURE_LINKED_VIEW)).toBe(1)
-    expect(calls.filter(call => call.tool === 'notion-query-data-sources').map(call => call.id)).toEqual([FIXTURE_PROCESS_SOURCE, FIXTURE_DELIVERY_SOURCE])
+    // Solo modo vista: la vista sin filtros de la base incrustada (dos páginas de resultados), la de la vista enlazada y la de entregables.
+    expect(calls.filter(call => call.tool === 'notion-query-data-sources').map(call => [call.mode, call.id])).toEqual([
+      ['view', FIXTURE_VIEWS.processAll],
+      ['view', FIXTURE_VIEWS.processAll],
+      ['view', FIXTURE_VIEWS.linkedActive],
+      ['view', FIXTURE_VIEWS.delivery],
+    ])
+    expect(files['index.md']).toContain('Filas leídas de las vistas «Tabla» (sin filtro), «Solo en marcha» (con filtro: solo las filas que muestra).')
     // Dos niveles: la base de una fila no se sigue.
     expect(calls.some(call => call.id.includes('99999999-2222'))).toBe(false)
 
@@ -205,6 +221,8 @@ describe('contenido completo de Notion', () => {
     const tree = await content.tree(MESA_ID)
     expect(tree.projects).toHaveLength(1)
     const project = tree.projects[0]!
+    // Nunca guardada: todo marcado (cuerpo incluido).
+    expect(project.selection).toEqual(DEFAULT_NOTION_SELECTION)
     expect(project.bases.map(base => [base.title, base.pages.map(page => page.title)])).toEqual([
       ['Proceso sintético', ['Investigación', 'Concepto']],
       ['Entregables sintéticos', ['Logotipo']],
@@ -436,13 +454,60 @@ describe('contenido completo de Notion', () => {
       onWritten: async () => undefined,
     })
     await content.request(MESA_ID)
-    expect(calls.some(call => call.tool === 'notion-query-data-sources' && call.id === FIXTURE_DELIVERY_SOURCE)).toBe(false)
+    expect(calls.some(call => call.tool === 'notion-query-data-sources' && call.id === FIXTURE_VIEWS.delivery)).toBe(false)
     const files = await notionFiles()
     expect(Object.keys(files)).not.toContain('logotipo-40000000.md')
     const all = Object.values(files).join('\n') + JSON.stringify(progress) + JSON.stringify(await content.summary(MESA_ID)) + JSON.stringify(await content.tree(MESA_ID))
     expect(all).not.toMatch(/Presupuesto 2026|Budget|12\.000/)
     expect(progress.at(-1)!.warnings.join(' ')).toContain('1 base se omitió porque su nombre indica información económica')
     expect(progress.at(-1)!.warnings.join(' ')).toContain('No se pudo leer una vista enlazada de la ficha «Proyecto sin título»')
+  })
+
+  it('el motivo real de un error llega a los avisos; una base que no se puede leer conserva la lectura anterior', async () => {
+    const content = service()
+    await content.request(MESA_ID)
+    expect(Object.keys(await notionFiles())).toContain('logotipo-40000000.md')
+    intercept = async (tool, id) => {
+      if (tool === 'notion-query-data-sources' && id === FIXTURE_VIEWS.delivery) {
+        throw toolError(FIXTURE_QUOTA_MESSAGE)
+      }
+      return undefined
+    }
+    await content.request(MESA_ID)
+    const warning = 'No se pudo leer la base «Entregables sintéticos» (Notion: límite de consultas del plan agotado; se reinicia en una hora); se mantiene la lectura anterior.'
+    expect(progress.at(-1)!.warnings).toContain(warning)
+    expect((await content.summary(MESA_ID))!.warnings).toContain(warning)
+    const files = await notionFiles()
+    expect(files['index.md']).toContain(warning)
+    // La página de la base se mantiene (de la caché, sin volver a pedirla).
+    expect(Object.keys(files)).toContain('logotipo-40000000.md')
+    expect(fetchesOf(FIXTURE_ROWS.logo)).toBe(1)
+
+    // Sin lectura anterior: el aviso lo dice y la base no aparece.
+    await rm(join(root, 'userData', 'notion-content'), { recursive: true, force: true })
+    await content.request(MESA_ID)
+    expect(progress.at(-1)!.warnings).toContain('No se pudo leer la base «Entregables sintéticos» (Notion: límite de consultas del plan agotado; se reinicia en una hora).')
+    expect(Object.keys(await notionFiles())).not.toContain('logotipo-40000000.md')
+  })
+
+  it('una base incrustada solo con una vista filtrada da las filas de esa vista, y el índice lo dice', async () => {
+    intercept = async (tool, id) =>
+      tool === 'notion-fetch' && id === FIXTURE_PROCESS_DATABASE
+        ? fixtureDatabaseResponse(id, FIXTURE_PROCESS_SOURCE, [{ id: FIXTURE_VIEWS.processActive, name: 'En marcha', filtered: true }])
+        : undefined
+    await service().request(MESA_ID)
+    const files = await notionFiles()
+    expect(Object.keys(files)).toEqual(['index.md', 'investigacion-10000000.md', 'logotipo-40000000.md', 'proyecto-sintetico-aaaaaaaa.md'])
+    expect(files['index.md']).toContain('Filas leídas de las vistas «En marcha» (con filtro: solo las filas que muestra), «Solo en marcha» (con filtro: solo las filas que muestra).')
+    expect(files['index.md']).toContain('1 página incluida de 1')
+  })
+
+  it('una base sin vistas legibles avisa y no inventa filas', async () => {
+    intercept = async (tool, id) =>
+      tool === 'notion-fetch' && id === FIXTURE_DELIVERY_DATABASE ? fixtureDatabaseResponse(id, FIXTURE_DELIVERY_SOURCE, []) : undefined
+    await service().request(MESA_ID)
+    expect(progress.at(-1)!.warnings).toContain('La base «Entregables sintéticos» no tiene ninguna vista que Table pueda consultar: no se leen sus filas.')
+    expect(Object.keys(await notionFiles())).not.toContain('logotipo-40000000.md')
   })
 
   it('el límite de bases cuenta bases distintas, no etiquetas; el de páginas cuenta los cuerpos de ficha', async () => {

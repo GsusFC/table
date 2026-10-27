@@ -21,7 +21,7 @@ const AUTHORIZE_TIMEOUT_MS = 5 * 60_000
 export class NotionError extends Error {
   constructor(
     message: string,
-    readonly code: 'unauthorized' | 'not-found' | 'offline' | 'unexpected' | 'cancelled',
+    readonly code: 'unauthorized' | 'not-found' | 'offline' | 'unexpected' | 'cancelled' | 'quota' | 'plan' | 'invalid',
   ) {
     super(message)
     this.name = 'NotionError'
@@ -42,15 +42,35 @@ function connectClient(): Client {
   return new Client({ name: 'table', version: '0.1.0' })
 }
 
+/**
+ * Error de una herramienta con su motivo real, en español y sin copiar la
+ * respuesta (puede llevar contenido): solo se busca qué tipo de error es.
+ */
+export function toolError(text: string): NotionError {
+  if (/allowance|used up|quota/i.test(text)) {
+    return new NotionError('Notion: límite de consultas del plan agotado; se reinicia en una hora', 'quota')
+  }
+  if (/rate.?limit|too many requests/i.test(text)) {
+    return new NotionError('Notion: demasiadas peticiones seguidas; vuelve a intentarlo en unos minutos', 'quota')
+  }
+  if (/plan_required|upgrade_required|full_version_required|requires? (?:a |the )?(?:business|enterprise|paid|full)/i.test(text)) {
+    return new NotionError('Notion: esta consulta no está incluida en el plan del espacio de trabajo', 'plan')
+  }
+  if (/object_not_found|restricted_resource|page_not_found/i.test(text)) {
+    return new NotionError('La página no existe o tu cuenta de Notion no tiene acceso', 'not-found')
+  }
+  if (/validation_error/i.test(text)) {
+    return new NotionError('Notion rechazó la petición (formato no válido)', 'invalid')
+  }
+  return new NotionError('Notion respondió con un error', 'unexpected')
+}
+
 /** Texto de la primera respuesta de una herramienta; error de Notion si la herramienta falló. */
 function toolText(result: unknown): string {
   const { content, isError } = result as { content?: { type?: string; text?: string }[]; isError?: boolean }
   const text = (content ?? []).map(part => (part.type === 'text' ? (part.text ?? '') : '')).join('\n')
   if (isError) {
-    // Notion indica el motivo en el cuerpo (`object_not_found`, `validation_error`…); no se copia.
-    throw /object_not_found|validation_error|restricted_resource/.test(text)
-      ? new NotionError('La página no existe o tu cuenta de Notion no tiene acceso', 'not-found')
-      : new NotionError('Notion respondió con un error', 'unexpected')
+    throw toolError(text)
   }
   return text
 }

@@ -64,6 +64,10 @@ const smokeMode = process.env['TABLE_SMOKE'] === '1'
 // El smoke trabaja con datos desechables, nunca con las mesas del usuario.
 if (smokeMode) {
   app.setPath('userData', mkdtempSync(join(tmpdir(), 'table-smoke-')))
+  // Las sesiones del smoke usan zsh sin la configuración personal (`.zshrc` con nvm…), que tarda
+  // un tiempo variable y a veces no muestra nada en 20 s: el smoke prueba Table, no los dotfiles.
+  process.env['SHELL'] = '/bin/zsh'
+  process.env['ZDOTDIR'] = mkdtempSync(join(tmpdir(), 'table-smoke-zsh-'))
 }
 
 protocol.registerSchemesAsPrivileged([
@@ -775,6 +779,9 @@ function createWindow(): BrowserWindow {
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
+      // El smoke debe pintar aunque la ventana quede tapada por otras (la persona sigue usando el Mac):
+      // sin esto, Chromium frena la ventana tapada y la terminal y el lienzo no se repintan a tiempo.
+      backgroundThrottling: !smokeMode,
     },
   })
   const contents = window.webContents

@@ -18,12 +18,14 @@ import {
   contentToLines,
   filterProperties,
   findDatabaseRefs,
+  parseDatabaseViews,
   parseDataSource,
   parseLinkedDataSources,
   parsePageContent,
-  parseRows,
+  parseQueryPage,
   rowEntry,
   type DatabaseRef,
+  type DatabaseView,
   type PropertyLine,
   type RowEntry,
 } from '../notion/content'
@@ -68,8 +70,8 @@ export interface NotionContentLimits {
   readonly maxPageBytes: number
   /** Bases distintas como mucho por ficha. */
   readonly maxBases: number
-  /** Filas por base: el máximo de `notion-query-data-sources` en modo `rows`, que no da cursor. */
-  readonly rowsPerBase: number
+  /** Páginas de resultados como mucho por vista (`next_cursor`). */
+  readonly maxViewPages: number
   /** Lecturas simultáneas a Notion. */
   readonly concurrency: number
 }
@@ -79,7 +81,7 @@ export const DEFAULT_LIMITS: NotionContentLimits = {
   maxBytes: 2 * 1024 * 1024,
   maxPageBytes: 200 * 1024,
   maxBases: 20,
-  rowsPerBase: 100,
+  maxViewPages: 50,
   concurrency: 3,
 }
 
@@ -130,9 +132,27 @@ class CancelledError extends Error {
   }
 }
 
-/** Errores que invalidan toda la lectura (no solo una página). */
+/** Errores que invalidan toda la lectura (no solo una base o una página): conexión caída o caducada, o cancelación. */
 function isFatal(error: unknown): boolean {
-  return error instanceof CancelledError || (error instanceof NotionError && error.code !== 'not-found' && error.code !== 'unexpected')
+  return error instanceof CancelledError || (error instanceof NotionError && (error.code === 'unauthorized' || error.code === 'offline' || error.code === 'cancelled'))
+}
+
+/** Motivo real de un error, sin datos, para los avisos. */
+function reasonOf(error: unknown): string {
+  if (error instanceof NotionError) {
+    switch (error.code) {
+      case 'quota':
+      case 'plan':
+        return error.message
+      case 'not-found':
+        return 'sin acceso o no existe'
+      case 'invalid':
+        return 'Notion rechazó la petición'
+      default:
+        return 'Notion respondió con un error'
+    }
+  }
+  return error instanceof UnrecognizedResponseError ? 'formato de respuesta no reconocido' : 'error inesperado'
 }
 
 /** Marca de la base número `index` del cuerpo de una ficha; se sustituye al publicar. */
@@ -162,6 +182,13 @@ interface SnapshotProject {
   readonly bases: readonly string[]
 }
 
+/** Vista de la que salen las filas de una base. */
+interface SnapshotView {
+  readonly name: string
+  /** Filtra filas: solo entran las que muestra. */
+  readonly filtered: boolean
+}
+
 interface SnapshotBase {
   readonly dataSourceUrl: string
   readonly title: string
@@ -171,6 +198,8 @@ interface SnapshotBase {
   readonly moneyName: boolean
   /** Reglas de filtrado y esquema con que se filtraron sus páginas. */
   readonly schemaKey: string
+  /** Vistas consultadas (las que muestra la ficha, o una sin filtros). */
+  readonly views: readonly SnapshotView[]
 }
 
 /** Árbol leído (sin el contenido de las filas), ya filtrado: se guarda para aplicar una selección sin red. */
@@ -184,6 +213,8 @@ interface Listing {
   readonly snapshot: Snapshot
   /** Esquemas leídos en esta lectura, para filtrar las propiedades de las filas. */
   readonly schemas: ReadonlyMap<string, DataSourceSchema>
+  /** Bases que no se pudieron leer y se mantienen de la lectura anterior: sus páginas no se vuelven a pedir. */
+  readonly stale: ReadonlySet<string>
 }
 
 interface CacheFile {
@@ -193,7 +224,19 @@ interface CacheFile {
   readonly summary: NotionContentSummary | null
 }
 
-const TOOL_ROWS = 'notion-query-data-sources'
+const TOOL_QUERY = 'notion-query-data-sources'
+
+/** Base encontrada en las fichas, antes de leer sus filas. */
+interface FoundBase {
+  readonly title: string
+  readonly moneyName: boolean
+  readonly schema: DataSourceSchema
+  readonly schemaKey: string
+  /** Vistas elegidas desde las etiquetas que llevan a ella (sin repetir). */
+  readonly views: DatabaseView[]
+  /** Motivo si no se pudo leer su esquema. */
+  readonly failure: string | null
+}
 
 /**
  * Clave de las reglas que se aplicaron a las páginas de una base: versión de
@@ -285,6 +328,10 @@ function sanitizeSnapshot(value: unknown): Snapshot | null {
       truncated: base['truncated'] === true,
       moneyName: base['moneyName'] !== false,
       schemaKey: base['schemaKey'],
+      views: (Array.isArray(base['views']) ? base['views'] : []).flatMap((value: unknown): SnapshotView[] => {
+        const view = asRecord(value)
+        return typeof view?.['name'] === 'string' ? [{ name: view['name'], filtered: view['filtered'] !== false }] : []
+      }),
     }
   }
   const projects: SnapshotProject[] = []
@@ -581,11 +628,15 @@ export function createNotionContent(options: NotionContentOptions): NotionConten
     return [...found.values()]
   }
 
-  /** Paso 1: la ficha de cada proyecto y las filas de sus bases (con su esquema, leído en cada lectura). */
-  async function list(mesa: Mesa, check: () => void): Promise<Listing> {
+  /**
+   * Paso 1: la ficha de cada proyecto y las filas de sus bases, leídas en modo
+   * `view` (nunca `rows` ni SQL). El esquema de cada base se lee siempre:
+   * decide qué propiedades salen. Una base que no se puede leer se mantiene de
+   * la lectura anterior (`previous`), si la hay, con un aviso.
+   */
+  async function list(mesa: Mesa, check: () => void, previous: Snapshot | null): Promise<Listing> {
     const warnings: string[] = []
-    const bases: Record<string, SnapshotBase> = {}
-    const schemas = new Map<string, DataSourceSchema>()
+    const found = new Map<string, FoundBase>()
     const projects: SnapshotProject[] = []
     // Una ficha con muchas vistas enlazadas no puede disparar lecturas sin fin.
     const maxRefs = limits.maxBases * 3
@@ -602,23 +653,24 @@ export function createNotionContent(options: NotionContentOptions): NotionConten
           snapshotRefs.push({ title: ref.title, sources: [] })
           continue
         }
+        const resolved = await resolveRef(ref, title, warnings, check)
         const kept: string[] = []
-        for (const url of await resolveSources(ref, title, warnings, check)) {
-          if (Object.hasOwn(bases, url)) {
-            kept.push(url)
-            continue
-          }
-          if (owned.length >= limits.maxBases) {
-            overBases += 1
-            continue
-          }
-          const listed = await listBase(url, ref, warnings, check)
-          if (listed) {
-            bases[url] = listed.base
-            schemas.set(url, listed.schema)
+        for (const url of resolved.sources) {
+          let base = found.get(url)
+          if (!base) {
+            if (owned.length >= limits.maxBases) {
+              overBases += 1
+              continue
+            }
+            base = await describeBase(url, ref, check)
+            found.set(url, base)
             owned.push(url)
-            kept.push(url)
           }
+          const view = pickView(ref, resolved.views, url, resolved.sources.length)
+          if (view && !base.views.some(candidate => candidate.viewUrl === view.viewUrl)) {
+            base.views.push(view)
+          }
+          kept.push(url)
         }
         snapshotRefs.push({ title: ref.title, sources: kept })
       }
@@ -641,68 +693,169 @@ export function createNotionContent(options: NotionContentOptions): NotionConten
         bases: owned,
       })
     }
-    return { snapshot: { projects, bases, warnings }, schemas }
+
+    const bases: Record<string, SnapshotBase> = {}
+    const schemas = new Map<string, DataSourceSchema>()
+    const stale = new Set<string>()
+    const keepPrevious = (url: string, label: string, reason: string): void => {
+      const before = previous?.bases[url]
+      warnings.push(`No se pudo leer la base «${label}» (${reason})${before ? '; se mantiene la lectura anterior' : ''}.`)
+      if (before) {
+        bases[url] = before
+        stale.add(url)
+      }
+    }
+    for (const [url, base] of found) {
+      if (base.failure !== null) {
+        keepPrevious(url, base.title, base.failure)
+        continue
+      }
+      const views = base.views.map(view => ({ name: safeLabel(view.name ?? '', 'sin nombre'), filtered: view.filtered }))
+      if (base.moneyName) {
+        bases[url] = { dataSourceUrl: url, title: base.title, rows: [], truncated: false, moneyName: true, schemaKey: base.schemaKey, views: [] }
+        continue
+      }
+      if (base.views.length === 0) {
+        warnings.push(`La base «${base.title}» no tiene ninguna vista que Table pueda consultar: no se leen sus filas.`)
+        schemas.set(url, base.schema)
+        bases[url] = { dataSourceUrl: url, title: base.title, rows: [], truncated: false, moneyName: false, schemaKey: base.schemaKey, views }
+        continue
+      }
+      const rows: RowEntry[] = []
+      const seen = new Set<string>()
+      let truncated = false
+      let failed = 0
+      let reason = ''
+      for (const view of base.views) {
+        try {
+          const result = await queryView(view.viewUrl, check)
+          truncated ||= result.truncated
+          for (const row of result.rows) {
+            const entry = rowEntry(row, base.schema)
+            if (entry && !seen.has(entry.pageId)) {
+              seen.add(entry.pageId)
+              rows.push(entry)
+            }
+          }
+        } catch (error) {
+          if (isFatal(error)) {
+            throw error
+          }
+          failed += 1
+          reason = reasonOf(error)
+        }
+      }
+      if (failed === base.views.length) {
+        keepPrevious(url, base.title, reason)
+        continue
+      }
+      if (failed > 0) {
+        warnings.push(`No se pudo leer una de las vistas de la base «${base.title}» (${reason}).`)
+      }
+      if (truncated) {
+        warnings.push(`La base «${base.title}» tiene más filas de las que Table lee (${limits.maxViewPages} páginas de resultados por vista).`)
+      }
+      schemas.set(url, base.schema)
+      bases[url] = { dataSourceUrl: url, title: base.title, rows, truncated, moneyName: false, schemaKey: base.schemaKey, views }
+    }
+    // Una ficha solo lista las bases que se pudieron leer (o que se mantienen de la lectura anterior).
+    const listed = projects.map(project => ({ ...project, bases: project.bases.filter(url => Object.hasOwn(bases, url)) }))
+    return { snapshot: { projects: listed, bases, warnings }, schemas, stale }
   }
 
-  async function resolveSources(ref: DatabaseRef, project: string, warnings: string[], check: () => void): Promise<readonly string[]> {
-    if (ref.dataSourceUrl) {
-      return [ref.dataSourceUrl]
+  /** Bases y vistas de una etiqueta de base del cuerpo (`notion-fetch` de su URL). */
+  async function resolveRef(
+    ref: DatabaseRef,
+    project: string,
+    warnings: string[],
+    check: () => void,
+  ): Promise<{ sources: readonly string[]; views: readonly DatabaseView[] }> {
+    const known = ref.dataSourceUrl ? [ref.dataSourceUrl] : []
+    if (!ref.url) {
+      if (!ref.dataSourceUrl) {
+        warnings.push(`Una vista enlazada de la ficha «${project}» no lleva a ninguna base legible.`)
+      }
+      return { sources: known, views: [] }
     }
     try {
-      const sources = ref.url ? parseLinkedDataSources(await options.mcp.read('notion-fetch', { id: ref.url })) : []
+      const raw = await options.mcp.read('notion-fetch', { id: ref.url })
       check()
+      const sources = ref.dataSourceUrl ? known : parseLinkedDataSources(raw)
       if (sources.length === 0) {
         warnings.push(`Una vista enlazada de la ficha «${project}» no lleva a ninguna base legible.`)
       }
-      return sources
+      return { sources, views: parseDatabaseViews(raw) }
     } catch (error) {
       if (isFatal(error)) {
         throw error
       }
-      warnings.push(`No se pudo leer una vista enlazada de la ficha «${project}».`)
-      return []
+      if (!ref.dataSourceUrl) {
+        warnings.push(`No se pudo leer una vista enlazada de la ficha «${project}» (${reasonOf(error)}).`)
+      }
+      return { sources: known, views: [] }
     }
   }
 
-  /** Esquema y filas de una base. El esquema se lee siempre: decide qué propiedades salen. */
-  async function listBase(
-    url: string,
-    ref: DatabaseRef,
-    warnings: string[],
-    check: () => void,
-  ): Promise<{ base: SnapshotBase; schema: DataSourceSchema } | null> {
+  /**
+   * Vista con la que se leen las filas de una base desde una etiqueta: la que
+   * lleve la propia etiqueta; en una vista enlazada, la suya (lo que muestra la
+   * ficha); en una base incrustada, una sin filtros si la hay (todas las filas)
+   * o la primera.
+   */
+  function pickView(ref: DatabaseRef, views: readonly DatabaseView[], url: string, sources: number): DatabaseView | null {
+    if (ref.viewUrl) {
+      return views.find(view => view.viewUrl === ref.viewUrl) ?? { viewUrl: ref.viewUrl, dataSourceUrl: url, name: null, filtered: true }
+    }
+    const candidates = views.filter(view => view.dataSourceUrl === url || (view.dataSourceUrl === null && sources === 1))
+    if (!ref.dataSourceUrl) {
+      return candidates[0] ?? null
+    }
+    return candidates.find(view => !view.filtered) ?? candidates[0] ?? null
+  }
+
+  /** Nombre y esquema de una base, y si su nombre es económico. Un fallo queda anotado con su motivo. */
+  async function describeBase(url: string, ref: DatabaseRef, check: () => void): Promise<FoundBase> {
     try {
       const info = parseDataSource(await options.mcp.read('notion-fetch', { id: url }))
       check()
       const name = oneLine(info.name ?? '')
       // El nombre en la ficha y el propio de la base: cualquiera de los dos puede ser económico.
       const moneyName = hasMoney(ref.title) || hasMoney(name)
-      const title = moneyName ? 'Base omitida' : ref.title || name || 'Base sin título'
-      const key = schemaKey(info.schema)
-      if (moneyName) {
-        return { base: { dataSourceUrl: url, title, rows: [], truncated: false, moneyName, schemaKey: key }, schema: info.schema }
+      return {
+        title: moneyName ? 'Base omitida' : ref.title || name || 'Base sin título',
+        moneyName,
+        schema: info.schema,
+        schemaKey: schemaKey(info.schema),
+        views: [],
+        failure: null,
       }
-      const page = parseRows(await options.mcp.read(TOOL_ROWS, { data: { mode: 'rows', data_source_url: url, limit: limits.rowsPerBase } }))
-      check()
-      const seen = new Set<string>()
-      const rows: RowEntry[] = []
-      for (const row of page.rows) {
-        const entry = rowEntry(row, info.schema)
-        if (entry && !seen.has(entry.pageId)) {
-          seen.add(entry.pageId)
-          rows.push(entry)
-        }
-      }
-      if (page.hasMore) {
-        warnings.push(`La base «${title}» tiene más de ${limits.rowsPerBase} filas; Table lee las ${limits.rowsPerBase} primeras.`)
-      }
-      return { base: { dataSourceUrl: url, title, rows, truncated: page.hasMore, moneyName, schemaKey: key }, schema: info.schema }
     } catch (error) {
       if (isFatal(error)) {
         throw error
       }
-      warnings.push(`No se pudo leer la base «${safeLabel(ref.title, 'sin título')}».`)
-      return null
+      return { title: safeLabel(ref.title, 'sin título'), moneyName: false, schema: {}, schemaKey: '', views: [], failure: reasonOf(error) }
+    }
+  }
+
+  /** Todas las filas que muestra una vista, página a página con `next_cursor`. */
+  async function queryView(view: string, check: () => void): Promise<{ rows: Record<string, unknown>[]; truncated: boolean }> {
+    const rows: Record<string, unknown>[] = []
+    let cursor: string | null = null
+    for (let page = 1; ; page += 1) {
+      const data: Record<string, unknown> = { mode: 'view', view_url: view, is_archived: false }
+      if (cursor) {
+        data['start_cursor'] = cursor
+      }
+      const result = parseQueryPage(await options.mcp.read(TOOL_QUERY, { data }))
+      check()
+      rows.push(...result.rows)
+      if (!result.hasMore) {
+        return { rows, truncated: false }
+      }
+      if (!result.nextCursor || page >= limits.maxViewPages) {
+        return { rows, truncated: true }
+      }
+      cursor = result.nextCursor
     }
   }
 
@@ -874,6 +1027,7 @@ export function createNotionContent(options: NotionContentOptions): NotionConten
             excludedByChoice: base.excluded,
             filteredPages: base.filtered + tooBig,
             pages: listed,
+            views: base.base.views,
           }
         })
       return {
@@ -950,9 +1104,9 @@ export function createNotionContent(options: NotionContentOptions): NotionConten
       emit(mesaId, 'error', 0, 0, [], { message: 'Notion no está conectado: conecta en Ajustes para leer el contenido de las fichas' })
       return
     }
-    const { snapshot, schemas } = await list(mesa, check)
-    const selections = await readSelections(mesaId)
     const cache = await readCache(mesaId)
+    const { snapshot, schemas, stale } = await list(mesa, check, cache.snapshot)
+    const selections = await readSelections(mesaId)
     check()
     const plan = makePlan(snapshot, selections, limits.maxPages)
     const toRead = plan.projects.flatMap(project => project.bases.flatMap(base => base.chosen.map(row => ({ row, base: base.base }))))
@@ -968,18 +1122,23 @@ export function createNotionContent(options: NotionContentOptions): NotionConten
         if (usable(cached, base) && row.editedAt && cached.rowEditedAt === row.editedAt) {
           return cached
         }
+        // Base mantenida de la lectura anterior (no se pudo leer su esquema o sus vistas): solo la copia guardada.
+        const schema = schemas.get(base.dataSourceUrl)
+        if (stale.has(base.dataSourceUrl) || !schema) {
+          return usable(cached, base) ? cached : null
+        }
         check()
-        return await readRow(row, base, schemas.get(base.dataSourceUrl) ?? {}, check)
+        return await readRow(row, base, schema, check)
       } catch (error) {
         if (isFatal(error)) {
           throw error
         }
         const label = safeLabel(row.title, 'sin título')
         if (usable(cached, base)) {
-          readWarnings.push(`No se pudo actualizar «${label}»; se usa la copia del ${cached.fetchedAt.slice(0, 10)}.`)
+          readWarnings.push(`No se pudo actualizar «${label}» (${reasonOf(error)}); se usa la copia del ${cached.fetchedAt.slice(0, 10)}.`)
           return cached
         }
-        readWarnings.push(`No se pudo leer «${label}» de la base «${base.title}».`)
+        readWarnings.push(`No se pudo leer «${label}» de la base «${base.title}» (${reasonOf(error)}).`)
         return null
       } finally {
         done += 1
@@ -1069,7 +1228,7 @@ export function createNotionContent(options: NotionContentOptions): NotionConten
         throw new NotionError('Conecta Notion en Ajustes para elegir páginas', 'unauthorized')
       }
       const check = guard(new AbortController().signal, options.revision())
-      const { snapshot } = await list(await options.getMesa(mesaId), check)
+      const { snapshot } = await list(await options.getMesa(mesaId), check, (await readCache(mesaId)).snapshot)
       const selections = await readSelections(mesaId)
       const fichaIds = new Set(snapshot.projects.map(project => project.pageId))
       let hidden = 0

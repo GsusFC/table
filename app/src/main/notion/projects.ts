@@ -116,8 +116,8 @@ export function createProjectService(settings: SettingsStore, mcp: NotionMcp, us
         return { status: 'not-configured' }
       }
       const cached = await readCache(pageId)
-      // Una página a la que la cuenta no tiene acceso y sin copia previa se trata como web normal.
-      if (code === 'not-found' && !cached) {
+      // Una página a la que la cuenta no tiene acceso (o un ID que Notion rechaza) y sin copia previa se trata como web normal.
+      if ((code === 'not-found' || code === 'invalid') && !cached) {
         return { status: 'not-project' }
       }
       const message = error instanceof Error && (error instanceof NotionError || error instanceof UnrecognizedResponseError)

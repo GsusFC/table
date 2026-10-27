@@ -117,6 +117,8 @@ export interface IndexBase {
   readonly excludedByChoice: number
   readonly filteredPages: number
   readonly pages: readonly IndexPage[]
+  /** Vistas de las que salen las filas; una con filtro solo da las filas que muestra. */
+  readonly views: readonly { readonly name: string; readonly filtered: boolean }[]
 }
 
 export interface IndexProject {
@@ -187,6 +189,10 @@ export function formatIndex(input: IndexInput): string {
         counts.push('la base tiene más filas de las que Table lee')
       }
       lines.push(`### Base «${inlineMarkdown(base.title)}»`, '', `${counts.join('; ')}.`, '')
+      if (base.views.length > 0) {
+        const described = base.views.map(view => `«${inlineMarkdown(view.name)}» (${view.filtered ? 'con filtro: solo las filas que muestra' : 'sin filtro'})`)
+        lines.push(`Filas leídas de ${base.views.length === 1 ? 'la vista' : 'las vistas'} ${described.join(', ')}.`, '')
+      }
       if (base.pages.length > 0) {
         lines.push(...base.pages.map(pageLine), '')
       }

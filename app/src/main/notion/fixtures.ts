@@ -103,9 +103,25 @@ export const FIXTURE_PROJECT_PAGE = 'aaaaaaaabbbb4ccc8dddeeeeeeeeeeee'
 export const FIXTURE_PROCESS_SOURCE = 'collection://77777777-2222-4333-8444-555555555555'
 export const FIXTURE_DELIVERY_SOURCE = 'collection://88888888-2222-4333-8444-555555555555'
 export const FIXTURE_NESTED_SOURCE = 'collection://99999999-2222-4333-8444-555555555555'
-const PROCESS_DATABASE = 'https://app.notion.com/p/77777777bbbb4ccc8dddeeeeeeeeeeee'
-const DELIVERY_DATABASE = 'https://app.notion.com/p/88888888bbbb4ccc8dddeeeeeeeeeeee'
+export const FIXTURE_PROCESS_DATABASE = 'https://app.notion.com/p/77777777bbbb4ccc8dddeeeeeeeeeeee'
+export const FIXTURE_DELIVERY_DATABASE = 'https://app.notion.com/p/88888888bbbb4ccc8dddeeeeeeeeeeee'
 export const FIXTURE_LINKED_VIEW = 'https://app.notion.com/p/99999999bbbb4ccc8dddeeeeeeeeeeee'
+
+/**
+ * Vistas de las bases. La base de proceso tiene primero una vista filtrada y
+ * después una sin filtros (Table debe preferir la segunda); la vista enlazada
+ * de la ficha tiene su propio filtro; la de entregables, ninguno.
+ */
+export const FIXTURE_VIEWS = {
+  processActive: 'view://77770000-aaaa-4bbb-8ccc-000000000001',
+  processAll: 'view://77770000-aaaa-4bbb-8ccc-000000000002',
+  linkedActive: 'view://99990000-aaaa-4bbb-8ccc-000000000003',
+  delivery: 'view://88880000-aaaa-4bbb-8ccc-000000000004',
+} as const
+
+/** Mensaje real de Notion cuando se agota la cuota de los modos `rows` y SQL (comprobado el 2026-10-27). */
+export const FIXTURE_QUOTA_MESSAGE =
+  'Your workspace has used up its Query Data Source allowance for SQL and rows-mode queries. The allowance resets within 60 minutes. View mode with a database view URL still works.'
 
 export const FIXTURE_ROWS = {
   research: '10000000bbbb4ccc8dddeeeeeeeeeeee',
@@ -127,9 +143,9 @@ export const FIXTURE_PROJECT_CONTENT = [
   '\t\tDetalle: SECRETO-HIJO 1.200',
   '</callout>',
   '<embed src="https://example.com/SECRETO-EMBED"></embed>',
-  `<database url="${PROCESS_DATABASE}" data-source-url="${FIXTURE_PROCESS_SOURCE}" inline="true">Proceso sintético</database>`,
+  `<database url="${FIXTURE_PROCESS_DATABASE}" data-source-url="${FIXTURE_PROCESS_SOURCE}" inline="true">Proceso sintético</database>`,
   `<database url="${FIXTURE_LINKED_VIEW}" inline="true"></database>`,
-  `<database url="${DELIVERY_DATABASE}" data-source-url="${FIXTURE_DELIVERY_SOURCE}" inline="true">Entregables sintéticos</database>`,
+  `<database url="${FIXTURE_DELIVERY_DATABASE}" data-source-url="${FIXTURE_DELIVERY_SOURCE}" inline="true">Entregables sintéticos</database>`,
 ].join('\n')
 
 export const FIXTURE_PROCESS_SCHEMA: Record<string, unknown> = {
@@ -208,33 +224,70 @@ const ROW_CONTENT: Readonly<Record<string, string>> = {
 /** Edición de cada fila: cambiarla simula una página editada en Notion. */
 export type FixtureEdits = Readonly<Partial<Record<string, string>>>
 
-function rowsResponse(dataSourceUrl: string, edits: FixtureEdits): string | null {
+/** Respuesta sintética: texto o, si la herramienta falla, su mensaje de error. */
+export type FixtureResponse = string | { readonly error: string } | null
+
+/** Cursor de la segunda página de la vista sin filtros de la base de proceso. */
+const SECOND_PAGE = 'cursor-sintetico-2'
+
+function viewResponse(view: string, cursor: string | null, edits: FixtureEdits): string | null {
   const edited = (pageId: string): string => edits[pageId] ?? ROW_EDITED
-  if (dataSourceUrl === FIXTURE_PROCESS_SOURCE) {
-    return JSON.stringify({
-      results: [
-        processRow(FIXTURE_ROWS.research, 'Investigación', 'Revisar referencias', edited(FIXTURE_ROWS.research)),
-        processRow(FIXTURE_ROWS.concept, 'Concepto', 'Estimación SECRETO-NOTA 2k€', edited(FIXTURE_ROWS.concept)),
-        processRow(FIXTURE_ROWS.invoice, 'Factura final SECRETO-TITULO', '', edited(FIXTURE_ROWS.invoice)),
-      ],
-      has_more: false,
-    })
+  const research = processRow(FIXTURE_ROWS.research, 'Investigación', 'Revisar referencias', edited(FIXTURE_ROWS.research))
+  switch (view) {
+    // Paginada: dos filas, `next_cursor` y la tercera en la segunda página.
+    case FIXTURE_VIEWS.processAll:
+      return cursor === SECOND_PAGE
+        ? JSON.stringify({ results: [processRow(FIXTURE_ROWS.invoice, 'Factura final SECRETO-TITULO', '', edited(FIXTURE_ROWS.invoice))], has_more: false })
+        : JSON.stringify({
+            results: [research, processRow(FIXTURE_ROWS.concept, 'Concepto', 'Estimación SECRETO-NOTA 2k€', edited(FIXTURE_ROWS.concept))],
+            has_more: true,
+            next_cursor: SECOND_PAGE,
+          })
+    case FIXTURE_VIEWS.processActive:
+    case FIXTURE_VIEWS.linkedActive:
+      return JSON.stringify({ results: [research], has_more: false })
+    case FIXTURE_VIEWS.delivery:
+      return JSON.stringify({ results: [{ Name: 'Logotipo', Estado: 'Done', url: `https://app.notion.com/p/${FIXTURE_ROWS.logo}` }], has_more: false })
+    default:
+      return null
   }
-  if (dataSourceUrl === FIXTURE_DELIVERY_SOURCE) {
-    return JSON.stringify({ results: [{ Name: 'Logotipo', Estado: 'Done', url: `https://app.notion.com/p/${FIXTURE_ROWS.logo}` }], has_more: false })
-  }
-  return null
+}
+
+/** `notion-fetch` de una base o vista enlazada: sus bases de origen y sus vistas, como el MCP real. */
+export function fixtureDatabaseResponse(url: string, source: string, views: readonly { id: string; name: string; filtered: boolean }[]): string {
+  const blocks = views.map(view => {
+    const filter = view.filtered
+      ? { advancedFilter: { operator: 'and', filters: [{ property: 'Fase', filter: { operator: 'status_is', value: { type: 'exact', value: 'Descubrimiento' } } }] } }
+      : { simpleFilters: [] }
+    return `<view url="{{${view.id}}}">\n${JSON.stringify({ dataSourceUrl: `{{${source}}}`, displayProperties: ['Name', 'Fase'], name: view.name, ...filter })}\n</view>`
+  })
+  const text = [
+    `Here is the result of "fetch" for the Database with URL ${url}:`,
+    `<database url="{{${url}}}">`,
+    '<ancestor-path>\n</ancestor-path>',
+    `<data-sources>\n<data-source url="{{${source}}}">\n<data-source-state>\n{"name":"Base sintética","schema":{}}\n</data-source-state>\n</data-source>\n</data-sources>`,
+    "Here are the Database's Views:",
+    `<views>\n${blocks.join('\n')}\n</views>`,
+    '</database>',
+  ].join('\n')
+  return JSON.stringify({ metadata: { type: 'database' }, title: 'Base sintética', url, text })
 }
 
 /**
  * Respuesta sintética del MCP de Notion para el árbol de la ficha: `notion-fetch`
- * (ficha, bases, vista enlazada y filas) y `notion-query-data-sources`. Null si
- * no la conoce. La usan los tests y el MCP falso del smoke.
+ * (ficha, bases con sus vistas, vista enlazada y filas) y
+ * `notion-query-data-sources` en modo `view` (paginado con `next_cursor` /
+ * `start_cursor`). Los modos `rows` y SQL fallan como en un plan sin Notion AI
+ * con la cuota agotada. Null si no la conoce. La usan los tests y el MCP falso del smoke.
  */
-export function fixtureNotionResponse(tool: string, args: Record<string, unknown>, edits: FixtureEdits = {}): string | null {
+export function fixtureNotionResponse(tool: string, args: Record<string, unknown>, edits: FixtureEdits = {}): FixtureResponse {
   if (tool === 'notion-query-data-sources') {
     const data = args['data'] as Record<string, unknown> | undefined
-    return data?.['mode'] === 'rows' && typeof data['data_source_url'] === 'string' ? rowsResponse(data['data_source_url'], edits) : null
+    if (data?.['mode'] !== 'view') {
+      return { error: FIXTURE_QUOTA_MESSAGE }
+    }
+    const cursor = typeof data['start_cursor'] === 'string' ? data['start_cursor'] : null
+    return typeof data['view_url'] === 'string' ? viewResponse(data['view_url'], cursor, edits) : null
   }
   if (tool !== 'notion-fetch') {
     return null
@@ -252,9 +305,17 @@ export function fixtureNotionResponse(tool: string, args: Record<string, unknown
   if (id === FIXTURE_DELIVERY_SOURCE) {
     return fixtureDataSourceResponse(id, FIXTURE_DELIVERY_SCHEMA)
   }
+  if (id === FIXTURE_PROCESS_DATABASE) {
+    return fixtureDatabaseResponse(id, FIXTURE_PROCESS_SOURCE, [
+      { id: FIXTURE_VIEWS.processActive, name: 'En marcha', filtered: true },
+      { id: FIXTURE_VIEWS.processAll, name: 'Tabla', filtered: false },
+    ])
+  }
   if (id === FIXTURE_LINKED_VIEW) {
-    const text = `Here is the result of "fetch" for the Database with URL ${id}:\n<database url="${id}">\n<data-sources>\n<data-source url="{{${FIXTURE_PROCESS_SOURCE}}}">\nVista enlazada\n</data-source>\n</data-sources>\n</database>`
-    return JSON.stringify({ metadata: { type: 'database' }, title: 'Vista enlazada', url: id, text })
+    return fixtureDatabaseResponse(id, FIXTURE_PROCESS_SOURCE, [{ id: FIXTURE_VIEWS.linkedActive, name: 'Solo en marcha', filtered: true }])
+  }
+  if (id === FIXTURE_DELIVERY_DATABASE) {
+    return fixtureDatabaseResponse(id, FIXTURE_DELIVERY_SOURCE, [{ id: FIXTURE_VIEWS.delivery, name: 'Todo', filtered: false }])
   }
   const content = ROW_CONTENT[id]
   if (content === undefined) {

@@ -130,7 +130,7 @@ export function NotionPagesDialog({ mesaId, onSaved, onClose }: NotionPagesDialo
           return (
             <fieldset key={project.pageId} className="notion-pages-project">
               <legend className="field-label">{project.title}</legend>
-              <label className="frames-item">
+              <label className="frames-item notion-pages-base-row">
                 <input
                   type="checkbox"
                   checked={selection.body}
@@ -140,8 +140,11 @@ export function NotionPagesDialog({ mesaId, onSaved, onClose }: NotionPagesDialo
                     update(project.pageId, current => ({ ...current, body }))
                   }}
                 />
-                <span className="frames-item-name">Cuerpo de la ficha</span>
+                <span className="frames-item-name">Cuerpo de la ficha (texto del proyecto)</span>
               </label>
+              {!selection.body && (
+                <p className="frames-item-note notion-pages-note">Desmarcado: el agente no recibe el texto de la ficha.</p>
+              )}
               {project.bases.map(base => {
                 const marked = base.pages.filter(page => isPageSelected(selection, base.dataSourceUrl, page.pageId)).length
                 const all = base.pages.length > 0 && marked === base.pages.length
