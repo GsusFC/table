@@ -11,7 +11,7 @@ import {
   type Size,
   type Viewport,
 } from './model'
-import type { AgentUiState } from './ipc'
+import type { AgentUiState, SurfaceEnterOptions } from './ipc'
 import type { PanelBounds } from './surface'
 import {
   MAX_PROFILE_COMMAND_LENGTH,
@@ -214,6 +214,23 @@ export function parseAgentUiState(value: unknown): AgentUiState {
     selection: selection.map(parseId),
     editingNoteId: record['editingNoteId'] === null ? null : parseId(record['editingNoteId']),
   }
+}
+
+/** Opciones de entrar en una tarjeta al seguir al agente (T-012). */
+export function parseSurfaceEnterOptions(value: unknown): SurfaceEnterOptions {
+  if (value === undefined || value === null) {
+    return {}
+  }
+  const record = asRecord(value, 'Opciones de entrada')
+  const follow = record['follow']
+  if (follow !== undefined && typeof follow !== 'boolean') {
+    throw new Error('Opciones de entrada no válidas')
+  }
+  const nodeId = record['nodeId']
+  if (nodeId !== undefined && nodeId !== null && (typeof nodeId !== 'string' || !/^[0-9]{1,12}:[0-9]{1,12}$/.test(nodeId))) {
+    throw new Error('node-id no válido')
+  }
+  return { follow: follow === true, nodeId: typeof nodeId === 'string' ? nodeId : null }
 }
 
 /** Igual que el de una tarjeta: posición y tamaño. */

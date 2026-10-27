@@ -104,6 +104,10 @@ export const IPC = {
   agentConfirmCancel: 'agent:confirm-cancel',
   /** renderer → main, sin respuesta. */
   agentConfirmResponse: 'agent:confirm-response',
+  /** Tarjetas en las que trabajan los agentes (T-012). */
+  agentActivities: 'agent:activities',
+  /** main → renderer: cambió la lista de tarjetas en las que trabajan los agentes. */
+  agentActivity: 'agent:activity',
   /** main → renderer: progreso de la lectura del contenido de Notion de una mesa. */
   agentContextProgress: 'agent:context-progress',
   resultsUpdate: 'results:update',
@@ -163,8 +167,12 @@ export interface TableApi {
      * `kept` si alguna se mantiene y no se cambia de mesa.
      */
     openMesa(mesaId: MesaId | null): Promise<UnloadResult>
-    /** Carga la web si hace falta y la muestra en el panel principal. */
-    enter(mesaId: MesaId, cardId: CardId): Promise<void>
+    /**
+     * Carga la web si hace falta y la muestra en el panel principal. Con
+     * `follow` (seguir al agente), sin quitar el foco de donde esté y, si se
+     * da `nodeId` en una tarjeta de Figma, en ese nodo.
+     */
+    enter(mesaId: MesaId, cardId: CardId, options?: SurfaceEnterOptions): Promise<void>
     /** Captura, oculta la web (queda conservada) y devuelve el foco al lienzo. */
     exit(): Promise<void>
     unload(cardId: CardId): Promise<UnloadResult>
@@ -285,6 +293,9 @@ export interface TableApi {
     /** La petición caducó: cerrar su diálogo sin responder. */
     onConfirmCancel(listener: (requestId: string) => void): () => void
     respondConfirm(requestId: string, accepted: boolean): void
+    /** Tarjetas en las que trabaja algún agente ahora (T-012). */
+    activities(): Promise<AgentActivity[]>
+    onActivity(listener: (activities: readonly AgentActivity[]) => void): () => void
   }
   /** Tarjetas de resultado: archivos de `resultados/` en la carpeta de la mesa (T-008). */
   readonly results: {
@@ -321,12 +332,40 @@ export interface AgentUiState {
   readonly editingNoteId: string | null
 }
 
-/** Confirmación de un borrado pedido por un agente. */
+/** Confirmación pedida por un agente: un borrado (T-011) o usar las webs de la mesa (T-012). */
 export interface AgentConfirmRequest {
   readonly id: string
   readonly mesaId: MesaId
+  readonly kind: 'remove' | 'web'
   /** «Claude Code quiere borrar 2 elementos de la mesa». */
   readonly title: string
-  /** Una línea por elemento o conexión. */
+  /** Una línea por elemento o conexión; vacía si no hay lista. */
   readonly items: readonly string[]
+  readonly note: string
+  readonly confirmLabel: string
+}
+
+/** Cómo entrar en una tarjeta al seguir al agente (T-012). */
+export interface SurfaceEnterOptions {
+  /** Entrar sin quitar el foco a la interfaz (la terminal, por ejemplo). */
+  readonly follow?: boolean
+  /** node-id de Figma («12:34»): la web va a ese nodo. */
+  readonly nodeId?: string | null
+}
+
+/** Un agente trabaja en una tarjeta de la mesa (T-012): la tarjeta se ilumina. */
+export interface AgentActivity {
+  readonly sessionId: string
+  readonly mesaId: MesaId
+  readonly cardId: CardId
+  /** Nombre del perfil de la sesión («Claude Code»). */
+  readonly agentName: string
+  /** node-id de Figma, si lo indicó (`table_set_activity`). */
+  readonly nodeId: string | null
+  /** Qué hace, en pocas palabras, si lo dijo. */
+  readonly text: string | null
+  /** `web`: herramientas `table_web_*`; `announced`: `table_set_activity`. */
+  readonly source: 'web' | 'announced'
+  /** Inicio en esta tarjeta y nodo (ISO): un cambio de tarjeta o de nodo es una actividad nueva. */
+  readonly startedAt: string
 }

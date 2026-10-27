@@ -27,6 +27,8 @@ export interface Notice {
   readonly id: number
   readonly text: string
   readonly tone: 'info' | 'error'
+  /** Botón del aviso («Ver» la tarjeta en la que trabaja un agente). */
+  readonly action?: { readonly label: string; readonly run: () => void }
 }
 
 export interface EnteredCard {
@@ -34,6 +36,8 @@ export interface EnteredCard {
   readonly title: string
   readonly status: CardStatus
   readonly error: string | null
+  /** «Claude Code está trabajando» si un agente trabaja en esta web (T-012). */
+  readonly activity: string | null
 }
 
 interface TopBarProps {
@@ -180,6 +184,12 @@ export function TopBar({
                 {entered.status.label}
               </span>
             )}
+            {entered.activity && (
+              <span className="agent-activity-badge" role="status" title={entered.activity}>
+                <span className="agent-activity-dot" aria-hidden />
+                <span className="agent-activity-text">{entered.activity}</span>
+              </span>
+            )}
           </>
         )}
       </div>
@@ -195,6 +205,18 @@ export function TopBar({
             <span className="notice-text" title={notice.text}>
               {notice.text}
             </span>
+            {notice.action && (
+              <button
+                type="button"
+                className="button button-small notice-action"
+                onClick={() => {
+                  notice.action?.run()
+                  onDismissNotice()
+                }}
+              >
+                {notice.action.label}
+              </button>
+            )}
             <button type="button" className="icon-button icon-button-small" aria-label="Cerrar aviso" onClick={onDismissNotice}>
               <X aria-hidden size={14} strokeWidth={1.75} />
             </button>

@@ -1,5 +1,7 @@
 import {
   Ellipsis,
+  Eye,
+  EyeOff,
   FileText,
   ListChecks,
   PanelRightClose,
@@ -16,6 +18,7 @@ import type { AgentNotionMode, MesaId } from '../../shared/model'
 import type { NotionContextProgress } from '../../shared/notionContext'
 import type { AgentMcpName, HarnessProfile, SessionInfo } from '../../shared/terminal'
 import { errorMessage } from '../lib/errors'
+import { activityLabel, useAgentActivities, useFollowAgent } from '../lib/agentActivity'
 import {
   attachSession,
   closeSession,
@@ -57,7 +60,7 @@ interface AgentsPanelProps {
 }
 
 /** Nombre visible de cada MCP de la sesión (T-010). */
-const MCP_LABELS: Readonly<Record<AgentMcpName, string>> = { table: 'Table', figma: 'Figma', browser: 'Navegador', notion: 'Notion' }
+const MCP_LABELS: Readonly<Record<AgentMcpName, string>> = { table: 'Table', figma: 'Figma', notion: 'Notion' }
 
 /** Línea compacta del progreso de la lectura de Notion (T-009). */
 function progressText(progress: NotionContextProgress): string {
@@ -84,6 +87,8 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
   const sessions = useMesaSessions(mesaId)
   const detached = useDetached()
   const active = useActiveSession(mesaId, sessions)
+  const activities = useAgentActivities()
+  const [followAgent, setFollowAgent] = useFollowAgent()
   const [profiles, setProfiles] = useState<readonly HarnessProfile[] | null>(null)
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(null)
   /** Menú «Más acciones» del panel (p. ej. «Actualizar contexto»). */
@@ -275,6 +280,8 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
           {sessions.map(session => {
             const status = sessionStatus(session)
             const selected = session.id === active?.id
+            // La sesión trabaja en una tarjeta (T-012): la pestaña lo indica.
+            const working = activities.find(activity => activity.sessionId === session.id)
             return (
               <div key={session.id} className={selected ? 'agents-tab agents-tab-selected' : 'agents-tab'}>
                 <button
@@ -282,11 +289,13 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
                   role="tab"
                   className="agents-tab-button"
                   aria-selected={selected}
-                  title={`${session.title} · ${status.label}${detached.has(session.id) ? ' · en el lienzo' : ''}`}
+                  title={`${session.title} · ${working ? activityLabel(working) : status.label}${detached.has(session.id) ? ' · en el lienzo' : ''}`}
+                  data-working={working ? 'true' : undefined}
                   onClick={() => choose(session)}
                 >
-                  <span className={`agents-dot agents-dot-${status.tone}`} aria-hidden />
+                  <span className={working ? 'agents-dot agents-dot-working' : `agents-dot agents-dot-${status.tone}`} aria-hidden />
                   <span className="agents-tab-title">{session.title}</span>
+                  {working && <span className="visually-hidden">, trabajando en una tarjeta</span>}
                   {session.status === 'exited' && (
                     <span className="agents-tab-code tabular">{session.exitCode ?? '–'}</span>
                   )}
@@ -306,6 +315,20 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
           })}
         </div>
         <div className="agents-actions">
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Seguir al agente"
+            aria-pressed={followAgent}
+            title={
+              followAgent
+                ? 'Seguir al agente: activado. Cuando un agente empieza a trabajar en una tarjeta, Table la abre (salvo si escribes o estás en otra web).'
+                : 'Seguir al agente: desactivado. La tarjeta se ilumina y un aviso ofrece «Ver».'
+            }
+            onClick={() => setFollowAgent(!followAgent)}
+          >
+            {followAgent ? <Eye aria-hidden size={16} strokeWidth={1.75} /> : <EyeOff aria-hidden size={16} strokeWidth={1.75} />}
+          </button>
           <button
             type="button"
             className="icon-button"
@@ -490,7 +513,7 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
               hint: notionMode === 'files' ? 'activo' : undefined,
               disabled: notionMode === null,
               title:
-                'Table no configura el MCP de Notion en las sesiones nuevas. No es una garantía: con el navegador autorizado, el agente puede abrir Notion en Chrome igualmente.',
+                'Table no configura el MCP de Notion en las sesiones nuevas y sus herramientas web no abren Notion. No es una garantía: un MCP de Notion en la configuración global del arnés sigue disponible para el agente.',
               // Elegirlo aunque ya esté activo vuelve a quitar Notion de los archivos (p. ej. tras un error).
               onSelect: () => {
                 saveNotionMode('files').catch((error: unknown) => notify(errorMessage(error)))
@@ -545,8 +568,7 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
                 autorizar Notion con tu cuenta.
               </p>
               <p>
-                «Archivos filtrados» tampoco es una garantía si autorizas el navegador: con él, el agente puede abrir
-                Notion en Chrome igualmente.
+                Las herramientas web de Table también podrán abrir y mirar las webs de Notion de esta mesa con tu sesión.
               </p>
             </>
           }

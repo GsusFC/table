@@ -10,6 +10,7 @@ import {
 } from 'electron'
 import { isHttpUrl } from '../../shared/validate'
 import { log, originOf } from '../log'
+import { navigationPolicy, sharePolicy, type NavigationPolicy } from './navigationPolicy'
 
 /** Sesión compartida por todas las webs de las tarjetas (cookies y logins persistentes). */
 export const SURFACE_PARTITION = 'persist:table'
@@ -144,22 +145,32 @@ export function attachContextMenu(contents: WebContents): void {
 /**
  * Navegación limitada a http(s). Los popups http(s) o `about:blank` se abren
  * como ventana hija real, con la misma sesión, para no romper logins que
- * usan `window.opener`. Cada popup recibe las mismas restricciones y se
- * notifica con `onPopup` para que su dueño pueda cerrarlo al descargar.
+ * usan `window.opener`. Cada popup recibe las mismas restricciones (y la
+ * misma política del agente) y se notifica con `onPopup` para que su dueño
+ * pueda cerrarlo al descargar.
  */
 export function guardNavigation(
   contents: WebContents,
   parent: BrowserWindow,
   onPopup: (popup: BrowserWindow) => void,
+  policy: NavigationPolicy = navigationPolicy(contents),
 ): void {
+  sharePolicy(contents, policy)
+  const blockedByAgent = (url: string): boolean => {
+    const blocked = isHttpUrl(url) && policy.blocked !== null && policy.blocked(url)
+    if (blocked) {
+      log('navigation-blocked-for-agent', { origin: originOf(url) })
+    }
+    return blocked
+  }
   contents.setWindowOpenHandler(({ url }) => {
-    const opened = url === 'about:blank' || isHttpUrl(url)
+    const opened = (url === 'about:blank' || isHttpUrl(url)) && !blockedByAgent(url)
     const origin = isHttpUrl(url) ? originOf(url) : schemeOf(url)
     log(opened ? 'popup-opened' : 'popup-blocked', { origin })
     return opened ? { action: 'allow', overrideBrowserWindowOptions: popupWindowOptions(parent) } : { action: 'deny' }
   })
   contents.on('did-create-window', popup => {
-    guardNavigation(popup.webContents, parent, onPopup)
+    guardNavigation(popup.webContents, parent, onPopup, policy)
     attachContextMenu(popup.webContents)
     popup.once('closed', () => log('popup-closed'))
     onPopup(popup)
@@ -169,8 +180,16 @@ export function guardNavigation(
     if (!isHttpUrl(event.url)) {
       log('navigation-blocked', { scheme: schemeOf(event.url) })
       event.preventDefault()
+    } else if (blockedByAgent(event.url)) {
+      event.preventDefault()
     }
   }
   contents.on('will-navigate', allowOnlyWeb)
   contents.on('will-redirect', allowOnlyWeb)
+  // Los iframes también: una web no puede enseñar Notion dentro de un frame mientras la usa el agente.
+  contents.on('will-frame-navigate', event => {
+    if (!event.isMainFrame && blockedByAgent(event.url)) {
+      event.preventDefault()
+    }
+  })
 }

@@ -2166,3 +2166,112 @@ kbd {
 .settings-row .profile-name-input {
   flex: 0 0 120px;
 }
+
+/* ---------- Luz de actividad de los agentes (T-012) ---------- */
+
+/* La tarjeta en la que trabaja un agente: borde de acento y un halo que respira. */
+.card-agent-active {
+  border-color: var(--color-accent);
+  box-shadow: var(--agent-glow-rest);
+  animation: agent-glow var(--agent-glow-period) ease-in-out infinite;
+}
+
+.canvas .react-flow__node.selected .card-agent-active {
+  border-color: var(--color-accent);
+}
+
+@keyframes agent-glow {
+  0%,
+  100% {
+    box-shadow: var(--agent-glow-rest);
+  }
+
+  50% {
+    box-shadow: var(--agent-glow-peak);
+  }
+}
+
+/* «<agente> está trabajando», en una franja bajo el borde superior de la tarjeta. */
+.card-agent-label {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  margin: 0;
+  padding: 2px var(--space-2);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.agent-activity-badge {
+  display: inline-flex;
+  flex-shrink: 1;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 320px;
+  height: 20px;
+  padding: 0 var(--space-2);
+  border-radius: 9999px;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.agent-activity-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-activity-dot,
+.agents-dot-working {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  background: var(--color-accent);
+  animation: agent-pulse var(--agent-glow-period) ease-in-out infinite;
+}
+
+@keyframes agent-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.notice-action {
+  flex-shrink: 0;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Sin movimiento: la luz se queda fija, igual de visible. */
+@media (prefers-reduced-motion: reduce) {
+  .card-agent-active,
+  .agent-activity-dot,
+  .agents-dot-working {
+    animation: none;
+  }
+
+  .card-agent-active {
+    box-shadow: var(--agent-glow-peak);
+  }
+}

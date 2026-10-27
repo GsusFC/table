@@ -7,6 +7,7 @@ import type { Card } from '../../shared/model'
 import { serviceById } from '../../shared/services'
 import { absoluteDate, displayHost, relativeDate } from '../lib/format'
 import { useFrameThumbnail } from '../lib/figmaThumbnails'
+import { activityLabel, useCardActivity } from '../lib/agentActivity'
 import { cardStatus } from '../lib/status'
 import { useCanvas } from './canvasContext'
 import { ProjectFace, ProjectSource, useProjectView } from './ProjectFace'
@@ -41,6 +42,8 @@ export const CardNode = memo(function CardNode({ id, data, selected }: NodeProps
   const [brokenSrc, setBrokenSrc] = useState<string | null>(null)
   const showCapture = captureSrc !== null && brokenSrc !== captureSrc
   const menuOpen = canvas.menuItemId === card.id
+  // Un agente trabaja en esta tarjeta (T-012): se ilumina con su nombre.
+  const activity = useCardActivity(card.id)
 
   return (
     <>
@@ -54,7 +57,17 @@ export const CardNode = memo(function CardNode({ id, data, selected }: NodeProps
         handleClassName="card-resize-handle"
         onResizeEnd={(_event, params) => canvas.resizeEnd(id, params)}
       />
-      <article className="card" aria-label={`${service.name}: ${title}`}>
+      <article
+        className={activity ? 'card card-agent-active' : 'card'}
+        aria-label={`${service.name}: ${title}`}
+        data-agent-active={activity ? activity.sessionId : undefined}
+      >
+        {activity && (
+          <p className="card-agent-label" role="status" title={activityLabel(activity)}>
+            <span className="agent-activity-dot" aria-hidden />
+            <span className="agent-activity-text">{activityLabel(activity)}</span>
+          </p>
+        )}
         <header className="card-header">
           <ServiceBadge service={service} />
           <span className="card-service">{service.name}</span>

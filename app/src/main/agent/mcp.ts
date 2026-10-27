@@ -12,10 +12,11 @@ import { TABLE_MCP_ENV_NAMES } from './tableMcp'
 
 /**
  * MCP de los agentes (D-019, T-010). Table configura en cada sesión de un
- * arnés conocido el MCP oficial de Figma, uno de navegador que usa el Chrome
- * de la persona y, si la mesa lo permite, el MCP oficial de Notion. Solo
- * define servidores: nunca copia credenciales de Table; cada arnés hace su
- * propia autorización con la cuenta de la persona.
+ * arnés conocido el MCP oficial de Figma y, si la mesa lo permite, el MCP
+ * oficial de Notion. Solo define servidores: nunca copia credenciales de
+ * Table; cada arnés hace su propia autorización con la cuenta de la persona.
+ * Las webs las usa el agente con el MCP de Table, dentro de Table (D-021):
+ * ya no se configura el MCP de Chrome.
  *
  * Por arnés (comprobado con las versiones instaladas el 2026-10-27, ver
  * docs/tasks/010-mcp-de-los-agentes.md):
@@ -34,23 +35,12 @@ import { TABLE_MCP_ENV_NAMES } from './tableMcp'
  */
 
 export const FIGMA_MCP_URL = 'https://mcp.figma.com/mcp'
-/** Chrome DevTools MCP de Google, versión fijada: se conecta al Chrome en uso (Chrome 144+) con permiso de la persona. */
-export const BROWSER_MCP_PACKAGE = 'chrome-devtools-mcp@1.12.0'
 /**
- * Dirección fija del servidor de depuración que abre `chrome://inspect/#remote-debugging`.
- * No se usa `--autoConnect`: lee `DevToolsActivePort` del perfil de Chrome, y macOS
- * protege esa carpeta frente a otras apps (`deny file-read-data`, comprobado el 2026-10-27).
- * Sin el identificador de la URL, Chrome acepta la conexión tras su diálogo «Permitir».
+ * Entrada del MCP de Chrome que Table configuraba antes de D-021. Se retira:
+ * Table la quita de los archivos de proyecto en los que la creó él (registro)
+ * y nunca toca una entrada de la persona con ese nombre.
  */
-export const BROWSER_WS_ENDPOINT = 'ws://127.0.0.1:9222/devtools/browser'
-const BROWSER_MCP_COMMAND = 'npx'
-const BROWSER_MCP_ARGS: readonly string[] = [
-  '-y',
-  BROWSER_MCP_PACKAGE,
-  `--wsEndpoint=${BROWSER_WS_ENDPOINT}`,
-  '--no-usage-statistics',
-  '--no-performance-crux',
-]
+export const LEGACY_BROWSER_MCP_KEY = 'table-chrome-devtools'
 
 type McpTransport =
   | { readonly kind: 'remote'; readonly url: string }
@@ -79,22 +69,6 @@ export interface TableBridge {
 }
 
 const FIGMA: AgentMcpServer = { name: 'figma', key: 'table-figma', transport: { kind: 'remote', url: FIGMA_MCP_URL } }
-/**
- * Sin `browser` en el nombre: omp descarta los MCP de navegador que se llaman
- * así. Con las variables del MCP de Table vacías: el arnés pasa su entorno a
- * sus MCP, y el navegador (un paquete de terceros) no debe recibir el testigo
- * de la sesión. Codex no las pasa salvo con `env_vars`, que solo lleva `table`.
- */
-const BROWSER: AgentMcpServer = {
-  name: 'browser',
-  key: 'table-chrome-devtools',
-  transport: {
-    kind: 'local',
-    command: BROWSER_MCP_COMMAND,
-    args: BROWSER_MCP_ARGS,
-    env: Object.fromEntries(TABLE_MCP_ENV_NAMES.map(name => [name, ''])),
-  },
-}
 const NOTION: AgentMcpServer = { name: 'notion', key: 'table-notion', transport: { kind: 'remote', url: NOTION_MCP_URL } }
 export const NOTION_MCP_KEY = NOTION.key
 export const TABLE_MCP_KEY = 'table'
@@ -113,16 +87,14 @@ function tableServer(bridge: TableBridge): AgentMcpServer {
   }
 }
 
-/** Servidores de una sesión: Table (si su servidor está en marcha), Figma y navegador siempre; Notion solo si la mesa lo permite. */
+/** Servidores de una sesión: Table (si su servidor está en marcha) y Figma siempre; Notion solo si la mesa lo permite. */
 export function agentMcpServers(mode: AgentNotionMode, bridge: TableBridge | null = null): readonly AgentMcpServer[] {
-  return [...(bridge ? [tableServer(bridge)] : []), FIGMA, BROWSER, ...(mode === 'mcp' ? [NOTION] : [])]
+  return [...(bridge ? [tableServer(bridge)] : []), FIGMA, ...(mode === 'mcp' ? [NOTION] : [])]
 }
 
 /** Lo que puede hacer el agente con el MCP de Table, para el chip. */
-const TABLE_HINT = `El agente trabaja en esta mesa: ${AGENT_TOOLS.map(tool => tool.title.toLowerCase()).join(', ')}. Borrar pide tu confirmación en Table. No hace falta autorizarlo.`
-
-const BROWSER_HINT =
-  'Usa tu Chrome (versión 144 o posterior): activa una vez chrome://inspect/#remote-debugging; Chrome pide permiso cada vez que el agente se conecta. Con el permiso, el agente puede abrir cualquier web de ese Chrome, Notion incluido.'
+const TABLE_HINT =
+  'El agente trabaja en esta mesa (leer, añadir, cambiar, mover, conectar y borrar con tu confirmación) y en las webs de sus tarjetas, dentro de Table y a la vista: la primera vez te pide permiso y la tarjeta se ilumina mientras trabaja. No hace falta autorizarlo.'
 const NOTION_WARNING = 'Sin filtro de Table: el agente puede leer presupuestos, oportunidades e importes.'
 
 /** Archivo de configuración de proyecto en la carpeta de la mesa, fusionado con lo que ya tenga. */
@@ -163,13 +135,10 @@ function stdioEntry(transport: Extract<McpTransport, { kind: 'local' }>, type?: 
   }
 }
 
-/** Ayuda del chip: Table y navegador, iguales en todos; el resto, la del arnés. */
+/** Ayuda del chip: la de Table, igual en todos; el resto, la del arnés. */
 function hint(server: AgentMcpServer, auth: (server: AgentMcpServer) => string): string {
   if (server.name === 'table') {
     return TABLE_HINT
-  }
-  if (server.name === 'browser') {
-    return BROWSER_HINT
   }
   return server.name === 'notion' ? `${auth(server)} ${NOTION_WARNING}` : auth(server)
 }
@@ -209,10 +178,6 @@ function codex(servers: readonly AgentMcpServer[]): McpLaunch {
       // Codex no pasa el entorno entero a sus MCP: solo los nombres de `env_vars`.
       args.push('-c', `${prefix}.env_vars=${JSON.stringify(transport.forwardEnv)}`)
     }
-    if (server.name === 'browser') {
-      // La primera vez `npx` descarga el paquete: más que los 10 s por defecto.
-      args.push('-c', `${prefix}.startup_timeout_sec=60`)
-    }
   }
   return {
     args,
@@ -239,7 +204,7 @@ function geminiFile(servers: readonly AgentMcpServer[]): McpProjectFile {
   return {
     path: GEMINI_SETTINGS,
     servers: serverMap(servers, transport => (transport.kind === 'remote' ? { httpUrl: transport.url } : stdioEntry(transport))),
-    managed: [TABLE_MCP_KEY, FIGMA.key, BROWSER.key, NOTION.key],
+    managed: [TABLE_MCP_KEY, FIGMA.key, NOTION.key, LEGACY_BROWSER_MCP_KEY],
   }
 }
 
@@ -277,7 +242,7 @@ function ompFile(servers: readonly AgentMcpServer[]): McpProjectFile {
       servers.filter(server => server.name !== 'figma'),
       transport => (transport.kind === 'remote' ? { type: 'http', url: transport.url } : stdioEntry(transport, 'stdio')),
     ),
-    managed: [TABLE_MCP_KEY, BROWSER.key, NOTION.key],
+    managed: [TABLE_MCP_KEY, NOTION.key, LEGACY_BROWSER_MCP_KEY],
   }
 }
 
@@ -513,6 +478,13 @@ export interface AgentMcp {
    * queda guardado y los arneses que leen ese archivo no arrancan).
    */
   setMode(mesaId: MesaId, mode: AgentNotionMode): Promise<AgentNotionMode>
+  /**
+   * Al arrancar Table: quita la entrada del MCP de Chrome (retirado, D-021)
+   * de los archivos de proyecto donde la creó Table, según su registro. Las
+   * entradas de la persona y el resto del archivo no se tocan. Devuelve los
+   * archivos limpiados.
+   */
+  retireLegacy(): Promise<string[]>
 }
 
 export function createAgentMcp(options: AgentMcpOptions): AgentMcp {
@@ -589,9 +561,19 @@ export function createAgentMcp(options: AgentMcpOptions): AgentMcp {
     }
   }
 
+  /** Archivo de Table que no se pudo reescribir, y qué entradas suyas quedaron dentro sin poder quitarse. */
+  interface SyncFailure {
+    readonly path: string
+    readonly reason: string
+    /** El Notion de Table sigue con la mesa en «archivos filtrados». */
+    readonly notionLeft: boolean
+    /** Sigue el MCP de Chrome retirado (D-021). */
+    readonly browserLeft: boolean
+  }
+
   /** Reescribe con `mode` los archivos de la carpeta donde Table tiene entradas. Devuelve los que fallaron. */
-  async function syncFolder(folder: string, mode: AgentNotionMode): Promise<{ path: string; reason: string; notionLeft: boolean }[]> {
-    const failures: { path: string; reason: string; notionLeft: boolean }[] = []
+  async function syncFolder(folder: string, mode: AgentNotionMode): Promise<SyncFailure[]> {
+    const failures: SyncFailure[] = []
     const tracked = Object.keys(await loadRegistry()).filter(path => path.startsWith(folder + sep))
     for (const absolute of tracked) {
       const relativePath = absolute.slice(folder.length + 1)
@@ -601,7 +583,12 @@ export function createAgentMcp(options: AgentMcpOptions): AgentMcp {
       }
       const result = await apply(folder, spec(mode, options.tableBridge?.() ?? null), false)
       if (result.reason !== null) {
-        failures.push({ path: relativePath, reason: result.reason, notionLeft: mode === 'files' && result.owned.has(NOTION.key) })
+        failures.push({
+          path: relativePath,
+          reason: result.reason,
+          notionLeft: mode === 'files' && result.owned.has(NOTION.key),
+          browserLeft: result.owned.has(LEGACY_BROWSER_MCP_KEY),
+        })
       }
     }
     return failures
@@ -620,12 +607,22 @@ export function createAgentMcp(options: AgentMcpOptions): AgentMcp {
           return { args: launch.args, env: launch.env, mcp: launch.mcp, isCurrent: () => (revisions.get(mesaId) ?? 0) === revision }
         }
         await options.verifyFolder(folder)
-        const stuck = (await syncFolder(folder, mode)).filter(failure => failure.notionLeft && reads.includes(failure.path))
+        const failures = (await syncFolder(folder, mode)).filter(failure => reads.includes(failure.path))
+        const stuck = failures.filter(failure => failure.notionLeft)
         if (stuck.length > 0) {
           throw new SessionBlockedError(
             `La mesa usa «archivos filtrados», pero Table no pudo quitar su MCP de Notion de ${stuck
               .map(failure => failure.path)
               .join(' y ')} (${stuck.map(failure => failure.reason).join(' ')}). Arréglalo o quita la entrada «${NOTION.key}» y vuelve a abrir la sesión.`,
+          )
+        }
+        // El MCP de Chrome se retiró (D-021): un arnés que aún lo leería de un archivo de Table no arranca.
+        const withBrowser = failures.filter(failure => failure.browserLeft)
+        if (withBrowser.length > 0) {
+          throw new SessionBlockedError(
+            `Table no pudo quitar el MCP de Chrome retirado de ${withBrowser
+              .map(failure => failure.path)
+              .join(' y ')} (${withBrowser.map(failure => failure.reason).join(' ')}). El agente usa las webs dentro de Table: arréglalo o quita la entrada «${LEGACY_BROWSER_MCP_KEY}» y vuelve a abrir la sesión.`,
           )
         }
         const results = await Promise.all(launch.files.map(file => apply(folder, file, true)))
@@ -665,6 +662,33 @@ export function createAgentMcp(options: AgentMcpOptions): AgentMcp {
           )
         }
         return saved
+      })
+    },
+
+    retireLegacy() {
+      return enqueue(async () => {
+        const cleaned: string[] = []
+        for (const [absolute, keys] of Object.entries(await loadRegistry())) {
+          const relativePath = Object.keys(PROJECT_FILES).find(file => absolute.endsWith(sep + file))
+          if (!keys.includes(LEGACY_BROWSER_MCP_KEY) || relativePath === undefined) {
+            continue
+          }
+          const folder = absolute.slice(0, absolute.length - relativePath.length - 1)
+          try {
+            // Igual que al escribir: la carpeta tiene que seguir siendo la de una mesa, nunca un enlace.
+            await options.verifyFolder(folder)
+          } catch {
+            log('agent-mcp-retire-skipped', { file: relativePath })
+            continue
+          }
+          const result = await apply(folder, { path: relativePath, servers: {}, managed: [LEGACY_BROWSER_MCP_KEY] }, false)
+          if (result.reason === null) {
+            cleaned.push(absolute)
+          } else {
+            log('agent-mcp-retire-failed', { file: relativePath })
+          }
+        }
+        return cleaned
       })
     },
   }

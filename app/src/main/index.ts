@@ -16,7 +16,7 @@ import { existsSync, mkdtempSync } from 'node:fs'
 import { homedir, tmpdir, userInfo } from 'node:os'
 import { extname, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { figmaFileKey } from '../shared/figma'
+import { figmaFileKey, figmaFrameUrl, figmaNodeId } from '../shared/figma'
 import { randomUUID } from 'node:crypto'
 import {
   CAPTURE_PROTOCOL,
@@ -44,12 +44,15 @@ import {
   parseProfileId,
   parseTerminalInput,
   parseTerminalSize,
+  parseSurfaceEnterOptions,
   parseViewport,
 } from '../shared/validate'
 import { CONTEXT_FILE, createAgentContext, type AgentContext } from './agent/context'
 import { createAgentMcp, supportsTableMcp, type AgentMcp, type TableBridge } from './agent/mcp'
 import { startTableMcpServer, type TableMcpServer } from './agent/tableMcp'
-import { createTableToolHandlers, type RemovalRequest } from './agent/tableTools'
+import { createTableToolHandlers, type AgentConfirmation } from './agent/tableTools'
+import { createActivityTracker, type ActivityTracker } from './agent/activity'
+import { createWebToolHandlers } from './agent/webTools'
 import { createNotionContent, type NotionContent } from './agent/notionContent'
 import { NOTION_DIR } from './agent/notionFiles'
 import { createResultsWatcher, IMAGE_MIME, type ResultEntry, type ResultsWatcher } from './agent/results'
@@ -60,12 +63,13 @@ import { createFigmaClient } from './figma/client'
 import { createFrameService, FIGMA_THUMB_PROTOCOL, type FrameService } from './figma/frames'
 import { createSettingsStore, type SettingsStore } from './settings/settingsStore'
 import { runMeasure } from './measure'
-import { runSmoke, smokeHooks } from './smoke'
+import { runSmoke, SMOKE_REMOTE_HOST, smokeHooks } from './smoke'
 import { createMesaStore } from './store/mesaStore'
 import type { MesaStore } from './store/types'
 import { createProfileCatalog, loginShellDetector, type ProfileCatalog } from './terminal/profiles'
 import { createSessionManager, sessionEnvironment, type SessionManager } from './terminal/sessions'
 import { createWorkFolders, type WorkFolders } from './terminal/workFolder'
+import { createAgentPages } from './web/agentPages'
 import { createSurfaceManager } from './web/surfaceManager'
 import type { SurfaceManager } from './web/types'
 
@@ -81,6 +85,8 @@ if (smokeMode) {
   // un tiempo variable y a veces no muestra nada en 20 s: el smoke prueba Table, no los dotfiles.
   process.env['SHELL'] = '/bin/zsh'
   process.env['ZDOTDIR'] = mkdtempSync(join(tmpdir(), 'table-smoke-zsh-'))
+  // Una web «no local» para el navegador del agente (T-012): un nombre .test que resuelve a la página sintética local.
+  app.commandLine.appendSwitch('host-resolver-rules', `MAP ${SMOKE_REMOTE_HOST} 127.0.0.1`)
 }
 
 protocol.registerSchemesAsPrivileged([
@@ -332,16 +338,24 @@ function registerIpc(): void {
     }
     return outcome
   })
-  handle(IPC.surfaceEnter, async (mesaId, cardId) => {
+  handle(IPC.surfaceEnter, async (mesaId, cardId, options) => {
     const parsedMesa = parseId(mesaId)
     const parsedCard = parseId(cardId)
+    const { follow, nodeId } = parseSurfaceEnterOptions(options)
     const mesa = await requireStore().get(parsedMesa)
     const card = mesa.cards.find(candidate => candidate.id === parsedCard)
     if (!card) {
       throw new Error('La tarjeta no existe')
     }
     // El almacén ya valida al leer; se vuelve a exigir http(s) antes de cargar.
-    await requireSurface().enter(parsedMesa, parsedCard, parseHttpUrl(card.url))
+    const url = parseHttpUrl(card.url)
+    // Seguir al agente en un frame de Figma (T-012): la web va a ese nodo del archivo, si no está ya en él.
+    const isFigmaFile = figmaFileKey(url, smokeMode ? ['figma.com', '127.0.0.1'] : undefined) !== null
+    const target = nodeId && isFigmaFile ? figmaFrameUrl(url, nodeId) : url
+    await requireSurface().enter(parsedMesa, parsedCard, target, {
+      focus: !follow,
+      ...(target !== url ? { shouldNavigate: (current: string | null) => current === null || figmaNodeId(current) !== nodeId } : {}),
+    })
   })
   handle(IPC.surfaceExit, () => requireSurface().exit())
   handle(IPC.surfaceUnload, cardId => requireSurface().unload(parseId(cardId)))
@@ -645,14 +659,18 @@ function registerAgentIpc(): void {
 let tableMcp: TableMcpServer | null = null
 /** Lo que la interfaz informa: mesa abierta, selección y nota en edición. */
 let agentUi: AgentUiState = { mesaId: null, selection: [], editingNoteId: null }
-/** Confirmaciones de borrado esperando respuesta de la interfaz. */
+/** Confirmaciones pedidas por un agente (borrar, usar las webs) esperando respuesta de la interfaz. */
 const pendingConfirms = new Map<string, (accepted: boolean) => void>()
 /**
- * Tiempo para contestar un borrado del agente. Después se rechaza: el arnés
- * dejaría de esperar (Codex corta las herramientas a los 60 s) y la persona
- * no debe aceptar algo que el agente ya dio por fallido.
+ * Tiempo para contestar a un agente. Después se rechaza: el arnés dejaría de
+ * esperar (Codex corta las herramientas a los 60 s) y la persona no debe
+ * aceptar algo que el agente ya dio por fallido.
  */
 const AGENT_CONFIRM_TIMEOUT_MS = 50_000
+/** Luz de actividad de los agentes en las tarjetas (T-012). */
+let agentActivity: ActivityTracker | null = null
+/** Las webs de las tarjetas vistas por el agente (T-012). */
+const agentPages = createAgentPages()
 
 /** La interfaz se recarga: su estado y sus diálogos pendientes ya no valen. */
 function resetAgentUi(): void {
@@ -663,13 +681,13 @@ function resetAgentUi(): void {
 }
 
 /**
- * Borrado pedido por un agente: si su mesa está abierta, con el diálogo de
- * confirmación de Table (la interfaz cierra antes la web abierta); si no, con
- * un diálogo nativo sobre la ventana. Sin respuesta a tiempo, o si `signal`
- * se cancela (sesión cerrada, puente desconectado, petición cancelada), se
- * retira el diálogo y se rechaza.
+ * Confirmación pedida por un agente (borrar, T-011; usar las webs, T-012):
+ * si su mesa está abierta, con el diálogo de Table (la interfaz cierra antes
+ * la web abierta); si no, con un diálogo nativo sobre la ventana. Sin
+ * respuesta a tiempo, o si `signal` se cancela (sesión cerrada, puente
+ * desconectado, petición cancelada), se retira el diálogo y se rechaza.
  */
-async function confirmAgentRemoval(request: RemovalRequest, signal: AbortSignal): Promise<boolean> {
+async function confirmAgent(request: AgentConfirmation, signal: AbortSignal): Promise<boolean> {
   const window = mainWindow
   if (!window || window.isDestroyed() || signal.aborted) {
     return false
@@ -694,18 +712,26 @@ async function confirmAgentRemoval(request: RemovalRequest, signal: AbortSignal)
     }
     expired.addEventListener('abort', withdraw, { once: true })
     pendingConfirms.set(id, finish)
-    const message: AgentConfirmRequest = { id, mesaId: request.mesaId, title: request.title, items: request.items }
+    const message: AgentConfirmRequest = {
+      id,
+      mesaId: request.mesaId,
+      kind: request.kind,
+      title: request.title,
+      items: request.items,
+      note: request.note,
+      confirmLabel: request.confirmLabel,
+    }
     sendToRenderer(IPC.agentConfirmRequest, message)
     return promise
   }
   if (smokeMode) {
-    return smokeHooks.confirmAgentRemoval(request) && !expired.aborted
+    return smokeHooks.confirmAgent(request) && !expired.aborted
   }
   const { response } = await dialog.showMessageBox(window, {
-    type: 'warning',
+    type: request.kind === 'remove' ? 'warning' : 'question',
     message: request.title,
-    detail: `${request.items.join('\n')}\n\nLo pide el agente desde su sesión. El archivo de un resultado se queda en resultados/.`,
-    buttons: ['Cancelar', 'Borrar'],
+    detail: [...request.items, ...(request.items.length > 0 ? [''] : []), request.note].join('\n'),
+    buttons: ['Cancelar', request.confirmLabel],
     defaultId: 0,
     cancelId: 0,
     signal: expired,
@@ -722,6 +748,7 @@ function registerTableMcpIpc(): void {
       pendingConfirms.get(requestId)?.(accepted)
     }
   })
+  handle(IPC.agentActivities, () => agentActivity?.list() ?? [])
 }
 
 /** Cómo arranca un arnés el puente stdio: el ejecutable de Table en modo Node con `mcpBridge.js`, junto al proceso principal compilado. */
@@ -922,6 +949,7 @@ function createWindow(): BrowserWindow {
 
   const manager = createSurfaceManager(window, {
     onState: state => sendToRenderer(IPC.surfaceState, state),
+    onContents: contents => agentPages.track(contents),
     onCapture: (mesaId: MesaId, cardId, jpeg) => {
       persist(
         requireStore().saveCapture(mesaId, cardId, jpeg),
@@ -1102,10 +1130,32 @@ void app.whenReady().then(async () => {
       editingNote: mesaId => (agentUi.mesaId === mesaId ? agentUi.editingNoteId : null),
       show: (mesaId, ids) => sendToRenderer(IPC.agentShowItems, mesaId, ids),
     },
-    confirm: confirmAgentRemoval,
+    confirm: confirmAgent,
     changed: (mesaId, notice) => sendToRenderer(IPC.agentMesaChanged, mesaId, notice),
   })
-  tableMcp = await startTableMcpServer(tableHandlers).catch((error: unknown) => {
+  // Luz de actividad (T-012): la tarjeta en la que trabaja un agente se ilumina y su web no se descarga.
+  const activity = createActivityTracker({
+    onChange: activities => sendToRenderer(IPC.agentActivity, activities),
+    pin: cardId => surface?.pin(cardId),
+    unpin: cardId => {
+      const contents = surface?.loadedContents(cardId)
+      if (contents) {
+        agentPages.release(contents)
+      }
+      surface?.unpin(cardId)
+    },
+  })
+  agentActivity = activity
+  // Webs de las tarjetas para el agente (T-012), sobre las mismas vistas que ve la persona.
+  const webTools = createWebToolHandlers({
+    store: requireStore(),
+    isMesaOpen: mesaId => agentUi.mesaId === mesaId && surface?.getOpenMesa() === mesaId,
+    openPage: async (mesaId, cardId, url, signal) => agentPages.page(await requireSurface().loadForAgent(mesaId, cardId, url), signal),
+    activity,
+    confirm: confirmAgent,
+    changed: (mesaId, notice) => sendToRenderer(IPC.agentMesaChanged, mesaId, notice),
+  })
+  tableMcp = await startTableMcpServer({ ...tableHandlers, ...webTools.handlers }).catch((error: unknown) => {
     // Sin servidor, las sesiones arrancan sin el MCP de Table (su chip no aparece).
     log('table-mcp-failed', { message: error instanceof Error ? error.message : String(error) })
     return null
@@ -1122,6 +1172,12 @@ void app.whenReady().then(async () => {
     tableBridge,
   })
   agentMcp = mcp
+  // El MCP de Chrome se retiró (D-021): fuera de los archivos de proyecto que creó Table.
+  void mcp.retireLegacy().then(cleaned => {
+    if (cleaned.length > 0) {
+      log('agent-mcp-retired', { files: cleaned.length })
+    }
+  })
   terminals = createSessionManager({
     shell,
     env: sessionEnv,
@@ -1136,7 +1192,7 @@ void app.whenReady().then(async () => {
       return folder
     },
     profile: id => catalog.get(id),
-    // MCP de los agentes (T-010, T-011): Table, Figma y navegador siempre; Notion si la mesa lo permite.
+    // MCP de los agentes (T-010, T-011): Table y Figma siempre; Notion si la mesa lo permite.
     prepare: async (mesaId, profile, cwd, sessionId) => {
       const smokeAdapter = smokeMode ? smokeHooks.mcpAdapters.get(profile.id) : undefined
       const adapter = smokeAdapter ?? (profile.source === 'builtin' ? profile.id : 'custom')
@@ -1150,7 +1206,16 @@ void app.whenReady().then(async () => {
       if (smokeMode) {
         smokeHooks.tableMcpEnv.set(sessionId, registration.env)
       }
-      return { ...launch, env: { ...launch.env, ...registration.env }, dispose: registration.dispose }
+      return {
+        ...launch,
+        env: { ...launch.env, ...registration.env },
+        dispose: () => {
+          registration.dispose()
+          // Sin sesión no hay luz ni permiso para las webs.
+          activity.endSession(sessionId)
+          webTools.endSession(sessionId)
+        },
+      }
     },
     onData: (sessionId, data) => sendToRenderer(IPC.terminalData, sessionId, data),
     onSession: session => sendToRenderer(IPC.terminalSession, session),

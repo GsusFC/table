@@ -111,4 +111,9 @@
 
   --focus-ring: 0 0 0 2px var(--color-panel), 0 0 0 4px var(--color-accent);
   --duration-fast: 120ms;
+
+  /* Luz de actividad de un agente (T-012): el acento, con un halo que respira */
+  --agent-glow-rest: 0 0 0 1px var(--color-accent), 0 0 0 3px var(--color-accent-soft);
+  --agent-glow-peak: 0 0 0 1px var(--color-accent), 0 0 0 7px var(--color-accent-soft);
+  --agent-glow-period: 1.6s;
 }

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import { IPC, type AgentConfirmRequest, type PersistenceError, type TableApi } from '../shared/ipc'
+import { IPC, type AgentActivity, type AgentConfirmRequest, type PersistenceError, type TableApi } from '../shared/ipc'
 import type { Card, ItemId, MesaId } from '../shared/model'
 import type { NotionContextProgress } from '../shared/notionContext'
 import type { SurfaceCardState } from '../shared/surface'
@@ -41,7 +41,7 @@ const api: TableApi = {
   },
   surface: {
     openMesa: mesaId => ipcRenderer.invoke(IPC.surfaceOpenMesa, mesaId),
-    enter: (mesaId, cardId) => ipcRenderer.invoke(IPC.surfaceEnter, mesaId, cardId),
+    enter: (mesaId, cardId, options) => ipcRenderer.invoke(IPC.surfaceEnter, mesaId, cardId, options),
     exit: () => ipcRenderer.invoke(IPC.surfaceExit),
     unload: cardId => ipcRenderer.invoke(IPC.surfaceUnload, cardId),
     setPanelBounds: bounds => ipcRenderer.send(IPC.surfaceSetPanelBounds, bounds),
@@ -164,6 +164,14 @@ const api: TableApi = {
       }
     },
     respondConfirm: (requestId, accepted) => ipcRenderer.send(IPC.agentConfirmResponse, requestId, accepted),
+    activities: () => ipcRenderer.invoke(IPC.agentActivities),
+    onActivity: listener => {
+      const handler = (_event: IpcRendererEvent, activities: readonly AgentActivity[]): void => listener(activities)
+      ipcRenderer.on(IPC.agentActivity, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC.agentActivity, handler)
+      }
+    },
   },
   results: {
     update: (mesaId, resultId, patch) => ipcRenderer.invoke(IPC.resultsUpdate, mesaId, resultId, patch),

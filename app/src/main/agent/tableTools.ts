@@ -1,6 +1,6 @@
 import { lstat, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { MAX_TOOL_ITEMS, type AgentToolName } from '../../shared/agentTools'
+import { MAX_TOOL_ITEMS, type MesaToolName } from '../../shared/agentTools'
 import {
   DEFAULT_CARD_SIZE,
   DEFAULT_NOTE_SIZE,
@@ -28,8 +28,9 @@ import { fileKey, isImportableName, placeNewResults, resultEntry, resultKindOf, 
  * no esté abierta; las que dependen de la interfaz lo dicen.
  */
 
-/** Sesión que llama: su mesa y el nombre del arnés (para la confirmación). */
+/** Sesión que llama: su ID, su mesa y el nombre del arnés (para la confirmación). */
 export interface TableToolContext {
+  readonly sessionId: string
   readonly mesaId: MesaId
   readonly agentName: string
   /**
@@ -39,14 +40,22 @@ export interface TableToolContext {
   readonly signal: AbortSignal
 }
 
-/** Lo que Table pregunta a la persona antes de borrar. */
-export interface RemovalRequest {
+/** Lo que Table pregunta a la persona antes de borrar (T-011) o de dejar usar las webs (T-012). */
+export interface AgentConfirmation {
   readonly mesaId: MesaId
   readonly agentName: string
+  readonly kind: 'remove' | 'web'
   readonly title: string
-  /** Una línea por elemento o conexión. */
+  /** Una línea por elemento o conexión; vacía si no hay lista. */
   readonly items: readonly string[]
+  /** Nota bajo la lista. */
+  readonly note: string
+  /** Botón que acepta. */
+  readonly confirmLabel: string
 }
+
+/** Nota de la confirmación de un borrado. */
+export const REMOVAL_NOTE = 'Lo pide el agente desde su sesión. El archivo de un resultado se queda en resultados/.'
 
 /** Estado de la interfaz que conoce el proceso principal (lo informa el renderer). */
 export interface TableUiState {
@@ -70,7 +79,7 @@ export interface TableToolDeps {
   unloadCard(cardId: string): Promise<'unloaded' | 'kept'>
   readonly ui: TableUiState
   /** Pregunta a la persona; true si acepta. Con `signal` cancelada, retira la pregunta y devuelve false. */
-  confirm(request: RemovalRequest, signal: AbortSignal): Promise<boolean>
+  confirm(request: AgentConfirmation, signal: AbortSignal): Promise<boolean>
   /** Tras cada escritura: la interfaz vuelve a leer la mesa y muestra el aviso. */
   changed(mesaId: MesaId, notice: string): void
 }
@@ -109,7 +118,7 @@ function placedItems(mesa: Mesa): Map<ItemId, Placed> {
 }
 
 /** Entrada sin campos desconocidos (los esquemas declaran `additionalProperties: false`). */
-function checkKeys(input: Readonly<Record<string, unknown>>, allowed: readonly string[]): void {
+export function checkKeys(input: Readonly<Record<string, unknown>>, allowed: readonly string[]): void {
   const unknown = Object.keys(input).filter(key => !allowed.includes(key))
   if (unknown.length > 0) {
     throw new Error(`Campo no admitido: ${unknown.join(', ')}`)
@@ -170,7 +179,7 @@ function placeNear(items: ReadonlyMap<ItemId, Placed>, anchor: Placed, size: Siz
 }
 
 /** `position` explícita, junto a `near` o, sin ninguna, a la derecha de todo. */
-function placement(mesa: Mesa, input: Readonly<Record<string, unknown>>, size: Size): Point {
+export function placement(mesa: Mesa, input: Readonly<Record<string, unknown>>, size: Size): Point {
   if (input['position'] !== undefined) {
     return parsePoint(input['position'])
   }
@@ -238,7 +247,7 @@ function rejectedMessage(signal: AbortSignal): string {
     : 'La persona no aceptó el borrado: no se ha borrado nada.'
 }
 
-export function createTableToolHandlers(deps: TableToolDeps): Readonly<Record<AgentToolName, TableToolHandler>> {
+export function createTableToolHandlers(deps: TableToolDeps): Readonly<Record<MesaToolName, TableToolHandler>> {
   const { store } = deps
 
   async function connectOnce(mesaId: MesaId, edges: readonly Edge[], source: ItemId, target: ItemId): Promise<Edge> {
@@ -442,8 +451,11 @@ export function createTableToolHandlers(deps: TableToolDeps): Readonly<Record<Ag
         {
           mesaId,
           agentName,
+          kind: 'remove',
           title: `${agentName} quiere borrar ${plural(targets.length, 'elemento', 'elementos')} de la mesa`,
           items: summarize(targets.map(item => labels.get(item.id) ?? item.id)),
+          note: REMOVAL_NOTE,
+          confirmLabel: 'Borrar',
         },
         signal,
       )
@@ -496,8 +508,11 @@ export function createTableToolHandlers(deps: TableToolDeps): Readonly<Record<Ag
         {
           mesaId,
           agentName,
+          kind: 'remove',
           title: `${agentName} quiere borrar ${plural(edges.length, 'conexión', 'conexiones')} de la mesa`,
           items: summarize(edges.map(edge => `${labels.get(edge.source) ?? edge.source} ↔ ${labels.get(edge.target) ?? edge.target}`)),
+          note: REMOVAL_NOTE,
+          confirmLabel: 'Borrar',
         },
         signal,
       )

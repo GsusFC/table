@@ -1,6 +1,6 @@
 # Fases y estado
 
-Fecha: 2026-10-27. **Estado actual: Fase 1 cerrada ([D-018](decisions.md)). Fase 2 en curso: terminal (T-007), contexto y resultados por archivos (T-008, T-009), MCP de Figma, Notion y navegador en cada agente (T-010, [D-019](decisions.md)) y MCP de Table (T-011, [D-020](decisions.md)).**
+Fecha: 2026-10-27. **Estado actual: Fase 1 cerrada ([D-018](decisions.md)). Fase 2 en curso: terminal (T-007), contexto y resultados por archivos (T-008, T-009), MCP de Figma y Notion en cada agente (T-010, [D-019](decisions.md)), MCP de Table (T-011, [D-020](decisions.md)) y el agente en las webs de Table, a la vista, sin Chrome (T-012, [D-021](decisions.md)).**
 
 Los hitos preservan el orden acordado. Los hallazgos de una prueba pueden cambiar una propuesta técnica sin ampliar la fase entera.
 
@@ -65,4 +65,4 @@ Salida: publicación deliberada y trazable de un resultado revisado. Workers y e
 
 ## Próxima tarea
 
-T-007 a T-011 están implementadas; falta que el usuario las pruebe con los arneses reales (autorizar Figma, Notion y el navegador; pedir a un agente que lea la selección, añada una nota conectada a sus fuentes y borre algo con confirmación). Pendiente de proponer: la validación de la Fase 2. No ejecutar toda la hoja de ruta de forma automática. Cada sesión debe terminar con un resultado verificable y el estado real de su tarea.
+T-007 a T-012 están implementadas; falta que el usuario las pruebe con los arneses reales (autorizar Figma y Notion; pedir a un agente que lea la selección, añada una nota conectada a sus fuentes y borre algo con confirmación; que abra el frame V1 y diga qué ve en Table, y que levante una web de prueba y la enseñe en la mesa). Pendiente de proponer: la validación de la Fase 2. No ejecutar toda la hoja de ruta de forma automática. Cada sesión debe terminar con un resultado verificable y el estado real de su tarea.

@@ -3,12 +3,12 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AGENT_TOOLS, type AgentToolName } from '../../shared/agentTools'
+import { AGENT_TOOLS, MESA_TOOLS, type MesaToolName } from '../../shared/agentTools'
 import type { ItemId, Mesa, MesaId } from '../../shared/model'
 import type { ProjectSnapshot } from '../../shared/notion'
 import { createMesaStore } from '../store/mesaStore'
 import type { MesaStore } from '../store/types'
-import { createTableToolHandlers, type RemovalRequest, type TableToolHandler } from './tableTools'
+import { createTableToolHandlers, type AgentConfirmation, type TableToolHandler } from './tableTools'
 
 const NOTION_URL = 'https://www.notion.so/ficha-0123456789abcdef0123456789abcdef'
 const SNAPSHOT: ProjectSnapshot = {
@@ -25,10 +25,10 @@ const SNAPSHOT: ProjectSnapshot = {
 let base: string
 let work: string
 let store: MesaStore
-let handlers: Readonly<Record<AgentToolName, TableToolHandler>>
+let handlers: Readonly<Record<MesaToolName, TableToolHandler>>
 let ui: { open: MesaId | null; selection: ItemId[]; editing: string | null; shown: ItemId[][] }
 let answer: boolean
-let confirms: RemovalRequest[]
+let confirms: AgentConfirmation[]
 let changes: string[]
 let kept: Set<string>
 /** Señal de la «sesión» de las llamadas; un test la cancela como si se cerrara. */
@@ -74,8 +74,8 @@ afterEach(async () => {
 })
 
 /** Llama a una herramienta como lo haría una sesión de Claude Code en la mesa `mesa`. */
-function call(mesa: Mesa, name: AgentToolName, input: Record<string, unknown> = {}): Promise<any> {
-  return handlers[name]({ mesaId: mesa.id, agentName: 'Claude Code', signal: session.signal }, input)
+function call(mesa: Mesa, name: MesaToolName, input: Record<string, unknown> = {}): Promise<any> {
+  return handlers[name]({ sessionId: 'sesion-de-prueba', mesaId: mesa.id, agentName: 'Claude Code', signal: session.signal }, input)
 }
 
 async function sampleMesa(): Promise<{ mesa: Mesa; cardId: string; noteId: string }> {
@@ -86,18 +86,19 @@ async function sampleMesa(): Promise<{ mesa: Mesa; cardId: string; noteId: strin
 }
 
 describe('catálogo', () => {
-  it('cada herramienta declarada tiene su ejecución y al revés', () => {
-    expect(Object.keys(handlers).sort()).toEqual(AGENT_TOOLS.map(tool => tool.name).sort())
+  it('cada herramienta de la mesa declarada tiene su ejecución y al revés', () => {
+    expect(Object.keys(handlers).sort()).toEqual(MESA_TOOLS.map(tool => tool.name).sort())
   })
 
-  it('declaraciones con la forma de WebMCP; solo borrar es destructivo', () => {
+  it('declaraciones con la forma de WebMCP; solo borrar es destructivo; solo las webs son de fuera', () => {
     for (const tool of AGENT_TOOLS) {
       expect(tool.inputSchema.type).toBe('object')
       expect(tool.description.length).toBeGreaterThan(20)
       expect(tool.annotations.readOnlyHint && tool.annotations.destructiveHint).toBe(false)
+      expect(tool.annotations.openWorldHint).toBe(tool.name.startsWith('table_web_'))
     }
     expect(AGENT_TOOLS.filter(tool => tool.annotations.destructiveHint).map(tool => tool.name)).toEqual(['table_remove_items', 'table_disconnect'])
-    expect(AGENT_TOOLS.filter(tool => tool.annotations.readOnlyHint).map(tool => tool.name)).toEqual([
+    expect(MESA_TOOLS.filter(tool => tool.annotations.readOnlyHint).map(tool => tool.name)).toEqual([
       'table_get_mesa',
       'table_get_selection',
       'table_get_project',
@@ -268,7 +269,13 @@ describe('borrar', () => {
     answer = false
     const rejected = await call(mesa, 'table_remove_items', { ids: [cardId, noteId] })
     expect(rejected).toMatchObject({ rejected: true, removed: [] })
-    expect(confirms[0]).toMatchObject({ mesaId: mesa.id, agentName: 'Claude Code', title: 'Claude Code quiere borrar 2 elementos de la mesa' })
+    expect(confirms[0]).toMatchObject({
+      mesaId: mesa.id,
+      agentName: 'Claude Code',
+      kind: 'remove',
+      title: 'Claude Code quiere borrar 2 elementos de la mesa',
+      confirmLabel: 'Borrar',
+    })
     expect(confirms[0]?.items).toEqual(['Web «example.com»', 'Nota «Idea»'])
     expect(await store.get(mesa.id)).toMatchObject({ cards: [expect.anything()], notes: [expect.anything()] })
     expect(changes).toEqual([])
@@ -306,7 +313,7 @@ describe('solo la mesa de la sesión', () => {
   it('rechaza IDs de otra mesa en todas las herramientas que reciben elementos', async () => {
     const { mesa } = await sampleMesa()
     const other = await sampleMesa()
-    const cases: [AgentToolName, Record<string, unknown>][] = [
+    const cases: [MesaToolName, Record<string, unknown>][] = [
       ['table_add_note', { text: 'x', near: other.noteId }],
       ['table_update_note', { noteId: other.noteId, text: 'x' }],
       ['table_move_items', { items: [{ id: other.cardId, position: { x: 1, y: 1 } }] }],

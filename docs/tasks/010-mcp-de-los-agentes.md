@@ -2,6 +2,8 @@
 
 Estado: en curso desde el 2026-10-27; implementada, falta la prueba del usuario con los arneses reales. Fase: 2. Aplica [D-019](../decisions.md).
 
+> **Cambio por [D-021](../decisions.md) (2026-10-27):** el MCP de navegador (Chrome DevTools MCP, `table-chrome-devtools`) se retiró en [T-012](012-el-agente-trabaja-en-table.md). El agente usa las webs de las tarjetas dentro de Table con el MCP de Table; Table ya no configura Chrome en ninguna sesión y quita esa entrada de los archivos de proyecto que creó. Lo que sigue sobre el navegador es el registro de lo que se hizo en esta tarea; la configuración vigente está en [harnesses.md](../harnesses.md#mcp-de-los-agentes-t-010).
+
 ## Resultado esperado
 
 Al abrir una sesión, el agente ya tiene conectados los MCP que tocan: Figma (para ver y editar el diseño), un navegador con la sesión del usuario (para Pinterest y otras webs privadas) y, si la mesa lo permite, Notion sin filtro. Table los configura en cada arnés; cada arnés pide la autorización la primera vez con la cuenta de la persona. El panel muestra qué está conectado en la sesión.

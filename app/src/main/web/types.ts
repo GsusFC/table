@@ -1,5 +1,17 @@
+import type { WebContents } from 'electron'
 import type { CardId, MesaId } from '../../shared/model'
 import type { PanelBounds, SurfaceCardState, UnloadResult } from '../../shared/surface'
+
+/** Cómo entrar en una tarjeta. */
+export interface EnterOptions {
+  /** Dar el foco a la web (por defecto). Al seguir al agente, no: el foco se queda donde estaba. */
+  readonly focus?: boolean
+  /**
+   * Si la web ya está cargada, si hay que llevarla a `url` según su URL
+   * actual (un nodo de Figma al seguir al agente). Por defecto, no.
+   */
+  readonly shouldNavigate?: (currentUrl: string | null) => boolean
+}
 
 /**
  * Webs de las tarjetas como `WebContentsView` (D-010), con la opción B de
@@ -26,7 +38,24 @@ export interface SurfaceManager {
    * tarjeta activa. Rechaza si `mesaId` ya no es la mesa abierta en el
    * momento de ejecutarse (entradas retrasadas) o si la URL no es http(s).
    */
-  enter(mesaId: MesaId, cardId: CardId, url: string): Promise<void>
+  enter(mesaId: MesaId, cardId: CardId, url: string, options?: EnterOptions): Promise<void>
+  /**
+   * Web de una tarjeta para el agente (T-012): la carga si hace falta sin
+   * mostrarla (la persona sigue donde está) y devuelve su contenido. Rechaza
+   * si la mesa no es la abierta, si la URL no es http(s) o si cargarla
+   * cambiaría el editor de Figma que la persona tiene delante. Fija antes la
+   * tarjeta con `pin`.
+   */
+  loadForAgent(mesaId: MesaId, cardId: CardId, url: string): Promise<WebContents>
+  /** Contenido de la web cargada y viva de la tarjeta, o null. */
+  loadedContents(cardId: CardId): WebContents | null
+  /**
+   * Un agente trabaja en la tarjeta: su web no se descarga por el límite de
+   * webs cargadas ni se cede a otra tarjeta del mismo archivo. `unpin` la
+   * suelta y vuelve a aplicar el límite.
+   */
+  pin(cardId: CardId): void
+  unpin(cardId: CardId): void
   /** Captura la web activa, la oculta y devuelve el foco a la interfaz. Sin efecto si no hay. */
   exit(): Promise<void>
   /** Cierra la web y sus popups respetando `beforeunload`. */
@@ -60,4 +89,6 @@ export interface SurfaceCallbacks {
    * pendiente. Por defecto, diálogo al usuario; el smoke lo sustituye.
    */
   confirmDiscard?(origin: string, reason: 'quit' | 'unload'): boolean
+  /** Cada vista de tarjeta al crearse (para guardar la consola de las webs locales, T-012). */
+  onContents?(contents: WebContents): void
 }

@@ -26,7 +26,7 @@ export interface HarnessProfile {
 export type SessionStatus = 'running' | 'exited'
 
 /** MCP del catálogo de Table para los agentes (T-010) y el propio de Table (T-011). */
-export type AgentMcpName = 'table' | 'figma' | 'browser' | 'notion'
+export type AgentMcpName = 'table' | 'figma' | 'notion'
 
 /**
  * Un MCP en una sesión: `configured` si Table lo configuró en el arnés al

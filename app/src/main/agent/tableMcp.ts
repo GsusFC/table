@@ -10,6 +10,7 @@ import { AGENT_TOOLS, type AgentToolName } from '../../shared/agentTools'
 import type { MesaId } from '../../shared/model'
 import { log } from '../log'
 import type { TableToolHandler } from './tableTools'
+import { ToolContent } from './toolContent'
 
 /**
  * Servidor del MCP de Table (T-011). Escucha en un socket Unix dentro de una
@@ -42,7 +43,7 @@ const MAX_HANDSHAKE_BYTES = 4_096
 const TICKET_BYTES = 32
 
 const INSTRUCTIONS =
-  'Herramientas de la mesa de Table de esta sesión: leer la mesa, la selección y la ficha del proyecto; añadir tarjetas, notas y resultados con sus fuentes; mover, conectar y borrar (borrar pide confirmación a la persona). Coordenadas del lienzo en px.'
+  'Herramientas de la mesa de Table de esta sesión: leer la mesa, la selección y la ficha del proyecto; añadir tarjetas, notas y resultados con sus fuentes; mover, conectar y borrar (borrar pide confirmación a la persona). Coordenadas del lienzo en px. Con table_web_* el agente usa las webs de las tarjetas en Table, a la vista de la persona (la primera vez pide permiso); no uses Chrome ni otro navegador. Antes de usar el MCP de Figma sobre un archivo de la mesa, llama a table_set_activity, y a table_clear_activity al terminar.'
 
 export interface TableMcpSession {
   readonly sessionId: string
@@ -83,6 +84,9 @@ async function socketDir(): Promise<string> {
 }
 
 function textResult(value: unknown, isError = false): CallToolResult {
+  if (value instanceof ToolContent) {
+    return { content: value.blocks.map(block => ({ ...block })), isError }
+  }
   return { content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }], isError }
 }
 
@@ -100,7 +104,12 @@ export async function startTableMcpServer(handlers: Readonly<Record<AgentToolNam
     description: tool.description,
     // Copia mutable para el SDK.
     inputSchema: JSON.parse(JSON.stringify(tool.inputSchema)) as { type: 'object'; [key: string]: unknown },
-    annotations: { title: tool.title, readOnlyHint: tool.annotations.readOnlyHint, destructiveHint: tool.annotations.destructiveHint, openWorldHint: false },
+    annotations: {
+      title: tool.title,
+      readOnlyHint: tool.annotations.readOnlyHint,
+      destructiveHint: tool.annotations.destructiveHint,
+      openWorldHint: tool.annotations.openWorldHint,
+    },
   }))
   const toolNames = new Set<string>(AGENT_TOOLS.map(tool => tool.name))
 
@@ -121,7 +130,10 @@ export async function startTableMcpServer(handlers: Readonly<Record<AgentToolNam
       // Sesión cerrada, puente desconectado o petición cancelada por el agente.
       const signal = AbortSignal.any([session.ended.signal, connection.signal, extra.signal])
       try {
-        const result = await handlers[name as AgentToolName]({ mesaId: session.mesaId, agentName: session.agentName, signal }, input)
+        const result = await handlers[name as AgentToolName](
+          { sessionId: session.sessionId, mesaId: session.mesaId, agentName: session.agentName, signal },
+          input,
+        )
         log('table-mcp-call', { tool: name, ok: true })
         return textResult(result)
       } catch (error) {

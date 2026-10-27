@@ -22,7 +22,7 @@ import {
   fixtureSearchResponse,
 } from './notion/fixtures'
 import type { TableBridge } from './agent/mcp'
-import type { RemovalRequest } from './agent/tableTools'
+import type { AgentConfirmation } from './agent/tableTools'
 import type { SettingsStore } from './settings/settingsStore'
 import type { SurfaceManager } from './web/types'
 
@@ -43,7 +43,24 @@ const FIXTURE_HTML = `<!doctype html><html lang="es"><head><meta charset="utf-8"
 const GUARDED_HTML = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Con cambios</title></head>
 <body><input autofocus><script>addEventListener('beforeunload', e => { e.preventDefault(); e.returnValue = '' })</script></body></html>`
 
-const TOTAL_TIMEOUT_MS = 180_000
+/**
+ * App sintética local para el navegador del agente (T-012): un campo, un botón que saluda y pide
+ * un recurso que no existe (error de red) y un mensaje de consola al cargar.
+ */
+const APP_HTML = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>App sintética</title></head>
+<body><main><h1>App sintética</h1><label>Nombre <input id="nombre"></label> <button id="saludar">Saludar</button>
+<p id="saludo"></p><a href="https://www.notion.so/ficha-sintetica-0123456789abcdef0123456789abcdef">Ficha de Notion</a></main><script>
+console.log('smoke-console: app cargada')
+document.getElementById('saludar').addEventListener('click', () => {
+  document.getElementById('saludo').textContent = 'Hola, ' + document.getElementById('nombre').value
+  fetch('/missing').catch(() => {})
+})
+</script></body></html>`
+
+/** Nombre «no local» que el smoke resuelve a 127.0.0.1 (`--host-resolver-rules`): una web remota de prueba. */
+export const SMOKE_REMOTE_HOST = 'remota.table-smoke.test'
+
+const TOTAL_TIMEOUT_MS = 240_000
 
 /** Decisión ante `beforeunload` que el smoke controla; la app la usa solo con TABLE_SMOKE=1. */
 export const smokeHooks = {
@@ -74,8 +91,8 @@ export const smokeHooks = {
   tableMcpBridge: (): TableBridge | null => null,
   /** Entorno del MCP de Table de cada sesión (socket, sesión y testigo); solo en el smoke, nunca se registra. */
   tableMcpEnv: new Map<string, Readonly<Record<string, string>>>(),
-  /** Borrado de un agente con la mesa cerrada (diálogo nativo): el smoke anota y rechaza. */
-  confirmAgentRemoval: (_request: RemovalRequest): boolean => false,
+  /** Confirmación de un agente con la mesa cerrada (diálogo nativo): el smoke rechaza. */
+  confirmAgent: (_request: AgentConfirmation): boolean => false,
 }
 
 function processAlive(pid: number): boolean {
@@ -122,8 +139,13 @@ async function waitFor<T>(probe: () => Promise<T> | T, accept: (value: T) => boo
 
 async function startFixtureServer(): Promise<{ server: Server; url: string }> {
   const server = createServer((request, response) => {
+    if (request.url === '/missing') {
+      response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+      response.end('no existe')
+      return
+    }
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-    response.end(request.url === '/guarded' ? GUARDED_HTML : FIXTURE_HTML)
+    response.end(request.url === '/guarded' ? GUARDED_HTML : request.url === '/app' ? APP_HTML : FIXTURE_HTML)
   })
   const { promise, resolve } = Promise.withResolvers<void>()
   server.listen(0, '127.0.0.1', resolve)
@@ -1243,18 +1265,18 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
       const folder = claudeSession.cwd
       const args = await readDump(folder, '.smoke-args.txt')
       const servers = claudeServers(args)
-      const shownChips = await waitFor(chips, list => list.length === 3, 'chips de MCP en el panel')
+      const shownChips = await waitFor(chips, list => list.length === 2, 'chips de MCP en el panel')
       record(
-        'mcp: Claude Code arranca con `--mcp-config` (Table, Figma y navegador, sin Notion) y el panel muestra sus chips',
+        'mcp: Claude Code arranca con `--mcp-config` (Table y Figma, sin Notion ni Chrome) y el panel muestra sus chips',
         args.startsWith('--mcp-config=') &&
-          JSON.stringify(Object.keys(servers)) === JSON.stringify(['table', 'table-figma', 'table-chrome-devtools']) &&
+          JSON.stringify(Object.keys(servers)) === JSON.stringify(['table', 'table-figma']) &&
           servers['table-figma']?.url === 'https://mcp.figma.com/mcp' &&
-          (servers['table-chrome-devtools']?.args ?? []).includes('--wsEndpoint=ws://127.0.0.1:9222/devtools/browser') &&
-          JSON.stringify(claudeSession.mcp.map(item => item.name)) === JSON.stringify(['table', 'figma', 'browser']) &&
-          shownChips.map(chip => chip.text).join(',') === 'Table,Figma,Navegador' &&
-          shownChips[0]!.title.includes('Borrar pide tu confirmación') &&
+          !/chrome|9222/.test(args) &&
+          JSON.stringify(claudeSession.mcp.map(item => item.name)) === JSON.stringify(['table', 'figma']) &&
+          shownChips.map(chip => chip.text).join(',') === 'Table,Figma' &&
+          shownChips[0]!.title.includes('borrar con tu confirmación') &&
+          shownChips[0]!.title.includes('webs de sus tarjetas') &&
           shownChips[1]!.title.includes('/mcp') &&
-          shownChips[2]!.title.includes('chrome://inspect') &&
           !credentialLike.test(args),
         { chips: shownChips.map(chip => chip.text) },
       )
@@ -1266,8 +1288,8 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
       const opencodeEnv = await readDump(folder, '.smoke-env.txt')
       record(
         'mcp: Gemini CLI encuentra `.gemini/settings.json` en la carpeta y OpenCode su configuración en el entorno',
-        JSON.stringify(Object.keys(geminiFiles.mcpServers)) === JSON.stringify(['table', 'table-figma', 'table-chrome-devtools']) &&
-          Object.keys((JSON.parse(opencodeEnv) as { mcp: object }).mcp).join(',') === 'table,table-figma,table-chrome-devtools' &&
+        JSON.stringify(Object.keys(geminiFiles.mcpServers)) === JSON.stringify(['table', 'table-figma']) &&
+          Object.keys((JSON.parse(opencodeEnv) as { mcp: object }).mcp).join(',') === 'table,table-figma' &&
           !credentialLike.test(opencodeEnv) &&
           !credentialLike.test(readFileSync(join(folder, '.gemini/settings.json'), 'utf8')),
       )
@@ -1297,7 +1319,7 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
       rmSync(join(folder, '.smoke-args.txt'))
       const notionSession = await startFromPanel('Claude falso', 4)
       const notionServers = claudeServers(await readDump(folder, '.smoke-args.txt'))
-      const notionChips = await waitFor(chips, list => list.length === 4, 'chip de Notion').catch(() => [])
+      const notionChips = await waitFor(chips, list => list.length === 3, 'chip de Notion').catch(() => [])
       record(
         'mcp: activar Notion por MCP avisa de presupuestos y oportunidades, se guarda en la mesa y llega a las sesiones nuevas',
         warning.includes('presupuestos') &&
@@ -1308,7 +1330,7 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
           tableWithNotion.includes('- **Notion** (`table-notion`)') &&
           notionServers['table-notion']?.url === 'https://mcp.notion.com/mcp' &&
           notionSession.mcp.some(item => item.name === 'notion') &&
-          notionChips.map(chip => chip.text).join(',') === 'Table,Figma,Navegador,Notion',
+          notionChips.map(chip => chip.text).join(',') === 'Table,Figma,Notion',
         {
           afterCancel,
           afterConfirm,
@@ -1525,6 +1547,263 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
       await inUi(`document.querySelector('.rail [aria-label="Inicio"]').click()`)
       await waitFor(() => inUi<boolean>(`!!document.querySelector('.home')`), Boolean, 'inicio')
       await inUi(`window.table.mesas.remove(${tableArg})`)
+    }
+
+    // T-012: el agente trabaja en las webs de Table, a la vista. Un perfil propio configurado como Claude Code;
+    // el puente real con un cliente del SDK; la app sintética local y la misma app con un nombre no local.
+    {
+      const webMesa = await inUi<Mesa>(`window.table.mesas.create('Mesa del navegador de Table')`)
+      const webArg = JSON.stringify(webMesa.id)
+      const localUrl = `${fixtureUrl}app`
+      const remoteUrl = `http://${SMOKE_REMOTE_HOST}:${new URL(fixtureUrl).port}/app`
+      const notionCard = await inUi<Card>(
+        `window.table.cards.add(${webArg}, ${JSON.stringify(`https://www.notion.so/ficha-${NOTION_PROJECT}`)}, { x: 0, y: 0 })`,
+      )
+      const remoteCard = await inUi<Card>(`window.table.cards.add(${webArg}, ${JSON.stringify(remoteUrl)}, { x: 400, y: 0 })`)
+      const profiles = await inUi<HarnessProfile[]>(
+        // Table añade sus argumentos al final: la función los recibe y la sesión sigue viva para el puente.
+        `window.table.terminal.saveCustomProfile(${JSON.stringify({ name: 'Claude con webs', command: 'f() { sleep 300; }; f' })})`,
+      )
+      const webProfileId = profiles.find(profile => profile.name === 'Claude con webs')!.id
+      smokeHooks.mcpAdapters.set(webProfileId, 'claude')
+      ui.reload()
+      await waitFor(
+        () => inUi<boolean>(`[...document.querySelectorAll('.mesa-row-open')].some(b => b.textContent.includes('Mesa del navegador de Table'))`),
+        Boolean,
+        'mesa del navegador en el inicio',
+      )
+      await inUi(`[...document.querySelectorAll('.mesa-row-open')].find(b => b.textContent.includes('Mesa del navegador de Table')).click()`)
+      await waitFor(nodeCount, count => count === 2, 'tarjetas de la mesa del navegador')
+      await inUi(`document.querySelector('.topbar [aria-label="Agentes"]').click()`)
+      await waitFor(() => inUi<number>(`document.querySelectorAll('.agents-profile').length`), count => count > 0, 'perfiles en el panel')
+      const followPressed = await inUi<string | null>(`document.querySelector('.agents [aria-label="Seguir al agente"]')?.getAttribute('aria-pressed') ?? null`)
+      await inUi(`[...document.querySelectorAll('.agents-profile')].find(b => b.textContent.includes('Claude con webs')).click()`)
+      const [webSession] = await waitFor(() => inUi<SessionInfo[]>(`window.table.terminal.sessions(${webArg})`), list => list.length === 1, 'sesión con webs')
+      const bridge = smokeHooks.tableMcpBridge()!
+      const client = new McpClient({ name: 'smoke-web', version: '1.0.0' })
+      await client.connect(
+        new StdioClientTransport({
+          command: bridge.command,
+          args: [...bridge.args],
+          env: { ELECTRON_RUN_AS_NODE: '1', ...smokeHooks.tableMcpEnv.get(webSession!.id) },
+          stderr: 'pipe',
+        }),
+      )
+      const call = (name: string, args: Record<string, unknown>) => client.callTool({ name, arguments: args })
+      const textOf = async (name: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean }> => {
+        const result = await call(name, args)
+        const [content] = result.content as { type: string; text?: string }[]
+        return { text: content?.text ?? '', isError: result.isError === true }
+      }
+      const json = async (name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> => {
+        const { text, isError } = await textOf(name, args)
+        if (isError) {
+          throw new Error(text)
+        }
+        return JSON.parse(text) as Record<string, unknown>
+      }
+      const states = (): Promise<{ cardId: string; entered: boolean }[]> => inUi(`window.table.surface.getStates()`)
+      const enteredCard = async (): Promise<string | null> => (await states()).find(state => state.entered)?.cardId ?? null
+      const dialogText = (): Promise<string> => inUi<string>(`document.querySelector('dialog[open]')?.textContent ?? ''`)
+      const noticeText = (): Promise<string> => inUi<string>(`document.querySelector('.notice')?.textContent ?? ''`)
+
+      // Primera herramienta web: Table pide permiso a la persona; aceptado en el diálogo, la web local se abre como tarjeta.
+      const opening = json('table_web_open', { url: localUrl }).catch((error: unknown) => ({ error: String(error) }) as Record<string, unknown>)
+      const permission = await waitFor(dialogText, text => text.includes('use las webs de esta mesa'), 'permiso de las webs').catch(() => '')
+      await shot('35-web-permiso')
+      await inUi(`document.querySelector('dialog[open] button[type="submit"]')?.click()`)
+      const opened = await opening
+      const localId = String(opened['cardId'])
+      const localCard = (await inUi<Mesa>(`window.table.mesas.get(${webArg})`)).cards.find(card => card.id === localId)
+      record(
+        'web: la primera herramienta web pide permiso nombrando al agente; aceptado, la web local se abre como tarjeta nueva',
+        permission.includes('¿Dejar que Claude con webs use las webs de esta mesa con tus sesiones?') &&
+          opened['created'] === true &&
+          localCard?.url === localUrl,
+        { permission: permission.slice(0, 90), opened },
+      )
+
+      // Luz de actividad y «Seguir al agente» (activado por defecto): la tarjeta se ilumina y Table entra en ella.
+      const lit = await waitFor(
+        () => inUi<boolean>(`!!document.querySelector(${JSON.stringify(`.react-flow__node[data-id="${localId}"] .card-agent-active`)})`),
+        Boolean,
+        'tarjeta iluminada',
+      ).catch(() => false)
+      const followed = await waitFor(enteredCard, id => id === localId, 'seguir al agente').then(
+        () => true,
+        () => false,
+      )
+      const badge = await waitFor(
+        () => inUi<string>(`document.querySelector('.topbar .agent-activity-badge')?.textContent ?? ''`),
+        text => text !== '',
+        'aviso en la barra',
+      ).catch(() => '')
+      const tabWorking = await inUi<boolean>(`!!document.querySelector('.agents-tab-button[data-working="true"]')`)
+      record(
+        'web: la tarjeta se ilumina con «<agente> está trabajando», la pestaña lo indica y «Seguir al agente» (activado por defecto) entra en ella',
+        followPressed === 'true' && lit && followed && badge.includes('Claude con webs está trabajando') && tabWorking,
+        { followPressed, lit, followed, badge, tabWorking },
+      )
+      await shot('36-web-siguiendo')
+
+      // Foto con uid; escribir y hacer clic cambian la página, y otra foto lo muestra.
+      const firstSnapshot = await textOf('table_web_snapshot', { cardId: localId })
+      const inputUid = /textbox "Nombre" \[uid=(e\d+)\]/.exec(firstSnapshot.text)?.[1]
+      const buttonUid = /button "Saludar" \[uid=(e\d+)\]/.exec(firstSnapshot.text)?.[1]
+      const typed = await json('table_web_type', { cardId: localId, uid: inputUid, text: 'Ana' }).catch((error: unknown) => ({ error: String(error) }))
+      const clicked = await json('table_web_click', { cardId: localId, uid: buttonUid }).catch((error: unknown) => ({ error: String(error) }))
+      const waited = await json('table_web_wait_for', { cardId: localId, text: 'Hola, Ana', timeoutMs: 5_000 }).catch(() => ({}) as Record<string, unknown>)
+      const secondSnapshot = await textOf('table_web_snapshot', { cardId: localId })
+      record(
+        'web: table_web_snapshot da uids; table_web_type y table_web_click cambian la página y otra foto lo muestra',
+        firstSnapshot.text.includes('App sintética') &&
+          inputUid !== undefined &&
+          buttonUid !== undefined &&
+          !('error' in typed) &&
+          !('error' in clicked) &&
+          waited['found'] === true &&
+          secondSnapshot.text.includes('Hola, Ana'),
+        { inputUid, buttonUid, typed, clicked, waited, snapshot: secondSnapshot.text.slice(0, 400) },
+      )
+
+      const shotResult = await call('table_web_screenshot', { cardId: localId })
+      const [image] = shotResult.content as { type: string; data?: string; mimeType?: string }[]
+      const jpeg = image?.data ? Buffer.from(image.data, 'base64') : Buffer.alloc(0)
+      record(
+        'web: table_web_screenshot devuelve una imagen JPEG',
+        !shotResult.isError && image?.type === 'image' && image.mimeType === 'image/jpeg' && jpeg[0] === 0xff && jpeg[1] === 0xd8 && jpeg.length > 1_000,
+        { type: image?.type, bytes: jpeg.length },
+      )
+
+      // Web local: consola desde la carga, errores de red y JavaScript.
+      const consoleResult = await waitFor(
+        () => json('table_web_console', { cardId: localId }),
+        value => JSON.stringify(value['networkErrors']).includes('/missing'),
+        'error de red en la consola',
+      ).catch(() => ({}) as Record<string, unknown>)
+      const evaluated = await json('table_web_evaluate', { cardId: localId, function: '() => document.title' }).catch(() => ({}) as Record<string, unknown>)
+      record(
+        'web: en la web local, table_web_console (consola desde la carga y errores de red) y table_web_evaluate',
+        JSON.stringify(consoleResult['console'] ?? []).includes('smoke-console: app cargada') &&
+          JSON.stringify(consoleResult['networkErrors'] ?? []).includes('404') &&
+          evaluated['result'] === 'App sintética',
+        { console: consoleResult['console'], networkErrors: consoleResult['networkErrors'], evaluated: evaluated['result'] },
+      )
+
+      // Con «archivos filtrados», un clic en un enlace a Notion no navega: Table frena la navegación mientras el agente usa la web.
+      const linkUid = /link "Ficha de Notion" \[uid=(e\d+)\]/.exec(secondSnapshot.text)?.[1]
+      const linkClick = await textOf('table_web_click', { cardId: localId, uid: linkUid })
+      const stillThere = (await textOf('table_web_snapshot', { cardId: localId })).text.includes(localUrl)
+      record(
+        'web: con «archivos filtrados», un clic en un enlace a Notion no sale de la web (la navegación se frena)',
+        linkUid !== undefined && !linkClick.isError && linkClick.text.includes(localUrl) && stillThere,
+        { linkUid, linkClick: linkClick.text.slice(0, 160), stillThere },
+      )
+
+      // Web no local, oculta (la persona sigue en la local): clic, escritura y captura sí; JavaScript y consola no.
+      const remoteSnapshot = await textOf('table_web_snapshot', { cardId: remoteCard.id })
+      // El aviso dura unos segundos: se mira en cuanto empieza la actividad en la otra tarjeta.
+      const seeNotice = await waitFor(noticeText, text => text.includes('está trabajando en') && text.includes('Ver'), 'aviso con «Ver»').catch(noticeText)
+      const remoteInput = /textbox "Nombre" \[uid=(e\d+)\]/.exec(remoteSnapshot.text)?.[1]
+      const remoteButton = /button "Saludar" \[uid=(e\d+)\]/.exec(remoteSnapshot.text)?.[1]
+      const remoteTyped = await json('table_web_type', { cardId: remoteCard.id, uid: remoteInput, text: 'Bea' }).catch((error: unknown) => ({ error: String(error) }))
+      const remoteClicked = await json('table_web_click', { cardId: remoteCard.id, uid: remoteButton }).catch((error: unknown) => ({ error: String(error) }))
+      const remoteWaited = await json('table_web_wait_for', { cardId: remoteCard.id, text: 'Hola, Bea', timeoutMs: 5_000 }).catch(
+        () => ({}) as Record<string, unknown>,
+      )
+      const remoteShot = await call('table_web_screenshot', { cardId: remoteCard.id })
+      const remoteImage = (remoteShot.content as { type: string; data?: string }[])[0]
+      const remoteEvaluate = await textOf('table_web_evaluate', { cardId: remoteCard.id, function: '() => document.cookie' })
+      const remoteConsole = await textOf('table_web_console', { cardId: remoteCard.id })
+      const stillLocal = await enteredCard()
+      record(
+        'web: en una web no local y oculta, escribir, clic y captura funcionan; JavaScript y consola se rechazan; seguir al agente no saca a la persona de su web (aviso con «Ver»)',
+        remoteSnapshot.text.includes(SMOKE_REMOTE_HOST) &&
+          remoteWaited['found'] === true &&
+          !remoteShot.isError &&
+          remoteImage?.type === 'image' &&
+          (remoteImage.data?.length ?? 0) > 1_000 &&
+          remoteEvaluate.isError &&
+          remoteEvaluate.text.includes('Solo en webs locales') &&
+          remoteConsole.isError &&
+          stillLocal === localId &&
+          seeNotice.includes('Ver'),
+        {
+          remoteTyped,
+          remoteClicked,
+          remoteWaited,
+          remoteEvaluate: remoteEvaluate.text.slice(0, 60),
+          stillLocal: stillLocal === localId,
+          seeNotice,
+          snapshot: remoteSnapshot.text.slice(0, 600),
+        },
+      )
+
+      const notionAttempt = await textOf('table_web_snapshot', { cardId: notionCard.id })
+      record(
+        'web: una tarjeta de Notion se rechaza con «Notion para el agente: archivos filtrados»',
+        notionAttempt.isError && notionAttempt.text.includes('archivos filtrados'),
+        { notion: notionAttempt.text.slice(0, 80) },
+      )
+
+      // table_clear_activity apaga la luz.
+      await json('table_clear_activity', {})
+      const unlit = await waitFor(
+        () => inUi<boolean>(`!document.querySelector('.card-agent-active') && !document.querySelector('.topbar .agent-activity-badge')`),
+        Boolean,
+        'luz apagada',
+      ).catch(() => false)
+      record('web: table_clear_activity apaga la luz de la tarjeta y de la barra', unlit && (await inUi<unknown[]>(`window.table.agent.activities()`)).length === 0)
+
+      // Seguir al agente no interrumpe una nota en edición: solo la luz y un aviso con «Ver», que abre la tarjeta.
+      await inUi(`window.table.surface.exit()`)
+      await waitFor(enteredCard, id => id === null, 'de vuelta al lienzo')
+      const note = await json('table_add_note', { text: 'Nota en edición', position: { x: 0, y: 500 } })
+      const noteSelector = JSON.stringify(`.react-flow__node[data-id="${String(note['id'])}"]`)
+      await waitFor(noticeText, text => text.includes('El agente añadió una nota'), 'aviso de la nota').catch(() => '')
+      await inUi(`document.querySelector(${noteSelector}).dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`)
+      const editing = await waitFor(
+        () => inUi<boolean>(`document.activeElement?.tagName === 'TEXTAREA' && !!document.activeElement.closest(${noteSelector})`),
+        Boolean,
+        'nota en edición',
+      ).catch(() => false)
+      await json('table_set_activity', { cardId: localId, text: 'Revisando la app' })
+      const workingNotice = await waitFor(noticeText, text => text.includes('Claude con webs está trabajando en') && text.includes('Ver'), 'aviso al editar').catch(
+        noticeText,
+      )
+      await delay(500)
+      const enteredWhileEditing = await enteredCard()
+      const stillEditing = await inUi<boolean>(`document.activeElement?.tagName === 'TEXTAREA' && !!document.activeElement.closest(${noteSelector})`)
+      const litWhileEditing = await inUi<boolean>(`!!document.querySelector(${JSON.stringify(`.react-flow__node[data-id="${localId}"] .card-agent-active`)})`)
+      record(
+        'web: con una nota en edición, seguir al agente no entra en la tarjeta: la ilumina y avisa con «Ver»',
+        editing && workingNotice.includes('Ver') && enteredWhileEditing === null && stillEditing && litWhileEditing,
+        { editing, workingNotice, enteredWhileEditing, stillEditing, litWhileEditing },
+      )
+      await shot('37-web-aviso-ver')
+      await inUi(`[...document.querySelectorAll('.notice button')].find(b => b.textContent === 'Ver')?.click()`)
+      const viewed = await waitFor(enteredCard, id => id === localId, '«Ver» abre la tarjeta').then(
+        () => true,
+        () => false,
+      )
+      record('web: «Ver» en el aviso abre la tarjeta en la que trabaja el agente', viewed)
+
+      // Cerrar la sesión apaga la luz.
+      await inUi(`window.table.terminal.close(${JSON.stringify(webSession!.id)})`)
+      const afterClose = await waitFor(() => inUi<unknown[]>(`window.table.agent.activities()`), list => list.length === 0, 'luz apagada al cerrar').then(
+        () => true,
+        () => false,
+      )
+      record('web: cerrar la sesión apaga la luz', afterClose)
+      await client.close().catch(() => undefined)
+
+      await inUi(`window.table.surface.exit()`)
+      await inUi(`window.table.terminal.removeCustomProfile(${JSON.stringify(webProfileId)})`)
+      smokeHooks.mcpAdapters.clear()
+      await inUi(`document.querySelector('.agents [aria-label="Plegar agentes"]')?.click()`)
+      await inUi(`document.querySelector('.rail [aria-label="Inicio"]').click()`)
+      await waitFor(() => inUi<boolean>(`!!document.querySelector('.home')`), Boolean, 'inicio')
+      await inUi(`window.table.mesas.remove(${webArg})`)
     }
 
     // T-008: interfaz de «Enviar al agente» y tarjetas de resultado, con la terminal normal.

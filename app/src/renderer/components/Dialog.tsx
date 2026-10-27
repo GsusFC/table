@@ -62,12 +62,14 @@ interface ConfirmDialogProps {
   readonly title: string
   readonly description: ReactNode
   readonly confirmLabel: string
+  /** `danger` (por defecto) para lo que destruye; `primary` para conceder un permiso. */
+  readonly confirmTone?: 'danger' | 'primary'
   readonly onConfirm: () => Promise<void>
   readonly onClose: () => void
 }
 
-/** Confirmación de una acción destructiva. El error se muestra en el propio diálogo. */
-export function ConfirmDialog({ title, description, confirmLabel, onConfirm, onClose }: ConfirmDialogProps) {
+/** Confirmación de una acción destructiva o de un permiso. El error se muestra en el propio diálogo. */
+export function ConfirmDialog({ title, description, confirmLabel, confirmTone = 'danger', onConfirm, onClose }: ConfirmDialogProps) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -94,7 +96,7 @@ export function ConfirmDialog({ title, description, confirmLabel, onConfirm, onC
           <button type="button" className="button" onClick={onClose} disabled={busy}>
             Cancelar
           </button>
-          <button type="submit" className="button button-danger" disabled={busy} autoFocus>
+          <button type="submit" className={`button button-${confirmTone}`} disabled={busy} autoFocus>
             {busy ? 'Un momento…' : confirmLabel}
           </button>
         </>

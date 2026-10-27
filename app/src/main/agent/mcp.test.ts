@@ -6,18 +6,15 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentNotionMode } from '../../shared/model'
 import { SessionBlockedError } from '../terminal/sessions'
-import { agentMcpLaunch, BROWSER_MCP_PACKAGE, createAgentMcp, FIGMA_MCP_URL, supportsTableMcp, type AgentMcp, type TableBridge } from './mcp'
+import { agentMcpLaunch, createAgentMcp, FIGMA_MCP_URL, LEGACY_BROWSER_MCP_KEY, supportsTableMcp, type AgentMcp, type TableBridge } from './mcp'
 
 const NOTION_URL = 'https://mcp.notion.com/mcp'
-const BROWSER_ARGS = [
-  '-y',
-  BROWSER_MCP_PACKAGE,
-  '--wsEndpoint=ws://127.0.0.1:9222/devtools/browser',
-  '--no-usage-statistics',
-  '--no-performance-crux',
-]
-/** El navegador recibe vacías las variables del MCP de Table (su testigo no es para él). */
-const NO_TABLE_ENV = { TABLE_MCP_SOCKET: '', TABLE_MCP_SESSION: '', TABLE_MCP_TICKET: '' }
+/** Entrada del MCP de Chrome que creaba Table antes de D-021. */
+const LEGACY_BROWSER = {
+  command: 'npx',
+  args: ['-y', 'chrome-devtools-mcp@1.12.0', '--wsEndpoint=ws://127.0.0.1:9222/devtools/browser'],
+  env: { TABLE_MCP_SOCKET: '', TABLE_MCP_SESSION: '', TABLE_MCP_TICKET: '' },
+}
 const MESA = '11111111-1111-4111-8111-111111111111'
 const GEMINI = '.gemini/settings.json'
 const OMP = '.omp/mcp.json'
@@ -66,19 +63,19 @@ async function readJson(path: string): Promise<{ mcpServers: Record<string, unkn
   return JSON.parse(await readFile(join(folder, path), 'utf8')) as { mcpServers: Record<string, unknown> }
 }
 
-/** Nada de lo generado lleva credenciales ni cabeceras: solo URLs públicas y el comando del navegador. */
+/** Nada de lo generado lleva credenciales ni cabeceras: solo URLs públicas y comandos. */
 function expectNoCredentials(text: string): void {
   expect(text).not.toMatch(/token|bearer|authorization|secret|password|api[_-]?key|headers|ntn_|figd_/i)
 }
 
 describe('servidores por modo de Notion', () => {
-  it('Figma y navegador siempre; Notion solo con «MCP completo»', () => {
-    expect(agentMcpLaunch('claude', 'files').mcp.map(item => item.name)).toEqual(['figma', 'browser'])
-    expect(agentMcpLaunch('claude', 'mcp').mcp.map(item => item.name)).toEqual(['figma', 'browser', 'notion'])
-  })
-
-  it('la ayuda del navegador avisa de que con su permiso el agente puede abrir Notion', () => {
-    expect(agentMcpLaunch('claude', 'files').mcp.find(item => item.name === 'browser')?.hint).toContain('Notion incluido')
+  it('Figma siempre; Notion solo con «MCP completo»; nunca el MCP de Chrome (D-021)', () => {
+    expect(agentMcpLaunch('claude', 'files').mcp.map(item => item.name)).toEqual(['figma'])
+    expect(agentMcpLaunch('claude', 'mcp').mcp.map(item => item.name)).toEqual(['figma', 'notion'])
+    for (const adapter of ['claude', 'codex', 'opencode', 'gemini', 'omp']) {
+      const launch = agentMcpLaunch(adapter, 'mcp')
+      expect(JSON.stringify([launch.args, launch.env, launch.files.map(file => file.servers), launch.mcp])).not.toMatch(/chrome|9222/)
+    }
   })
 })
 
@@ -93,23 +90,18 @@ describe('Claude Code', () => {
     expect(JSON.parse(arg!.slice('--mcp-config='.length))).toEqual({
       mcpServers: {
         'table-figma': { type: 'http', url: FIGMA_MCP_URL },
-        'table-chrome-devtools': { type: 'stdio', command: 'npx', args: BROWSER_ARGS, env: NO_TABLE_ENV },
         'table-notion': { type: 'http', url: NOTION_URL },
       },
     })
     expect(launch.mcp.every(item => item.status === 'configured')).toBe(true)
     expect(launch.mcp.find(item => item.name === 'figma')?.hint).toContain('/mcp')
-    expect(launch.mcp.find(item => item.name === 'browser')?.hint).toContain('chrome://inspect/#remote-debugging')
     expect(launch.mcp.find(item => item.name === 'notion')?.hint).toContain('presupuestos')
     expectNoCredentials(arg!)
   })
 
   it('con archivos filtrados, sin Notion', () => {
     const [arg] = agentMcpLaunch('claude', 'files').args
-    expect(Object.keys((JSON.parse(arg!.slice('--mcp-config='.length)) as { mcpServers: object }).mcpServers)).toEqual([
-      'table-figma',
-      'table-chrome-devtools',
-    ])
+    expect(Object.keys((JSON.parse(arg!.slice('--mcp-config='.length)) as { mcpServers: object }).mcpServers)).toEqual(['table-figma'])
   })
 })
 
@@ -118,18 +110,7 @@ describe('Codex', () => {
     const launch = agentMcpLaunch('codex', 'files')
     expect(launch.files).toEqual([])
     expect(launch.env).toEqual({})
-    expect(launch.args).toEqual([
-      '-c',
-      `mcp_servers.table-figma.url="${FIGMA_MCP_URL}"`,
-      '-c',
-      'mcp_servers.table-chrome-devtools.command="npx"',
-      '-c',
-      `mcp_servers.table-chrome-devtools.args=${JSON.stringify(BROWSER_ARGS)}`,
-      '-c',
-      'mcp_servers.table-chrome-devtools.env={TABLE_MCP_SOCKET="",TABLE_MCP_SESSION="",TABLE_MCP_TICKET=""}',
-      '-c',
-      'mcp_servers.table-chrome-devtools.startup_timeout_sec=60',
-    ])
+    expect(launch.args).toEqual(['-c', `mcp_servers.table-figma.url="${FIGMA_MCP_URL}"`])
     expect(launch.mcp.find(item => item.name === 'figma')?.hint).toContain(
       `codex mcp login table-figma -c mcp_servers.table-figma.url="${FIGMA_MCP_URL}"`,
     )
@@ -151,7 +132,6 @@ describe('OpenCode', () => {
       $schema: 'https://opencode.ai/config.json',
       mcp: {
         'table-figma': { type: 'remote', url: FIGMA_MCP_URL },
-        'table-chrome-devtools': { type: 'local', command: ['npx', ...BROWSER_ARGS], environment: NO_TABLE_ENV },
         'table-notion': { type: 'remote', url: NOTION_URL },
       },
     })
@@ -168,7 +148,6 @@ describe('Gemini CLI', () => {
     expect(await readJson(GEMINI)).toEqual({
       mcpServers: {
         'table-figma': { httpUrl: FIGMA_MCP_URL },
-        'table-chrome-devtools': { command: 'npx', args: BROWSER_ARGS, env: NO_TABLE_ENV },
         'table-notion': { httpUrl: NOTION_URL },
       },
     })
@@ -189,7 +168,6 @@ describe('Gemini CLI', () => {
       mcpServers: {
         ...own,
         'table-figma': { httpUrl: FIGMA_MCP_URL },
-        'table-chrome-devtools': { command: 'npx', args: BROWSER_ARGS, env: NO_TABLE_ENV },
         'table-notion': { httpUrl: NOTION_URL },
       },
     })
@@ -199,7 +177,6 @@ describe('Gemini CLI', () => {
       mcpServers: {
         ...own,
         'table-figma': { httpUrl: FIGMA_MCP_URL },
-        'table-chrome-devtools': { command: 'npx', args: BROWSER_ARGS, env: NO_TABLE_ENV },
       },
     })
   })
@@ -214,7 +191,7 @@ describe('Gemini CLI', () => {
     // En «archivos filtrados» tampoco se quita su `table-notion`: no es de Table, y no bloquea.
     expect(servers['table-notion']).toEqual(theirs['table-notion'])
     expect(launch.mcp.find(item => item.name === 'figma')).toMatchObject({ status: 'unsupported', hint: expect.stringContaining('no es de Table') })
-    expect(launch.mcp.find(item => item.name === 'browser')?.status).toBe('configured')
+    expect(launch.mcp.find(item => item.name === 'notion')).toBeUndefined()
   })
 
   it('conserva permisos más restrictivos y no amplía los del archivo', async () => {
@@ -268,7 +245,7 @@ describe('quitar Notion que no se puede quitar', () => {
     await mcp.setMode(MESA, 'files').catch(() => undefined)
     await expect(mcp.prepare(MESA, folder, 'gemini')).rejects.toBeInstanceOf(SessionBlockedError)
     await expect(mcp.prepare(MESA, folder, 'omp')).rejects.toThrow(/no pudo quitar su MCP de Notion de \.gemini\/settings\.json/)
-    expect((await mcp.prepare(MESA, folder, 'claude')).mcp.map(item => item.name)).toEqual(['figma', 'browser'])
+    expect((await mcp.prepare(MESA, folder, 'claude')).mcp.map(item => item.name)).toEqual(['figma'])
     // Arreglado el permiso, vuelve a arrancar y Notion desaparece.
     await chmod(join(folder, '.gemini'), 0o700)
     await mcp.prepare(MESA, folder, 'gemini')
@@ -296,7 +273,7 @@ describe('carreras entre preparar y cambiar de modo', () => {
     expect(launch.isCurrent?.()).toBe(false)
     const fresh = await mcp.prepare(MESA, folder, 'claude')
     expect(fresh.isCurrent?.()).toBe(true)
-    expect(fresh.mcp.map(item => item.name)).toEqual(['figma', 'browser'])
+    expect(fresh.mcp.map(item => item.name)).toEqual(['figma'])
   })
 
   it('una preparación encolada después del cambio usa el modo nuevo', async () => {
@@ -304,30 +281,97 @@ describe('carreras entre preparar y cambiar de modo', () => {
     const change = mcp.setMode(MESA, 'mcp')
     const launch = await mcp.prepare(MESA, folder, 'gemini')
     await change
-    expect(launch.mcp.map(item => item.name)).toEqual(['figma', 'browser', 'notion'])
+    expect(launch.mcp.map(item => item.name)).toEqual(['figma', 'notion'])
     expect(launch.isCurrent?.()).toBe(true)
   })
 })
 
 describe('omp', () => {
-  it('`.omp/mcp.json` con navegador (y Notion si toca); Figma no se configura', async () => {
+  it('`.omp/mcp.json` con Notion si toca; Figma no se configura', async () => {
     mode = 'mcp'
     const launch = await mcp.prepare(MESA, folder, 'omp')
     expect(await readJson(OMP)).toEqual({
       mcpServers: {
-        'table-chrome-devtools': { type: 'stdio', command: 'npx', args: BROWSER_ARGS, env: NO_TABLE_ENV },
         'table-notion': { type: 'http', url: NOTION_URL },
       },
     })
     expect(launch.mcp.map(item => [item.name, item.status])).toEqual([
       ['figma', 'unsupported'],
-      ['browser', 'configured'],
       ['notion', 'configured'],
     ])
     await mcp.setMode(MESA, 'files')
-    expect(await readJson(OMP)).toEqual({
-      mcpServers: { 'table-chrome-devtools': { type: 'stdio', command: 'npx', args: BROWSER_ARGS, env: NO_TABLE_ENV } },
+    expect(await readJson(OMP)).toEqual({ mcpServers: {} })
+  })
+})
+
+describe('MCP de Chrome retirado (D-021)', () => {
+  const registryFile = (): string => join(root, 'datos', 'agent-mcp-files.json')
+
+  /** Un `.gemini/settings.json` de antes de D-021: Table creó Figma y Chrome; la persona tiene lo suyo. */
+  async function legacyFile(): Promise<Record<string, unknown>> {
+    await mkdir(join(folder, '.gemini'))
+    await mkdir(join(root, 'datos'), { recursive: true })
+    const own = { 'mi-servidor': { command: 'mio' } }
+    await writeFile(
+      join(folder, GEMINI),
+      JSON.stringify({ theme: 'GitHub', mcpServers: { ...own, 'table-figma': { httpUrl: FIGMA_MCP_URL }, [LEGACY_BROWSER_MCP_KEY]: LEGACY_BROWSER } }),
+    )
+    await writeFile(
+      registryFile(),
+      JSON.stringify({ version: 1, files: { [join(folder, GEMINI)]: [LEGACY_BROWSER_MCP_KEY, 'table-figma'] } }),
+    )
+    return own
+  }
+
+  it('al arrancar, Table quita su entrada de Chrome de los archivos que creó y conserva el resto', async () => {
+    const own = await legacyFile()
+    expect(await createMcp().retireLegacy()).toEqual([join(folder, GEMINI)])
+    expect(await readJson(GEMINI)).toEqual({ theme: 'GitHub', mcpServers: { ...own, 'table-figma': { httpUrl: FIGMA_MCP_URL } } })
+    const registry = JSON.parse(await readFile(registryFile(), 'utf8')) as { files: Record<string, string[]> }
+    expect(registry.files[join(folder, GEMINI)]).toEqual(['table-figma'])
+    // Una segunda vez no hay nada que limpiar.
+    expect(await createMcp().retireLegacy()).toEqual([])
+  })
+
+  it('preparar una sesión también la quita; una entrada de la persona con ese nombre no se toca', async () => {
+    await legacyFile()
+    await mcp.prepare(MESA, folder, 'gemini')
+    expect(Object.keys((await readJson(GEMINI)).mcpServers)).not.toContain(LEGACY_BROWSER_MCP_KEY)
+
+    const other = join(root, 'otra')
+    await mkdir(join(other, '.gemini'), { recursive: true })
+    await writeFile(join(other, GEMINI), JSON.stringify({ mcpServers: { [LEGACY_BROWSER_MCP_KEY]: LEGACY_BROWSER } }))
+    await createMcp().retireLegacy()
+    await mcp.prepare(MESA, other, 'gemini')
+    expect(JSON.parse(await readFile(join(other, GEMINI), 'utf8')).mcpServers[LEGACY_BROWSER_MCP_KEY]).toEqual(LEGACY_BROWSER)
+  })
+
+  it('si no se puede quitar, los arneses que leen ese archivo no arrancan (con el motivo); los demás sí', async () => {
+    await legacyFile()
+    await chmod(join(folder, '.gemini'), 0o500)
+    expect(await createMcp().retireLegacy()).toEqual([])
+    await expect(mcp.prepare(MESA, folder, 'gemini')).rejects.toBeInstanceOf(SessionBlockedError)
+    await expect(mcp.prepare(MESA, folder, 'omp')).rejects.toThrow(/MCP de Chrome retirado de \.gemini\/settings\.json.*table-chrome-devtools/)
+    expect((await mcp.prepare(MESA, folder, 'claude')).mcp.map(item => item.name)).toEqual(['figma'])
+    // Arreglado el permiso, se quita y Gemini CLI arranca.
+    await chmod(join(folder, '.gemini'), 0o700)
+    await mcp.prepare(MESA, folder, 'gemini')
+    expect(Object.keys((await readJson(GEMINI)).mcpServers)).not.toContain(LEGACY_BROWSER_MCP_KEY)
+  })
+
+  it('una carpeta que no pasa la comprobación no se toca', async () => {
+    await legacyFile()
+    const guarded = createAgentMcp({
+      mode: async () => 'files',
+      saveMode: async (_mesaId, next) => next,
+      folder: async () => folder,
+      verifyFolder: async () => {
+        throw new Error('no es una carpeta normal')
+      },
+      registryFile: registryFile(),
     })
+    expect(await guarded.retireLegacy()).toEqual([])
+    expect(Object.keys((await readJson(GEMINI)).mcpServers)).toContain(LEGACY_BROWSER_MCP_KEY)
   })
 })
 
@@ -347,8 +391,8 @@ describe('MCP de Table (T-011)', () => {
     expect(config.mcpServers['table']).toEqual({ type: 'stdio', ...STDIO })
     const chip = launch.mcp[0]
     expect(chip).toMatchObject({ name: 'table', status: 'configured' })
-    expect(chip?.hint).toContain('leer la selección')
-    expect(chip?.hint).toContain('Borrar pide tu confirmación')
+    expect(chip?.hint).toContain('en las webs de sus tarjetas')
+    expect(chip?.hint).toContain('borrar con tu confirmación')
   })
 
   it('Codex: `env` y `env_vars` para que el puente reciba el entorno de la sesión', () => {
@@ -376,9 +420,9 @@ describe('MCP de Table (T-011)', () => {
     expect((await readJson(OMP)).mcpServers['table']).toEqual({ type: 'stdio', ...STDIO })
     // Cambiar el modo de Notion conserva `table`.
     await withBridge.setMode(MESA, 'mcp')
-    expect(Object.keys((await readJson(GEMINI)).mcpServers)).toEqual(['table', 'table-figma', 'table-chrome-devtools', 'table-notion'])
+    expect(Object.keys((await readJson(GEMINI)).mcpServers)).toEqual(['table', 'table-figma', 'table-notion'])
     for (const text of [await readFile(join(folder, GEMINI), 'utf8'), await readFile(join(folder, OMP), 'utf8'), JSON.stringify(opencode)]) {
-      // Solo aparecen vacías (en el navegador): nunca un valor de testigo, socket o sesión.
+      // Nunca un valor de testigo, socket o sesión.
       expect(text).not.toMatch(/"TABLE_MCP_(TICKET|SOCKET|SESSION)": ?"[^"]/)
       expect(text).not.toMatch(/[0-9a-f]{64}/)
     }
@@ -386,7 +430,7 @@ describe('MCP de Table (T-011)', () => {
 
   it('sin servidor en marcha, ni configuración ni chip', () => {
     const launch = agentMcpLaunch('claude', 'files', null)
-    expect(launch.mcp.map(item => item.name)).toEqual(['figma', 'browser'])
+    expect(launch.mcp.map(item => item.name)).toEqual(['figma'])
     expect(launch.args[0]).not.toContain('"table"')
   })
 })
@@ -398,7 +442,7 @@ describe('sin MCP', () => {
       expect(launch.args).toEqual([])
       expect(launch.env).toEqual({})
       expect(launch.files).toEqual([])
-      expect(launch.mcp.map(item => item.status)).toEqual(['unsupported', 'unsupported', 'unsupported'])
+      expect(launch.mcp.map(item => item.status)).toEqual(['unsupported', 'unsupported'])
     }
     expect(agentMcpLaunch('shell', 'mcp')).toEqual({ args: [], env: {}, files: [], mcp: [] })
   })

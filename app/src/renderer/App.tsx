@@ -19,7 +19,7 @@ import {
   type ResultId,
   type ResultPatch,
 } from '../shared/model'
-import type { AgentConfirmRequest } from '../shared/ipc'
+import type { AgentActivity, AgentConfirmRequest } from '../shared/ipc'
 import { serviceById } from '../shared/services'
 import type { SurfaceCardState, UnloadResult } from '../shared/surface'
 import type { SessionId } from '../shared/terminal'
@@ -37,9 +37,11 @@ import { errorMessage } from './lib/errors'
 import { cardCountLabel, displayHost } from './lib/format'
 import { isExitShortcut } from './lib/shortcut'
 import { cardStatus } from './lib/status'
+import { activityLabel, useAgentActivities, useFollowAgent } from './lib/agentActivity'
 import {
   attachSession,
   forgetMesaSessions,
+  isInTerminal,
   loadSessions,
   pasteIntoSession,
   runningSession,
@@ -49,6 +51,20 @@ import {
 
 const api = window.table
 const isMac = api.platform === 'darwin'
+
+/** La persona escribe en un campo de Table (una nota, un nombre…); la terminal no cuenta. */
+function personIsTyping(): boolean {
+  const element = document.activeElement
+  if (!(element instanceof HTMLElement) || isInTerminal(element)) {
+    return false
+  }
+  return element.isContentEditable || element.tagName === 'INPUT' || element.tagName === 'TEXTAREA'
+}
+
+/** Una actividad nueva: otra sesión, otra tarjeta u otro nodo (`startedAt` cambia). */
+function activityKey(activity: AgentActivity): string {
+  return `${activity.sessionId}|${activity.cardId}|${activity.startedAt}`
+}
 
 type Route = { readonly kind: 'home' } | { readonly kind: 'mesa'; readonly mesaId: MesaId }
 
@@ -175,9 +191,9 @@ export function App() {
   const flushers = useRef(new Set<() => void>())
   const panelRef = useRef<HTMLElement>(null)
 
-  const notify = useCallback((text: string, tone: Notice['tone'] = 'error') => {
+  const notify = useCallback((text: string, tone: Notice['tone'] = 'error', action?: Notice['action']) => {
     noticeCounter += 1
-    setNotice({ id: noticeCounter, text, tone })
+    setNotice({ id: noticeCounter, text, tone, ...(action ? { action } : {}) })
   }, [])
   const notifyError = useCallback((error: unknown) => notify(errorMessage(error)), [notify])
 
@@ -858,19 +874,67 @@ export function App() {
     setAgentsOpen(true)
   }, [])
 
+  // Luz de actividad y «Seguir al agente» (T-012): cuando un agente empieza a trabajar en una
+  // tarjeta de esta mesa, Table la abre sin quitar el foco; si la persona escribe, tiene un
+  // diálogo abierto o está en otra web, solo avisa, con «Ver».
+  const activities = useAgentActivities()
+  const [followAgent] = useFollowAgent()
+  const seenActivities = useRef(new Set<string>())
+  const activitiesRef = useRef(activities)
+  activitiesRef.current = activities
+  // Lo que ya estaba en marcha al abrir la mesa no se sigue: solo lo que empieza después.
+  useEffect(() => {
+    seenActivities.current = new Set(activitiesRef.current.map(activityKey))
+  }, [mesaId])
+  useEffect(() => {
+    const current = new Set<string>()
+    for (const activity of activities) {
+      const key = activityKey(activity)
+      current.add(key)
+      if (seenActivities.current.has(key) || activity.mesaId !== mesaId) {
+        continue
+      }
+      const show = (): void => {
+        api.surface.enter(activity.mesaId, activity.cardId, { follow: true, nodeId: activity.nodeId }).catch(notifyError)
+      }
+      const card = mesa?.cards.find(candidate => candidate.id === activity.cardId)
+      const title = card ? (card.title ?? displayHost(card.url)) : 'una tarjeta nueva'
+      const blocked = personIsTyping() || dialog !== null || agentConfirm !== null
+      if (enteredState?.cardId === activity.cardId) {
+        // Ya está a la vista. Un nodo de Figma nuevo se sigue con las mismas reglas; si no, «Ver».
+        if (activity.nodeId) {
+          if (followAgent && !blocked) {
+            show()
+          } else {
+            notify(`${activity.agentName} está trabajando en otro frame de «${title}»`, 'info', { label: 'Ver', run: show })
+          }
+        }
+        continue
+      }
+      if (followAgent && !blocked && enteredState === null) {
+        show()
+        continue
+      }
+      notify(`${activity.agentName} está trabajando en «${title}»`, 'info', { label: 'Ver', run: show })
+    }
+    seenActivities.current = current
+  }, [activities, mesaId, mesa, enteredState, dialog, agentConfirm, followAgent, notify, notifyError])
+
   const enteredCard = useMemo((): EnteredCard | null => {
     if (!enteredState) {
       return null
     }
     const card = mesa?.cards.find(candidate => candidate.id === enteredState.cardId)
     const url = enteredState.currentUrl ?? card?.url ?? ''
+    const activity = activities.find(candidate => candidate.cardId === enteredState.cardId)
     return {
       service: serviceById(card?.serviceId ?? ''),
       title: enteredState.title ?? card?.title ?? displayHost(url),
       status: cardStatus(enteredState),
       error: enteredState.error,
+      activity: activity ? activityLabel(activity) : null,
     }
-  }, [enteredState, mesa])
+  }, [enteredState, mesa, activities])
 
   const showingMesa = route.kind === 'mesa' && mesa?.id === route.mesaId ? mesa : null
   const saveFailed =
@@ -1025,16 +1089,19 @@ export function App() {
         <ConfirmDialog
           key={agentConfirm.id}
           title={agentConfirm.title}
-          confirmLabel="Borrar"
+          confirmLabel={agentConfirm.confirmLabel}
+          confirmTone={agentConfirm.kind === 'remove' ? 'danger' : 'primary'}
           description={
             <>
-              <ul className="dialog-list">
-                {agentConfirm.items.map((item, index) => (
-                  // Dos notas pueden llamarse igual: la posición identifica la línea.
-                  <li key={index}>{item}</li>
-                ))}
-              </ul>
-              <p className="dialog-note">Lo pide el agente desde su sesión. El archivo de un resultado se queda en resultados/.</p>
+              {agentConfirm.items.length > 0 && (
+                <ul className="dialog-list">
+                  {agentConfirm.items.map((item, index) => (
+                    // Dos notas pueden llamarse igual: la posición identifica la línea.
+                    <li key={index}>{item}</li>
+                  ))}
+                </ul>
+              )}
+              <p className="dialog-note">{agentConfirm.note}</p>
             </>
           }
           onConfirm={async () => answerAgentConfirm(agentConfirm, true)}

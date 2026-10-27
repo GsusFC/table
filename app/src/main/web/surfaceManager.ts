@@ -5,7 +5,7 @@ import { isHttpUrl } from '../../shared/validate'
 import { log, originOf } from '../log'
 import { attachContextMenu, configureSurfaceSession, guardNavigation, SURFACE_PARTITION } from './guards'
 import { isExitShortcut } from './shortcut'
-import type { SurfaceCallbacks, SurfaceManager } from './types'
+import type { EnterOptions, SurfaceCallbacks, SurfaceManager } from './types'
 
 const CAPTURE_MAX_WIDTH = 1280
 const CAPTURE_JPEG_QUALITY = 72
@@ -81,6 +81,11 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
   const cards = new Map<CardId, LoadedCard>()
   let active: LoadedCard | null = null
   let bounds: Rectangle = { x: 0, y: 0, width: 0, height: 0 }
+  /**
+   * Tarjetas en las que trabaja un agente (T-012): su web no se descarga por
+   * el límite ni se cede a otra tarjeta del mismo archivo de Figma.
+   */
+  const pinned = new Set<CardId>()
 
   /**
    * Las operaciones públicas se encadenan: entrar, salir y descargar esperan
@@ -230,6 +235,7 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
     }
     attachListeners(card)
     cards.set(cardId, card)
+    callbacks.onContents?.(view.webContents)
     return card
   }
 
@@ -344,6 +350,8 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
         candidate.mesaId === mesaId &&
         candidateUrl !== null &&
         isAlive(candidate) &&
+        // La web en la que trabaja un agente no se cede: la otra tarjeta carga su propio editor.
+        !pinned.has(candidate.cardId) &&
         callbacks.shareKey(candidateUrl) === key &&
         (!donor || candidate.lastUsedAt > donor.lastUsedAt)
       ) {
@@ -585,7 +593,22 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
    */
   let openMesaId: MesaId | null = null
 
-  async function enterCard(mesaId: MesaId, cardId: CardId, url: string): Promise<void> {
+  /** Vuelve a cargar una tarjeta cuya carga falló o cuyo proceso terminó; la devuelve (quizá una vista nueva). */
+  function revive(mesaId: MesaId, card: LoadedCard, url: string): LoadedCard {
+    if (isAlive(card)) {
+      // Fallo de carga con el proceso vivo: se reintenta en la misma vista.
+      startLoad(card, url)
+      return card
+    }
+    // Proceso muerto: vista nueva; sus popups vivos pasan a ella.
+    const popups = card.popups
+    forceClose(card)
+    const fresh = createCard(mesaId, card.cardId, popups)
+    startLoad(fresh, url)
+    return fresh
+  }
+
+  async function enterCard(mesaId: MesaId, cardId: CardId, url: string, options: EnterOptions): Promise<void> {
     if (mesaId !== openMesaId) {
       throw new Error('No se puede entrar: la mesa de la tarjeta ya no está abierta')
     }
@@ -602,16 +625,10 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
     }
     // Una vista destruida o caída nunca se reutiliza.
     if (card && (card.state.status === 'failed' || !isAlive(card))) {
-      if (isAlive(card)) {
-        // Fallo de carga con el proceso vivo: se reintenta en la misma vista.
-        startLoad(card, url)
-      } else {
-        // Proceso muerto: vista nueva; sus popups vivos pasan a ella.
-        const popups = card.popups
-        forceClose(card)
-        card = createCard(mesaId, cardId, popups)
-        startLoad(card, url)
-      }
+      card = revive(mesaId, card, url)
+    } else if (card && options.shouldNavigate?.(card.state.currentUrl)) {
+      // Seguir al agente a un nodo de Figma: si la página avisa de cambios sin guardar, Electron no navega.
+      card.view.webContents.loadURL(url).catch(() => undefined)
     }
     if (!card) {
       // Tarjetas del mismo archivo de Figma comparten un único editor (T-005).
@@ -628,7 +645,10 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
     card.lastUsedAt = performance.now()
     card.view.setBounds(bounds)
     card.view.setVisible(true)
-    card.view.webContents.focus()
+    // Al seguir al agente, el foco se queda donde estaba (la terminal, por ejemplo).
+    if (options.focus) {
+      card.view.webContents.focus()
+    }
     if (!card.state.entered) {
       update(card, { entered: true })
     }
@@ -636,9 +656,55 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
     await enforceLoadedLimit()
   }
 
-  /** Descarga las webs menos usadas hasta quedar en MAX_LOADED_WEBS, sin tocar la activa. */
+  /**
+   * Web de una tarjeta para el agente (T-012): la carga si hace falta, sin
+   * mostrarla ni sacar a la persona de donde esté. La tarjeta tiene que
+   * estar fijada (`pin`) antes, para que el límite de webs no la descargue.
+   */
+  async function loadForAgent(mesaId: MesaId, cardId: CardId, url: string): Promise<WebContents> {
+    if (mesaId !== openMesaId) {
+      throw new Error('La mesa de esta sesión no está abierta en Table: la persona tiene que abrirla para que uses sus webs')
+    }
+    if (!isHttpUrl(url)) {
+      throw new Error('La tarjeta no tiene una URL http(s)')
+    }
+    let card = cards.get(cardId)
+    if (card && card.mesaId !== mesaId) {
+      throw new Error('La tarjeta pertenece a otra mesa')
+    }
+    if (card && (card.state.status === 'failed' || !isAlive(card))) {
+      card = revive(mesaId, card, url)
+    }
+    if (!card) {
+      const donor = findDonor(mesaId, url)
+      if (donor && donor === active) {
+        // Cederla cambiaría lo que la persona tiene delante.
+        throw new Error(
+          `La persona está usando el editor de este archivo de Figma en otra tarjeta (${donor.cardId}): usa esa tarjeta o espera a que vuelva al lienzo`,
+        )
+      }
+      const shared = donor ? await shareView(donor, cardId, url) : null
+      if (shared && shared.cardId !== cardId) {
+        throw new Error('El editor de este archivo de Figma avisa de cambios sin guardar: no se cambia de frame sin que la persona lo resuelva')
+      }
+      if (shared) {
+        card = shared
+      } else {
+        card = createCard(mesaId, cardId)
+        startLoad(card, url)
+      }
+    }
+    card.lastUsedAt = performance.now()
+    log('surface-agent-load', { origin: originOf(card.state.currentUrl ?? url) })
+    await enforceLoadedLimit()
+    return card.view.webContents
+  }
+
+  /** Descarga las webs menos usadas hasta quedar en MAX_LOADED_WEBS, sin tocar la activa ni las fijadas. */
   async function enforceLoadedLimit(): Promise<void> {
-    const candidates = [...cards.values()].filter(card => card !== active).sort((a, b) => a.lastUsedAt - b.lastUsedAt)
+    const candidates = [...cards.values()]
+      .filter(card => card !== active && !pinned.has(card.cardId))
+      .sort((a, b) => a.lastUsedAt - b.lastUsedAt)
     for (const card of candidates) {
       if (cards.size <= MAX_LOADED_WEBS) {
         return
@@ -660,8 +726,27 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
       })
     },
 
-    enter(mesaId, cardId, url) {
-      return serial(() => enterCard(mesaId, cardId, url))
+    enter(mesaId, cardId, url, options = {}) {
+      return serial(() => enterCard(mesaId, cardId, url, { ...options, focus: options.focus ?? true }))
+    },
+
+    loadForAgent(mesaId, cardId, url) {
+      return serial(() => loadForAgent(mesaId, cardId, url))
+    },
+
+    loadedContents(cardId) {
+      const card = cards.get(cardId)
+      return card && isAlive(card) ? card.view.webContents : null
+    },
+
+    pin(cardId) {
+      pinned.add(cardId)
+    },
+
+    unpin(cardId) {
+      if (pinned.delete(cardId)) {
+        void serial(enforceLoadedLimit)
+      }
     },
 
     exit() {
@@ -677,8 +762,11 @@ export function createSurfaceManager(window: BrowserWindow, callbacks: SurfaceCa
 
     setPanelBounds(panelBounds) {
       bounds = toRectangle(panelBounds)
-      if (active && !active.view.webContents.isDestroyed()) {
-        active.view.setBounds(bounds)
+      for (const card of cards.values()) {
+        // La activa y las del agente (ocultas) tienen el tamaño del panel: lo que ve el agente es lo que vería la persona.
+        if ((card === active || pinned.has(card.cardId)) && !card.view.webContents.isDestroyed()) {
+          card.view.setBounds(bounds)
+        }
       }
     },
 

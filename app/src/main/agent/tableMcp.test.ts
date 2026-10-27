@@ -13,6 +13,28 @@ import { createMesaStore } from '../store/mesaStore'
 import type { MesaStore } from '../store/types'
 import { startTableMcpServer, TABLE_MCP_ENV, type TableMcpRegistration, type TableMcpServer } from './tableMcp'
 import { createTableToolHandlers } from './tableTools'
+import { createActivityTracker } from './activity'
+import { createWebToolHandlers } from './webTools'
+import type { AgentPage } from '../web/agentPages'
+
+/** JPEG mínimo de prueba (no se decodifica: solo viaja como imagen del MCP). */
+const FAKE_JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9])
+
+/** Web falsa de una tarjeta: lo justo para la captura. */
+const fakePage: AgentPage = {
+  send: async () => ({}) as never,
+  url: () => 'http://localhost:5173/',
+  title: () => 'Web local',
+  waitForLoad: async () => undefined,
+  settle: async () => undefined,
+  navigate: async () => ({ kind: 'started' }),
+  capture: async () => FAKE_JPEG,
+  frameUrls: () => ['http://localhost:5173/'],
+  restrict: () => undefined,
+  evaluateLocal: async () => null,
+  consoleEntries: () => [],
+  networkErrors: () => [],
+}
 
 /** El puente se ejecuta desde su fuente con el Node de los tests (que admite TypeScript sin tipos). */
 const BRIDGE = join(__dirname, 'mcpBridge.ts')
@@ -35,17 +57,29 @@ beforeEach(async () => {
   clients = []
   confirmWith = null
   vi.spyOn(console, 'log').mockImplementation(() => undefined)
-  server = await startTableMcpServer(
-    createTableToolHandlers({
+  const confirm = async (request: { kind: string }, signal: AbortSignal): Promise<boolean> =>
+    // Usar las webs se acepta; borrar, según cada test.
+    request.kind === 'web' ? true : confirmWith ? confirmWith(signal) : answer
+  const web = createWebToolHandlers({
+    store,
+    isMesaOpen: () => true,
+    openPage: async () => fakePage,
+    activity: createActivityTracker({ onChange: () => undefined, pin: () => undefined, unpin: () => undefined }),
+    confirm,
+    changed: () => undefined,
+  })
+  server = await startTableMcpServer({
+    ...createTableToolHandlers({
       store,
       workFolder: async () => base,
       cachedProject: async () => null,
       unloadCard: async () => 'unloaded',
       ui: { isOpen: () => false, selection: () => [], editingNote: () => null, show: () => undefined },
-      confirm: async (_request, signal) => (confirmWith ? confirmWith(signal) : answer),
+      confirm,
       changed: () => undefined,
     }),
-  )
+    ...web.handlers,
+  })
 })
 
 afterEach(async () => {
@@ -102,6 +136,20 @@ describe('servidor y puente', () => {
     const rejected = await client.callTool({ name: 'table_remove_items', arguments: { ids: [note!.id] } })
     expect(JSON.stringify(rejected.content)).toContain('no aceptó')
     expect((await store.get(mesa.id)).notes).toHaveLength(1)
+  })
+
+  it('una captura de una web llega como imagen del MCP; las herramientas web se anuncian como de fuera', async () => {
+    const card = await store.addCard(mesa.id, { url: 'http://localhost:5173/', serviceId: 'web', position: { x: 0, y: 0 } })
+    const client = await connect(register().env)
+    const { tools } = await client.listTools()
+    expect(tools.find(tool => tool.name === 'table_web_click')?.annotations).toMatchObject({ openWorldHint: true, readOnlyHint: false })
+    expect(tools.find(tool => tool.name === 'table_add_note')?.annotations).toMatchObject({ openWorldHint: false })
+    const shot = await client.callTool({ name: 'table_web_screenshot', arguments: { cardId: card.id } })
+    expect(shot.isError).toBeFalsy()
+    expect(shot.content).toEqual([
+      { type: 'image', data: FAKE_JPEG.toString('base64'), mimeType: 'image/jpeg' },
+      { type: 'text', text: 'Captura de «Web local» — http://localhost:5173/' },
+    ])
   })
 
   it('rechaza un testigo desconocido, otra sesión o una sesión cerrada', async () => {
