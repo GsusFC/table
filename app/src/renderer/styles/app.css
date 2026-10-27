@@ -1636,6 +1636,63 @@ kbd {
   font-size: var(--font-size-sm);
 }
 
+/* Elegir páginas de Notion (T-009). */
+.notion-pages-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.notion-pages-project {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.notion-pages-project legend {
+  margin-bottom: var(--space-1);
+}
+
+.notion-pages-base {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.notion-pages-base-row {
+  font-weight: var(--font-weight-medium);
+}
+
+.notion-pages-page,
+.notion-pages-note {
+  margin-left: var(--space-5);
+}
+
+.notion-pages-note {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.notion-pages-warnings {
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: var(--font-size-sm);
+  color: var(--color-warning);
+  text-wrap: pretty;
+}
+
+.notion-pages-count {
+  align-self: center;
+  margin-right: auto;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
 /* ---------- Panel de agentes y terminal (T-007) ---------- */
 
 .menu-item:disabled,
@@ -1805,6 +1862,53 @@ kbd {
   font-family: var(--font-mono);
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
+}
+
+/* Progreso de la lectura de Notion (T-009). */
+.agents-context {
+  flex-shrink: 0;
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.agents-context-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 22px;
+}
+
+.agents-context-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agents-context-error {
+  color: var(--color-danger);
+}
+
+.agents-context-toggle {
+  flex-shrink: 0;
+  padding: 0 var(--space-1);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+  font: inherit;
+  cursor: pointer;
+}
+
+.agents-context-warnings {
+  max-height: 120px;
+  margin: var(--space-1) 0;
+  padding-left: var(--space-4);
+  overflow-y: auto;
+  text-wrap: pretty;
 }
 
 .agents-body {

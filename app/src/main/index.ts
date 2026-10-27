@@ -19,6 +19,7 @@ import { pathToFileURL } from 'node:url'
 import { figmaFileKey } from '../shared/figma'
 import { CAPTURE_PROTOCOL, IPC, RESULT_PROTOCOL, type PersistenceError } from '../shared/ipc'
 import type { MesaId } from '../shared/model'
+import { parseNotionSelections } from '../shared/notionContext'
 import { recognizeService } from '../shared/services'
 import {
   isCustomProfileId,
@@ -35,7 +36,9 @@ import {
   parseTerminalSize,
   parseViewport,
 } from '../shared/validate'
-import { createAgentContext, type AgentContext } from './agent/context'
+import { CONTEXT_FILE, createAgentContext, type AgentContext } from './agent/context'
+import { createNotionContent, type NotionContent } from './agent/notionContent'
+import { NOTION_DIR } from './agent/notionFiles'
 import { createResultsWatcher, IMAGE_MIME, type ResultEntry, type ResultsWatcher } from './agent/results'
 import { log } from './log'
 import { authorizeNotion, createNotionMcp, NOTION_MCP_URL } from './notion/mcp'
@@ -87,6 +90,8 @@ let profileCatalog: ProfileCatalog | null = null
 let terminals: SessionManager | null = null
 let workFolders: WorkFolders | null = null
 let agentContext: AgentContext | null = null
+/** Contenido completo de Notion en `notion/` de cada mesa (T-009). */
+let notionContent: NotionContent | null = null
 let resultsWatcher: ResultsWatcher | null = null
 /** Autorización con Notion en curso (navegador abierto); se puede cancelar. */
 let connectingNotion: AbortController | null = null
@@ -262,6 +267,7 @@ function registerIpc(): void {
     await terminals?.closeMesa(mesaId)
     await workFolders?.forget(mesaId)
     agentContext?.forget(mesaId)
+    await notionContent?.forget(mesaId)
   })
   handle(IPC.mesasSetViewport, (id, viewport) => requireStore().setViewport(parseId(id), parseViewport(viewport)))
 
@@ -387,6 +393,7 @@ function registerNotionIpc(): void {
   handle(IPC.settingsDisconnectNotion, async () => {
     await requireSettings().disconnectNotion()
     await requireProjects().clearCache()
+    await notionContent?.clearCache()
     log('settings-notion', { action: 'disconnected' })
     return requireSettings().notionView()
   })
@@ -471,11 +478,11 @@ function registerFigmaIpc(): void {
   })
 }
 
-function requireAgent(): { context: AgentContext; results: ResultsWatcher } {
-  if (!agentContext || !resultsWatcher) {
+function requireAgent(): { context: AgentContext; results: ResultsWatcher; notion: NotionContent } {
+  if (!agentContext || !resultsWatcher || !notionContent) {
     throw new Error('El contexto de los agentes no está listo')
   }
-  return { context: agentContext, results: resultsWatcher }
+  return { context: agentContext, results: resultsWatcher, notion: notionContent }
 }
 
 /** Elementos máximos en una selección enviada al agente. */
@@ -523,7 +530,31 @@ const MAX_RESULT_IMAGE_BYTES = 32 * 1024 * 1024
 /** Contexto para los agentes y tarjetas de resultado (T-008). */
 function registerAgentIpc(): void {
   handle(IPC.agentRefreshContext, async mesaId => {
-    await requireAgent().context.write(parseId(mesaId))
+    const parsed = parseId(mesaId)
+    await requireAgent().context.write(parsed)
+    // El contenido de Notion se lee en segundo plano; el panel muestra el progreso.
+    void requireAgent().notion.request(parsed)
+  })
+  handle(IPC.agentOpenContext, async mesaId => {
+    const folder = await requireAgent().context.write(parseId(mesaId))
+    const notionDir = join(folder, NOTION_DIR)
+    const reveal = existsSync(notionDir) ? notionDir : join(folder, CONTEXT_FILE)
+    if (smokeMode) {
+      smokeHooks.openedContext.push(join(folder, CONTEXT_FILE), reveal)
+      return
+    }
+    const failure = await shell.openPath(join(folder, CONTEXT_FILE))
+    if (failure) {
+      throw new Error(`No se pudo abrir TABLE.md: ${failure}`)
+    }
+    shell.showItemInFolder(reveal)
+  })
+  handle(IPC.agentContextState, mesaId => requireAgent().notion.progress(parseId(mesaId)))
+  handle(IPC.agentNotionTree, mesaId => requireAgent().notion.tree(parseId(mesaId)))
+  handle(IPC.agentSetNotionSelection, async (mesaId, selections) => {
+    const parsedMesa = parseId(mesaId)
+    await requireStore().get(parsedMesa)
+    await requireAgent().notion.setSelection(parsedMesa, parseNotionSelections(selections))
   })
   handle(IPC.agentSelectionText, (mesaId, itemIds) => {
     if (!Array.isArray(itemIds) || itemIds.length === 0 || itemIds.length > MAX_SELECTION_ITEMS) {
@@ -905,8 +936,23 @@ void app.whenReady().then(async () => {
     workFolder: mesa => folders.folderFor(mesa.id, mesa.name),
     cachedProject: url => projectService.cached(url),
     frame: url => frameService.thumbnail(url),
+    notionContent: mesaId => content.summary(mesaId),
   })
   agentContext = context
+  const content = createNotionContent({
+    mcp: notionMcp,
+    revision: () => currentSettings.revision(),
+    connected: () => currentSettings.notionView().connected,
+    getMesa: mesaId => requireStore().get(mesaId),
+    workFolder: mesa => folders.folderFor(mesa.id, mesa.name),
+    cachedProject: url => projectService.cached(url),
+    dataDir: app.getPath('userData'),
+    onProgress: progress => sendToRenderer(IPC.agentContextProgress, progress),
+    onWritten: async mesaId => {
+      await context.write(mesaId)
+    },
+  })
+  notionContent = content
   resultsWatcher = createResultsWatcher({
     store: requireStore(),
     workFolder: mesaFolder,
@@ -921,6 +967,8 @@ void app.whenReady().then(async () => {
       await context.write(mesaId).catch((error: unknown) => {
         log('agent-context-failed', { message: error instanceof Error ? error.message : String(error) })
       })
+      // El contenido de Notion se lee en segundo plano: la sesión no lo espera.
+      void content.request(mesaId)
       return folder
     },
     profile: id => catalog.get(id),

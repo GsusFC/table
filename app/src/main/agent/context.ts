@@ -5,13 +5,15 @@ import { PROJECT_FIELDS, type ProjectFieldValue, type ProjectSnapshot } from '..
 import { serviceById } from '../../shared/services'
 import { writeFileAtomic } from '../files'
 import { log } from '../log'
+import { NOTION_DIR, NOTION_INDEX, plural, type NotionContentSummary } from './notionFiles'
 
 /**
  * Contexto de la mesa para los agentes, por archivos (T-008). Table escribe
  * `TABLE.md` en la carpeta de trabajo de la mesa con lo que la interfaz ya
  * muestra: nombre, ficha del proyecto con la lista cerrada de campos (de la
  * caché, nunca de la red), enlaces, notas, conexiones y la última selección
- * enviada. Nunca campos excluidos de Notion, capturas ni contenido de páginas.
+ * enviada. Nunca campos excluidos de Notion ni capturas. El contenido de las
+ * páginas va aparte, filtrado, en `notion/` (T-009); aquí solo se enlaza.
  */
 
 export const CONTEXT_FILE = 'TABLE.md'
@@ -51,6 +53,8 @@ export interface TableContextInput extends CardDetails {
   readonly mesa: Mesa
   readonly generatedAt: string
   readonly lastSelection: SentSelection | null
+  /** Última lectura del contenido de Notion escrita en `notion/` (T-009), o null. */
+  readonly notionContent: NotionContentSummary | null
 }
 
 /** `2026-10-27T10:05:00.000Z` → `2026-10-27 10:05 UTC`. */
@@ -78,8 +82,8 @@ export function oneLine(text: string): string {
   return text.replace(BIDI, '').replace(CONTROL, ' ').replace(/\s+/g, ' ').trim()
 }
 
-/** Texto de varias líneas (notas): saltos normalizados a `\n`, sin otros caracteres de control. */
-function cleanBlock(text: string): string {
+/** Texto de varias líneas (notas, páginas): saltos normalizados a `\n`, sin otros caracteres de control (salvo tabuladores). */
+export function cleanBlock(text: string): string {
   return text
     .replace(/\r\n?/g, '\n')
     .replace(BIDI, '')
@@ -87,11 +91,14 @@ function cleanBlock(text: string): string {
 }
 
 /**
- * Nota como bloque de código con una valla más larga que cualquier serie de
+ * Texto como bloque de código con una valla más larga que cualquier serie de
  * acentos graves de su texto: el contenido no puede cerrarlo.
  */
-function fenced(text: string): string[] {
-  const longest = Math.max(0, ...Array.from(text.matchAll(/`+/g), match => match[0].length))
+export function fenced(text: string): string[] {
+  let longest = 0
+  for (const match of text.matchAll(/`+/g)) {
+    longest = Math.max(longest, match[0].length)
+  }
   const fence = '`'.repeat(Math.max(3, longest + 1))
   return [`${fence}text`, ...text.split('\n'), fence]
 }
@@ -173,6 +180,26 @@ function linkLine(card: Card, details: CardDetails): string {
   return `- **${service}** · ${cardLabel(card, details)}${where}${project} — <${oneLine(card.url)}>`
 }
 
+/** Dónde está el contenido filtrado de las fichas (`notion/`, T-009), con sus recuentos. */
+function notionContentLines(summary: NotionContentSummary | null, hasProjects: boolean): string[] {
+  const index = `\`${NOTION_DIR}/${NOTION_INDEX}\``
+  if (!summary || (summary.projects === 0 && hasProjects)) {
+    return hasProjects
+      ? [`Table está leyendo en segundo plano el contenido de las fichas (su cuerpo y las páginas de sus bases); aparecerá en ${index}.`]
+      : ['Sin fichas de proyecto: no hay contenido de Notion.']
+  }
+  if (summary.projects === 0) {
+    return ['Sin fichas de proyecto: no hay contenido de Notion.']
+  }
+  const lines = [
+    `El contenido de las fichas (su cuerpo y las páginas de sus bases), filtrado por Table, está en ${index}: ${plural(summary.pages, 'página', 'páginas')}, leídas de Notion el ${formatInstant(summary.readAt)}. ${plural(summary.excludedByChoice, 'página quedó fuera', 'páginas quedaron fuera')} por elección de la persona; ${plural(summary.filteredPages, 'página o base se omitió', 'páginas o bases se omitieron')} por su título o por los límites; ${plural(summary.omittedLines, 'línea se omitió', 'líneas se omitieron')} por posible información económica.`,
+  ]
+  if (summary.warnings.length > 0) {
+    lines.push('', 'Avisos de la última lectura:', '', ...summary.warnings.map(warning => `- ${oneLine(warning)}`))
+  }
+  return lines
+}
+
 /**
  * `TABLE.md` completo. Función pura: recibe la mesa, la caché ya leída y la
  * fecha, para poder probarla con datos sintéticos.
@@ -198,6 +225,8 @@ export function formatTableContext(input: TableContextInput): string {
   for (const card of projectCards) {
     lines.push(...projectLines(input.projects.get(card.id)!, card.url))
   }
+
+  lines.push('## Contenido de Notion', '', ...notionContentLines(input.notionContent, projectCards.length > 0), '')
 
   lines.push('## Enlaces', '')
   if (mesa.cards.length === 0) {
@@ -278,6 +307,8 @@ export interface AgentContextOptions {
   cachedProject(url: string): Promise<ProjectSnapshot | null>
   /** Nombre y página guardados de un frame de Figma, o null. */
   frame(url: string): Promise<FrameInfo | null>
+  /** Resumen de la última lectura del contenido de Notion de la mesa (T-009), o null. */
+  notionContent(mesaId: MesaId): Promise<NotionContentSummary | null>
   now?: () => string
 }
 
@@ -336,6 +367,7 @@ export function createAgentContext(options: AgentContextOptions): AgentContext {
       mesa,
       generatedAt: now(),
       lastSelection: selections.get(mesa.id) ?? null,
+      notionContent: await options.notionContent(mesa.id),
       ...cardDetails,
     })
     await writeFileAtomic(join(folder, CONTEXT_FILE), text)

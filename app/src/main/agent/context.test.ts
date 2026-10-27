@@ -71,8 +71,18 @@ const details: CardDetails = {
   frames: new Map([[ids.figma, { name: 'Inicio', pageName: 'Pantallas' }]]),
 }
 
+const summary = {
+  readAt: '2026-10-27T09:30:00.000Z',
+  projects: 1,
+  pages: 12,
+  excludedByChoice: 3,
+  filteredPages: 1,
+  omittedLines: 4,
+  warnings: ['La base «Proceso\n## Fuera» tiene más de 100 filas'],
+}
+
 describe('TABLE.md', () => {
-  const text = formatTableContext({ mesa, generatedAt: AT, lastSelection: { sentAt: AT, text: '- Nota · Idea' }, ...details })
+  const text = formatTableContext({ mesa, generatedAt: AT, lastSelection: { sentAt: AT, text: '- Nota · Idea' }, notionContent: summary, ...details })
 
   it('lleva el nombre, la fecha y aviso de que se regenera', () => {
     expect(text.startsWith('# Mesa sintética\n')).toBe(true)
@@ -104,6 +114,22 @@ describe('TABLE.md', () => {
     expect(text).toContain('## Última selección enviada\n\nEnviada el 2026-10-27 10:00 UTC:\n\n- Nota · Idea')
     expect(text).toContain('## Cómo devolver resultados')
   })
+
+  it('enlaza el contenido de Notion con sus recuentos, fecha y avisos en una línea', () => {
+    expect(text).toContain('## Contenido de Notion\n\nEl contenido de las fichas')
+    expect(text).toContain('`notion/index.md`: 12 páginas, leídas de Notion el 2026-10-27 09:30 UTC')
+    expect(text).toContain('3 páginas quedaron fuera por elección de la persona')
+    expect(text).toContain('1 página o base se omitió por su título o por los límites')
+    expect(text).toContain('4 líneas se omitieron por posible información económica')
+    expect(text).toContain('- La base «Proceso ## Fuera» tiene más de 100 filas')
+  })
+
+  it('sin lectura todavía, dice que se está leyendo; sin fichas, que no hay contenido', () => {
+    const pending = formatTableContext({ mesa, generatedAt: AT, lastSelection: null, notionContent: null, ...details })
+    expect(pending).toContain('Table está leyendo en segundo plano el contenido de las fichas')
+    const none = formatTableContext({ mesa, generatedAt: AT, lastSelection: null, notionContent: null, projects: new Map(), frames: new Map() })
+    expect(none).toContain('Sin fichas de proyecto: no hay contenido de Notion.')
+  })
 })
 
 describe('datos externos maliciosos', () => {
@@ -120,7 +146,7 @@ describe('datos externos maliciosos', () => {
     projects: new Map(),
     frames: new Map([[ids.figma, { name: `Frame${evil}`, pageName: `Página${evil}` }]]),
   }
-  const text = formatTableContext({ mesa: hostile, generatedAt: AT, lastSelection: null, ...hostileDetails })
+  const text = formatTableContext({ mesa: hostile, generatedAt: AT, lastSelection: null, notionContent: null, ...hostileDetails })
   const lines = text.split('\n')
 
   it('no deja caracteres de control ni abre encabezados con nombres, títulos o frames', () => {
@@ -180,6 +206,7 @@ describe('escritura en la carpeta de trabajo', () => {
       workFolder: async () => folder,
       cachedProject: async url => (url === NOTION_URL ? snapshotWithExcluded() : null),
       frame: async url => (url === FIGMA_URL ? { name: 'Inicio', pageName: 'Pantallas' } : null),
+      notionContent: async () => null,
       now: () => AT,
     })
   }

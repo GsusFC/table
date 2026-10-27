@@ -67,7 +67,7 @@ function mapFailure(error: unknown): NotionError {
 
 export interface NotionMcp {
   /** Llama a una herramienta de solo lectura y devuelve su texto. */
-  read(tool: 'notion-fetch' | 'notion-search', args: Record<string, unknown>): Promise<string>
+  read(tool: 'notion-fetch' | 'notion-search' | 'notion-query-data-sources', args: Record<string, unknown>): Promise<string>
 }
 
 /**

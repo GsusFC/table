@@ -1,5 +1,5 @@
 import { app, webContents, type BrowserWindow, type WebContents } from 'electron'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
@@ -11,10 +11,10 @@ import type { Card, Mesa, Point, Size } from '../shared/model'
 import type { HarnessProfile, SessionInfo } from '../shared/terminal'
 import {
   FIXTURE_OTHER_SOURCE,
-  FIXTURE_PROJECT_PROPERTIES,
-  FIXTURE_PROJECT_SCHEMA,
   FIXTURE_PROJECTS_SOURCE,
+  FIXTURE_ROWS,
   fixtureDataSourceResponse,
+  fixtureNotionResponse,
   fixturePageResponse,
   fixtureSearchResponse,
 } from './notion/fixtures'
@@ -57,6 +57,8 @@ export const smokeHooks = {
   terminateConfirmations: [] as number[],
   /** PID del proceso de una sesión; no se expone por IPC. */
   terminalPid: (_sessionId: string): number | null => null,
+  /** «Ver contexto» en el smoke: rutas que se abrirían, sin abrir apps del sistema. */
+  openedContext: [] as string[],
 }
 
 function processAlive(pid: number): boolean {
@@ -117,14 +119,18 @@ const NOTION_PROJECT = 'aaaaaaaabbbb4ccc8dddeeeeeeeeeeee'
 const NOTION_OTHER = 'ffffffffbbbb4ccc8dddeeeeeeeeeeee'
 
 /**
- * MCP de Notion falso (sin OAuth, sin estado): una ficha con campos excluidos
- * rellenos en una base de proyectos y una página de otra base.
+ * MCP de Notion falso (sin OAuth): una ficha con campos excluidos rellenos en
+ * una base de proyectos, una página de otra base y el árbol sintético de la
+ * ficha (T-009). Anota las páginas que se leen; las filas tardan un poco en
+ * responder, para comprobar que la sesión no espera a la lectura.
  */
-async function startNotionMcpServer(): Promise<{ server: Server; url: string }> {
+async function startNotionMcpServer(): Promise<{ server: Server; url: string; fetched: string[] }> {
+  const fetched: string[] = []
+  const rowIds: readonly string[] = Object.values(FIXTURE_ROWS)
   const server = createServer((request, response) => {
     const mcp = new McpServer({ name: 'notion-falso', version: '0.0.0' }, { capabilities: { tools: {} } })
     mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: ['notion-fetch', 'notion-search'].map(name => ({ name, inputSchema: { type: 'object' as const } })),
+      tools: ['notion-fetch', 'notion-search', 'notion-query-data-sources'].map(name => ({ name, inputSchema: { type: 'object' as const } })),
     }))
     mcp.setRequestHandler(CallToolRequestSchema, async call => {
       if (call.params.name === 'notion-search') {
@@ -141,17 +147,21 @@ async function startNotionMcpServer(): Promise<{ server: Server; url: string }> 
           ],
         }
       }
-      const id = String(call.params.arguments?.['id'] ?? '')
+      const args = call.params.arguments ?? {}
+      const id = String(args['id'] ?? '')
+      if (call.params.name === 'notion-fetch') {
+        fetched.push(id)
+        if (rowIds.includes(id)) {
+          await delay(400)
+        }
+      }
       const text =
-        id === NOTION_PROJECT
-          ? fixturePageResponse(`https://www.notion.so/${id}`, FIXTURE_PROJECTS_SOURCE, FIXTURE_PROJECT_PROPERTIES)
-          : id === NOTION_OTHER
-            ? fixturePageResponse(`https://www.notion.so/${id}`, FIXTURE_OTHER_SOURCE, { Name: 'Página suelta' })
-            : id === FIXTURE_PROJECTS_SOURCE
-              ? fixtureDataSourceResponse(id, FIXTURE_PROJECT_SCHEMA)
-              : id === FIXTURE_OTHER_SOURCE
-                ? fixtureDataSourceResponse(id, { Name: { type: 'title' } })
-                : null
+        fixtureNotionResponse(call.params.name, args) ??
+        (id === NOTION_OTHER
+          ? fixturePageResponse(`https://www.notion.so/${id}`, FIXTURE_OTHER_SOURCE, { Name: 'Página suelta' })
+          : id === FIXTURE_OTHER_SOURCE
+            ? fixtureDataSourceResponse(id, { Name: { type: 'title' } })
+            : null)
       return text === null
         ? { isError: true, content: [{ type: 'text' as const, text: '{"code":"object_not_found"}' }] }
         : { content: [{ type: 'text' as const, text }] }
@@ -167,7 +177,7 @@ async function startNotionMcpServer(): Promise<{ server: Server; url: string }> 
   server.listen(0, '127.0.0.1', resolve)
   await promise
   const { port } = server.address() as AddressInfo
-  return { server, url: `http://127.0.0.1:${port}/mcp` }
+  return { server, url: `http://127.0.0.1:${port}/mcp`, fetched }
 }
 
 const FIGMA_TOKEN = `figd_${'s'.repeat(40)}`
@@ -1542,6 +1552,154 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
       }
     }
     // fin T-008 API
+
+    // T-009: contenido completo de Notion en notion/, progreso en el panel, «Elegir páginas de Notion…» y «Ver contexto».
+    {
+      const notionServer = await startNotionMcpServer()
+      smokeHooks.notionMcpUrl = notionServer.url
+      let notionFolder: string | null = null
+      try {
+        await settings.connectNotion(
+          { client: { client_id: 'smoke', redirect_uris: ['http://127.0.0.1/callback'] }, tokens: { access_token: 'credencial-sintetica', token_type: 'Bearer' } },
+          { workspaceName: 'Estudio de prueba', userName: 'Persona de prueba' },
+        )
+        const fullMesa = await inUi<Mesa>(`window.table.mesas.create('Notion completo')`)
+        const fullArg = JSON.stringify(fullMesa.id)
+        const projectCard = await inUi<Card>(`window.table.cards.add(${fullArg}, 'https://www.notion.so/equipo/Proyecto-${NOTION_PROJECT}', { x: 0, y: 0 })`)
+        await inUi(`window.table.notion.refreshProject(${fullArg}, ${JSON.stringify(projectCard.id)})`)
+        ui.reload()
+        await waitFor(() => inUi<boolean>(`[...document.querySelectorAll('.mesa-row-open')].some(b => b.textContent.includes('Notion completo'))`), Boolean, 'mesa de Notion en el inicio')
+        await inUi(`[...document.querySelectorAll('.mesa-row-open')].find(b => b.textContent.includes('Notion completo')).click()`)
+        await waitFor(nodeCount, count => count === 1, 'ficha en el lienzo')
+        await inUi(`(() => { window.__notionProgress = []; window.table.agent.onProgress(p => window.__notionProgress.push(p)); return true })()`)
+        if (!(await inUi<boolean>(`!!document.querySelector('.agents')`))) {
+          await inUi(`document.querySelector('.topbar [aria-label="Agentes"]').click()`)
+        }
+        const shellName = (await inUi<HarnessProfile[]>(`window.table.terminal.profiles()`)).find(profile => profile.id === 'shell')!.name
+        await waitFor(() => inUi<number>(`document.querySelectorAll('.agents-profile').length`), count => count > 0, 'perfiles en el panel')
+        await inUi(`[...document.querySelectorAll('.agents-profile')].find(b => b.textContent.includes(${JSON.stringify(shellName)})).click()`)
+        const [session] = await waitFor(() => inUi<SessionInfo[]>(`window.table.terminal.sessions(${fullArg})`), list => list.length === 1, 'sesión abierta')
+        // La sesión ya está abierta mientras Table sigue leyendo Notion (las filas tardan en el MCP falso).
+        const phasesAtStart = await inUi<string[]>(`window.__notionProgress.map(p => p.phase)`)
+        notionFolder = session!.cwd
+        const doneCount = (): Promise<number> => inUi<number>(`window.__notionProgress.filter(p => p.phase === 'done').length`)
+        await waitFor(doneCount, count => count >= 1, 'lectura de Notion terminada', 20_000)
+        const events = await inUi<{ phase: string; done: number; total: number; pages: number; warnings: string[] }[]>(`window.__notionProgress`)
+        const panelLine = await waitFor(
+          () => inUi<string>(`document.querySelector('.agents-context-text')?.textContent ?? ''`),
+          text => text.includes('4 páginas'),
+          'progreso en el panel',
+        ).catch(() => '')
+        record(
+          'notion: la sesión no espera a la lectura y el progreso llega al panel',
+          session!.status === 'running' &&
+            !phasesAtStart.includes('done') &&
+            events.some(event => event.phase === 'reading' && event.total === 3 && event.done > 0) &&
+            panelLine === 'Notion: 4 páginas para el agente',
+          { phasesAtStart, panelLine },
+        )
+        await inUi(`document.querySelector('.agents-context-toggle')?.click()`)
+        const warningsShown = await waitFor(
+          () => inUi<string>(`document.querySelector('.agents-context-warnings')?.textContent ?? ''`),
+          text => text.includes('título indica información económica'),
+          'avisos en el panel',
+        ).then(
+          () => true,
+          () => false,
+        )
+        record('notion: los avisos se despliegan en el panel', warningsShown)
+        await shot('24-contexto-notion')
+
+        const notionDir = join(notionFolder, 'notion')
+        const readNotion = (): Record<string, string> =>
+          Object.fromEntries(readdirSync(notionDir).sort().map(name => [name, readFileSync(join(notionDir, name), 'utf8')]))
+        const files = readNotion()
+        const allText = Object.values(files).join('\n')
+        const index = files['index.md'] ?? ''
+        const table = readFileSync(join(notionFolder, 'TABLE.md'), 'utf8')
+        record(
+          'notion: la ficha, su base (sin repetir la vista enlazada) y sus páginas llegan a notion/ con el índice',
+          Object.keys(files).join() === 'concepto-20000000.md,index.md,investigacion-10000000.md,logotipo-40000000.md,proyecto-sintetico-aaaaaaaa.md' &&
+            (index.match(/### Base «Proceso sintético»/g) ?? []).length === 1 &&
+            index.includes('### Base «Entregables sintéticos»') &&
+            index.includes('4 páginas en esta carpeta') &&
+            table.includes('## Contenido de Notion') &&
+            table.includes('`notion/index.md`: 4 páginas'),
+          { files: Object.keys(files) },
+        )
+        record(
+          'notion: ninguna propiedad excluida, importe ni nombre de persona sale a notion/ ni a TABLE.md',
+          !/SECRETO|Opportunity|Precio|Budget|Responsables/.test(allText) && !table.includes('SECRETO') && allText.includes('[omitido: posible información económica]'),
+        )
+
+        // Segunda lectura sin cambios: las filas con marca de edición no se vuelven a pedir.
+        const researchReads = (): number => notionServer.fetched.filter(id => id === FIXTURE_ROWS.research).length
+        const before = researchReads()
+        const openMore = async (label: string): Promise<void> => {
+          await inUi(`document.querySelector('.agents [aria-label="Más acciones de agentes"]').click()`)
+          await waitFor(() => inUi<boolean>(`!!document.querySelector('.menu')`), Boolean, 'menú de agentes')
+          await inUi(`[...document.querySelectorAll('.menu [role="menuitem"]')].find(b => b.textContent.includes(${JSON.stringify(label)})).click()`)
+        }
+        await openMore('Actualizar contexto')
+        await waitFor(doneCount, count => count >= 2, 'segunda lectura de Notion', 20_000)
+        record('notion: una segunda lectura sin cambios no vuelve a pedir las páginas no editadas', before === 1 && researchReads() === 1, {
+          before,
+          after: researchReads(),
+        })
+
+        // Elegir páginas: fuera «Concepto» y la base «Entregables sintéticos».
+        await openMore('Elegir páginas de Notion…')
+        await waitFor(() => inUi<number>(`document.querySelectorAll('dialog[open] .notion-pages-page').length`), count => count === 3, 'árbol de la ficha en el diálogo')
+        const dialogText = await inUi<string>(`document.querySelector('dialog[open]').textContent`)
+        await inUi(`[...document.querySelectorAll('dialog[open] .notion-pages-page')].find(l => l.textContent.includes('Concepto')).querySelector('input').click()`)
+        await inUi(`[...document.querySelectorAll('dialog[open] .notion-pages-base-row')].find(l => l.textContent.includes('Entregables sintéticos')).querySelector('input').click()`)
+        const countText = await inUi<string>(`document.querySelector('dialog[open] .notion-pages-count').textContent`)
+        await shot('25-elegir-paginas-notion')
+        await inUi(`document.querySelector('dialog[open] button[type="submit"]').click()`)
+        await waitFor(() => inUi<boolean>(`!document.querySelector('dialog[open]')`), Boolean, 'diálogo cerrado')
+        await waitFor(doneCount, count => count >= 3, 'lectura con la selección', 20_000)
+        const chosen = readNotion()
+        const chosenTable = readFileSync(join(notionFolder, 'TABLE.md'), 'utf8')
+        const savedTree = await inUi<{ projects: { selection: { bases: Record<string, { mode: string; pages: string[] }> } }[] }>(
+          `window.table.agent.notionTree(${fullArg})`,
+        )
+        record(
+          'notion: elegir páginas deja en notion/ solo lo marcado y cuenta lo que quedó fuera por elección',
+          dialogText.includes('Base «Proceso sintético»') &&
+            !dialogText.includes('SECRETO') &&
+            countText === '2 de 4 páginas' &&
+            Object.keys(chosen).join() === 'index.md,investigacion-10000000.md,proyecto-sintetico-aaaaaaaa.md' &&
+            (chosen['index.md'] ?? '').includes('2 páginas fuera por elección') &&
+            chosenTable.includes('2 páginas quedaron fuera por elección') &&
+            savedTree.projects[0]?.selection.bases['collection://77777777-2222-4333-8444-555555555555']?.pages.join() === FIXTURE_ROWS.concept,
+          { countText, files: Object.keys(chosen) },
+        )
+
+        // «Ver contexto»: TABLE.md con la app del sistema y la carpeta notion/ (en el smoke solo se anotan).
+        smokeHooks.openedContext.length = 0
+        await openMore('Ver contexto')
+        await waitFor(() => smokeHooks.openedContext.length, count => count === 2, 'ver contexto')
+        record(
+          'notion: «Ver contexto» abre TABLE.md y muestra notion/',
+          smokeHooks.openedContext[0] === join(notionFolder, 'TABLE.md') && smokeHooks.openedContext[1] === notionDir,
+        )
+
+        await inUi(`window.table.terminal.close(${JSON.stringify(session!.id)})`)
+        await inUi(`document.querySelector('.agents [aria-label="Plegar agentes"]')?.click()`)
+        await inUi(`document.querySelector('.rail [aria-label="Inicio"]').click()`)
+        await waitFor(() => inUi<boolean>(`!!document.querySelector('.home')`), Boolean, 'inicio')
+        await inUi(`window.table.mesas.remove(${fullArg})`)
+      } finally {
+        await settings.disconnectNotion().catch(() => undefined)
+        smokeHooks.notionMcpUrl = undefined
+        notionServer.server.close()
+        notionServer.server.closeAllConnections()
+        if (notionFolder) {
+          rmSync(notionFolder, { recursive: true, force: true })
+        }
+      }
+    }
+    // fin T-009
 
     await inUi(`window.table.surface.openMesa(null)`)
     await inUi(`window.table.mesas.remove(${JSON.stringify(mesa.id)})`)

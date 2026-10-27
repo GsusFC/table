@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC, type PersistenceError, type TableApi } from '../shared/ipc'
 import type { Card, MesaId } from '../shared/model'
+import type { NotionContextProgress } from '../shared/notionContext'
 import type { SurfaceCardState } from '../shared/surface'
 import type { SessionId, SessionInfo } from '../shared/terminal'
 
@@ -121,6 +122,17 @@ const api: TableApi = {
   agent: {
     refreshContext: mesaId => ipcRenderer.invoke(IPC.agentRefreshContext, mesaId),
     selectionText: (mesaId, itemIds) => ipcRenderer.invoke(IPC.agentSelectionText, mesaId, itemIds),
+    openContext: mesaId => ipcRenderer.invoke(IPC.agentOpenContext, mesaId),
+    contextState: mesaId => ipcRenderer.invoke(IPC.agentContextState, mesaId),
+    onProgress: listener => {
+      const handler = (_event: IpcRendererEvent, progress: NotionContextProgress): void => listener(progress)
+      ipcRenderer.on(IPC.agentContextProgress, handler)
+      return () => {
+        ipcRenderer.removeListener(IPC.agentContextProgress, handler)
+      }
+    },
+    notionTree: mesaId => ipcRenderer.invoke(IPC.agentNotionTree, mesaId),
+    setNotionSelection: (mesaId, selections) => ipcRenderer.invoke(IPC.agentSetNotionSelection, mesaId, selections),
   },
   results: {
     update: (mesaId, resultId, patch) => ipcRenderer.invoke(IPC.resultsUpdate, mesaId, resultId, patch),

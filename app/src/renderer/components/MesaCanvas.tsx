@@ -32,6 +32,7 @@ import {
   Download,
   LayoutGrid,
   Link,
+  ListChecks,
   LogIn,
   PencilLine,
   Plus,
@@ -91,6 +92,7 @@ import { FramesDialog } from './FramesDialog'
 import { LinkProjectDialog } from './LinkProjectDialog'
 import { Menu, type MenuItem } from './Menu'
 import { NoteNode, type NoteNodeType } from './NoteNode'
+import { NotionPagesDialog } from './NotionPagesDialog'
 import { ResultNode, type ResultNodeType } from './ResultNode'
 import { TerminalNode, type TerminalNodeType } from './TerminalNode'
 
@@ -339,6 +341,8 @@ function CanvasInner({
   const [linkProjectAt, setLinkProjectAt] = useState<Point | null>(null)
   /** «Añadir frames» abierto para esta tarjeta de archivo de Figma. */
   const [framesFor, setFramesFor] = useState<Card | null>(null)
+  /** «Páginas para el agente…» abierto (T-009). */
+  const [choosingNotionPages, setChoosingNotionPages] = useState(false)
   const [itemMenu, setItemMenu] = useState<ItemMenuState | null>(null)
   const [confirmRemove, setConfirmRemove] = useState<RemovalState | null>(null)
   const [editingNoteId, setEditingNoteId] = useState<NoteId | null>(null)
@@ -1103,6 +1107,10 @@ function CanvasInner({
         ? { label: 'Actualizar miniatura', icon: RefreshCw, onSelect: () => fetchThumbnails([menuCard.id]) }
         : { label: 'Añadir frames…', icon: Frame, onSelect: () => setFramesFor(menuCard) })
     }
+    // Notion: elegir qué páginas de las fichas lee Table para el agente (T-009).
+    if (menuCard.serviceId === 'notion') {
+      items.splice(1, 0, { label: 'Páginas para el agente…', icon: ListChecks, onSelect: () => setChoosingNotionPages(true) })
+    }
     return items
   }, [
     menuItemId,
@@ -1329,6 +1337,14 @@ function CanvasInner({
           existing={framesInMesa(framesFor)}
           onAdd={frames => addFrames(framesFor, frames)}
           onClose={() => setFramesFor(null)}
+        />
+      )}
+
+      {choosingNotionPages && (
+        <NotionPagesDialog
+          mesaId={mesa.id}
+          onSaved={() => notify('Selección guardada; Table vuelve a leer Notion', 'info')}
+          onClose={() => setChoosingNotionPages(false)}
         />
       )}
 

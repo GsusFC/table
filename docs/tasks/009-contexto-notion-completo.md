@@ -1,6 +1,6 @@
 # Tarea 009 · Contexto completo de Notion para el agente
 
-Estado: en curso desde el 2026-10-27. Fase: 2.
+Estado: en curso desde el 2026-10-27; implementada, falta la prueba del usuario con la ficha real del piloto. Fase: 2.
 
 ## Problema
 
@@ -8,7 +8,9 @@ Estado: en curso desde el 2026-10-27. Fase: 2.
 
 ## Decisión del usuario (2026-10-27)
 
-**Table lee la ficha entera y filtra**, y enseña lo que recibe el agente. Se descartó que el agente lea Notion por su cuenta (sin filtro) y elegir páginas a mano.
+**Table lee la ficha entera y filtra**, y enseña lo que recibe el agente. Se descartó que el agente lea Notion por su cuenta (sin filtro) y que elegir páginas a mano fuera la forma de construir el contexto.
+
+Ampliación del mismo día: «Si hubiera una posibilidad de seleccionar páginas de contexto dentro de ese proyecto de Notion sería genial». Se añade como ajuste opcional sobre la lectura completa: por defecto entra todo y la persona puede dejar fuera el cuerpo de la ficha, páginas o bases enteras.
 
 ## Comprobado contra el Notion real (2026-10-27)
 
@@ -18,13 +20,14 @@ Estado: en curso desde el 2026-10-27. Fase: 2.
 
 ## Alcance
 
-- **Recorrido** de la ficha de cada tarjeta de proyecto de la mesa: su cuerpo, las filas de sus bases incrustadas o enlazadas (sin repetir una base vista dos veces) y el contenido de cada fila. Dos niveles; límites de páginas y tamaño con aviso si se alcanzan.
+- **Recorrido en dos pasos** de la ficha de cada tarjeta de proyecto de la mesa: (a) el árbol, barato: el cuerpo de la ficha y las filas (título, URL, fecha) de sus bases incrustadas o enlazadas, sin repetir una base vista dos veces; (b) el contenido de las filas elegidas. Dos niveles; límites de páginas y tamaño con aviso si se alcanzan.
 - **Filtro de propiedades** genérico, porque cada base tiene su esquema: entran título, texto, selección, selección múltiple, estado, fecha, URL y casilla; nunca personas, relaciones, archivos, rollups, fórmulas, números, correos ni teléfonos, ni propiedades cuyo nombre indique dinero o comercial (`Budget`, `Opportunity`, `Account`, `Lead`, `Leaders`, `Preview`, `Notion Link`, presupuesto, precio, coste, tarifa, factura, fee, invoice, price, cost…).
 - **Filtro de importes** en textos: cada línea, celda o elemento de lista con importes o palabras económicas (€, EUR, $ con cifras, «k€», presupuesto, precio, tarifa, factura, honorarios, coste, budget, fee, invoice) se sustituye por «[omitido: posible información económica]». Es heurístico; el índice dice cuántas líneas se omitieron por página.
 - **Archivos**: `notion/` en la carpeta de la mesa, un Markdown por página (con su URL, fecha de edición y propiedades filtradas) y un índice; `TABLE.md` enlaza el índice. Mismas reglas anti-inyección que T-008.
 - **Caché incremental**: solo se vuelven a leer las páginas editadas desde la última lectura.
 - **Cuándo**: en segundo plano al abrir una sesión (la sesión no espera) y con «Actualizar contexto». El panel muestra el progreso («Leyendo Notion: 34/64») y los avisos.
 - **«Ver contexto»**: abre `TABLE.md` y la carpeta `notion/` para revisar exactamente lo que recibe el agente.
+- **«Elegir páginas de Notion…»** (menú del panel de agentes y de la tarjeta de Notion): diálogo con el árbol (cuerpo de la ficha, cada base con casilla para todas sus páginas y sus páginas con casilla), filtro por título y «N de M páginas». Se guarda por mesa y ficha en los datos de Table (no en la mesa ni en Git). Por defecto, todo; una página nueva de una base incluida entra salvo que se desmarcara la base; una página desmarcada sigue fuera. Al guardar se vuelve a leer; `notion/` solo tiene lo elegido y el índice y `TABLE.md` dicen cuántas páginas quedaron fuera por elección y cuántas por el filtro.
 
 ## Fuera de alcance
 
@@ -33,8 +36,17 @@ Estado: en curso desde el 2026-10-27. Fase: 2.
 
 ## Criterios de aceptación
 
-- [ ] Con una ficha sintética con cuerpo, una base incrustada y una vista enlazada, se generan sus páginas en `notion/` con el índice y sin repetir la base.
-- [ ] Ninguna propiedad excluida (por tipo o nombre) ni línea con importes sale a `notion/` (test con fixture lleno de trampas).
-- [ ] Una segunda lectura sin cambios no vuelve a pedir las páginas no editadas.
-- [ ] El progreso y los avisos (límites, omisiones) se ven en el panel; la sesión no espera al recorrido.
+- [x] Con una ficha sintética con cuerpo, una base incrustada y una vista enlazada, se generan sus páginas en `notion/` con el índice y sin repetir la base.
+- [x] Ninguna propiedad excluida (por tipo o nombre) ni línea con importes sale a `notion/` (test con fixture lleno de trampas).
+- [ ] Una segunda lectura sin cambios no vuelve a pedir las páginas no editadas. **Parcial:** se cumple para las bases con una propiedad de última edición (`last_edited_time`), comprobado en test y smoke. El modo `rows` no da la fecha de edición de cada página, así que las filas de una base sin esa propiedad se vuelven a leer siempre; añadirla en Notion lo resuelve. Falta ver si «Live Process» la tiene.
+- [x] El progreso y los avisos (límites, omisiones) se ven en el panel; la sesión no espera al recorrido.
+- [x] Elegir páginas: desmarcar una página y una base las quita de `notion/` y se cuentan como fuera por elección; la selección se guarda; una página nueva de una base incluida entra y una desmarcada sigue fuera (tests).
 - [ ] Probado con la ficha real del piloto: las 63 páginas de «Resumen» llegan al agente y el usuario lo revisa con «Ver contexto».
+
+## Comprobaciones (2026-10-27)
+
+- Tests (356 en total): filtros de importes (también con énfasis o enlaces de Markdown, monedas escritas y números en palabras) y de nombres de propiedad (también compuestos: `Budget2026`, `PrecioFinal`, `coste_interno`), omisión de líneas con sus hijos, de la sección de un encabezado económico, del resto de una tabla y de todo el aviso destacado, desplegable o cita; lectura de las respuestas del MCP (ficha, bases, vista enlazada, filas, respuestas no reconocidas); propiedades con fixture de trampas (relación, número, persona, archivo, correo, `Budget`, «Coste interno»); cuerpo con etiquetas, tablas, menciones de personas e intento de inyección; selección por casillas que conserva el modo y las páginas fuera del árbol; recorrido completo con un MCP falso (archivos, índice, base sin repetir, dos niveles, sin `SECRETO`, progreso), lectura incremental, esquema cambiado, selección guardada y aplicada sin red, archivos viejos quitados, `notion/` como enlace simbólico, sin conexión, mesa sin tarjetas de Notion, conexión cambiada a mitad, desconexión durante la escritura, selección guardada durante una lectura, base con nombre propio económico, avisos sin nombres económicos, peticiones agrupadas, límites de bases, páginas (con cuerpos) y tamaño, mesa borrada; `TABLE.md` con la sección «Contenido de Notion».
+- Smoke 88/88, con la interfaz y un MCP de Notion falso: la sesión se abre mientras Table sigue leyendo; el panel muestra «Notion: 4 páginas para el agente» y despliega los avisos; `notion/` tiene la ficha, una sola vez su base (incrustada y enlazada) y sus páginas, sin trampas, y `TABLE.md` la enlaza; «Actualizar contexto» no vuelve a pedir la fila sin cambios; en «Elegir páginas de Notion…» se desmarcan una página y una base y `notion/` queda solo con lo marcado y los recuentos; «Ver contexto» abre `TABLE.md` y muestra `notion/` (en el smoke se anota, no se abre). Pasó entero en 2 de 5 ejecuciones; en las otras fallaron pasos anteriores de T-007 y T-008 que teclean o pegan en la terminal y el zoom con rueda del cierre (tiempos o foco de la ventana), nunca un paso de T-009.
+- Revisión separada de Codex (2026-10-27): 9 hallazgos (7 altos, 2 medios), corregidos con un test de regresión cada uno. Altos: escrituras después de cancelar (desconectar durante la escritura publicaba igualmente); una lectura en curso publicaba páginas desmarcadas mientras tanto; guardar la selección la reconstruía con solo las páginas visibles (perdía exclusiones fuera del árbol y cambiaba el modo sin acción de la persona); el esquema guardado dejaba salir una propiedad que había pasado a fórmula; nombres compuestos (`Budget2026`, `PrecioFinal`) pasaban el filtro; «doce mil euros» y `12.000 **€**` no se detectaban; una base con nombre propio económico se leía si la ficha la llamaba de otra forma, y los avisos podían llevar nombres con importes. Medios: una línea económica en un aviso destacado no arrastraba al resto del aviso; los límites contaban etiquetas en vez de bases y no contaban los cuerpos de ficha. La comprobación de las correcciones es autorrevisión.
+- Tras las correcciones, el smoke pasó entero (88/88) en 2 de 6 ejecuciones. En 3 falló un paso anterior de T-007 que espera la salida de la terminal en el panel o en la tarjeta. Ese fallo también ocurre en el commit anterior a T-009 (en 1 de 2 ejecuciones), así que no lo introduce esta tarea. En 1 se agotó el tiempo total antes de los pasos de Notion, sin causa identificada. Ningún paso de T-009 falló.
+- Sin comprobar: la ficha real del piloto (formato real de las filas de «Live Process», si su base tiene propiedad de última edición, más de 100 filas), abrir `TABLE.md` con la app del sistema y el aspecto del diálogo con 63 páginas.

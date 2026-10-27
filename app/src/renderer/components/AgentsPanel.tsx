@@ -1,6 +1,7 @@
-import { Ellipsis, PanelRightClose, Plus, RefreshCw, SquareArrowOutUpRight, SquareTerminal, X } from 'lucide-react'
+import { Ellipsis, FileText, ListChecks, PanelRightClose, Plus, RefreshCw, SquareArrowOutUpRight, SquareTerminal, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 import type { MesaId } from '../../shared/model'
+import type { NotionContextProgress } from '../../shared/notionContext'
 import type { HarnessProfile, SessionInfo } from '../../shared/terminal'
 import { errorMessage } from '../lib/errors'
 import {
@@ -18,6 +19,7 @@ import {
 } from '../lib/terminals'
 import { ConfirmDialog } from './Dialog'
 import { Menu, type MenuItem } from './Menu'
+import { NotionPagesDialog } from './NotionPagesDialog'
 import { TerminalView } from './TerminalView'
 
 const api = window.table
@@ -42,6 +44,22 @@ interface AgentsPanelProps {
   readonly notify: (text: string, tone?: 'info' | 'error') => void
 }
 
+/** Línea compacta del progreso de la lectura de Notion (T-009). */
+function progressText(progress: NotionContextProgress): string {
+  switch (progress.phase) {
+    case 'listing':
+      return 'Leyendo Notion…'
+    case 'reading':
+      return progress.total > 0 ? `Leyendo Notion: ${progress.done}/${progress.total}` : 'Leyendo Notion…'
+    case 'writing':
+      return 'Escribiendo el contexto de Notion…'
+    case 'done':
+      return `Notion: ${progress.pages === 1 ? '1 página' : `${progress.pages} páginas`} para el agente`
+    case 'error':
+      return `Notion: ${progress.message ?? 'no se pudo leer'}`
+  }
+}
+
 /**
  * Panel derecho de la mesa con sus sesiones de arnés en pestañas (T-007). Las
  * sesiones son del proceso principal: plegar el panel o cambiar de mesa no las
@@ -57,7 +75,39 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
   const [moreAnchor, setMoreAnchor] = useState<{ x: number; y: number } | null>(null)
   const [confirmClose, setConfirmClose] = useState<SessionInfo | null>(null)
   const [starting, setStarting] = useState(false)
+  /** Lectura de Notion de la mesa (T-009): último progreso y si se ven sus avisos. */
+  const [contextProgress, setContextProgress] = useState<NotionContextProgress | null>(null)
+  const [showWarnings, setShowWarnings] = useState(false)
+  const [choosingPages, setChoosingPages] = useState(false)
   const bodyRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    let current = true
+    setContextProgress(null)
+    setShowWarnings(false)
+    const off = api.agent.onProgress(progress => {
+      if (progress.mesaId === mesaId) {
+        current = false
+        setContextProgress(progress)
+      }
+    })
+    api.agent.contextState(mesaId).then(
+      state => current && setContextProgress(state),
+      () => undefined,
+    )
+    return () => {
+      current = false
+      off()
+    }
+  }, [mesaId])
+
+  const chooseNotionPages = (): void => {
+    if (entered) {
+      onExitWeb().then(() => setChoosingPages(true), (error: unknown) => notify(errorMessage(error)))
+    } else {
+      setChoosingPages(true)
+    }
+  }
 
   const loadProfiles = useCallback(() => {
     api.terminal.profiles().then(setProfiles, (error: unknown) => notify(errorMessage(error)))
@@ -246,6 +296,37 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
         </div>
       </div>
 
+      {contextProgress && !(contextProgress.phase === 'done' && contextProgress.projects === 0 && contextProgress.warnings.length === 0) && (
+        <div className="agents-context">
+          <div className="agents-context-line">
+            <span
+              className={contextProgress.phase === 'error' ? 'agents-context-text agents-context-error' : 'agents-context-text tabular'}
+              role="status"
+              title={progressText(contextProgress)}
+            >
+              {progressText(contextProgress)}
+            </span>
+            {contextProgress.warnings.length > 0 && (
+              <button
+                type="button"
+                className="agents-context-toggle"
+                aria-expanded={showWarnings}
+                onClick={() => setShowWarnings(shown => !shown)}
+              >
+                {contextProgress.warnings.length === 1 ? '1 aviso' : `${contextProgress.warnings.length} avisos`}
+              </button>
+            )}
+          </div>
+          {showWarnings && contextProgress.warnings.length > 0 && (
+            <ul className="agents-context-warnings">
+              {contextProgress.warnings.map(warning => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
       {active && activeStatus && (
         <div className="agents-session-bar">
           <span className="agents-cwd" title={active.cwd}>
@@ -321,9 +402,17 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
               icon: RefreshCw,
               onSelect: () => {
                 api.agent.refreshContext(mesaId).then(
-                  () => notify('Contexto actualizado en TABLE.md', 'info'),
+                  () => notify('TABLE.md actualizado; Table vuelve a leer Notion', 'info'),
                   (error: unknown) => notify(errorMessage(error)),
                 )
+              },
+            },
+            { label: 'Elegir páginas de Notion…', icon: ListChecks, onSelect: chooseNotionPages },
+            {
+              label: 'Ver contexto',
+              icon: FileText,
+              onSelect: () => {
+                api.agent.openContext(mesaId).catch((error: unknown) => notify(errorMessage(error)))
               },
             },
           ]}
@@ -338,6 +427,14 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
           description={<p>El agente sigue en marcha. Se cerrará el proceso.</p>}
           onConfirm={() => closeSession(confirmClose.id)}
           onClose={() => setConfirmClose(null)}
+        />
+      )}
+
+      {!entered && choosingPages && (
+        <NotionPagesDialog
+          mesaId={mesaId}
+          onSaved={() => notify('Selección guardada; Table vuelve a leer Notion', 'info')}
+          onClose={() => setChoosingPages(false)}
         />
       )}
     </aside>

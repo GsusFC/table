@@ -20,6 +20,7 @@ import type {
 import type { FigmaFileFrames, FigmaSettingsView, FrameThumbnail } from './figma'
 import type { NotionSettingsView, ProjectSearchResult, ProjectSnapshot, ProjectState } from './notion'
 import type { HarnessProfile, SessionId, SessionInfo, TerminalSize } from './terminal'
+import type { NotionContextProgress, NotionPageSelection, NotionTree } from './notionContext'
 import type { PanelBounds, SurfaceCardState, UnloadResult } from './surface'
 
 export const IPC = {
@@ -83,6 +84,13 @@ export const IPC = {
   terminalSession: 'terminal:session',
   agentRefreshContext: 'agent:refresh-context',
   agentSelectionText: 'agent:selection-text',
+  /** Abre `TABLE.md` con la app del sistema y muestra `notion/` (T-009). */
+  agentOpenContext: 'agent:open-context',
+  agentContextState: 'agent:context-state',
+  agentNotionTree: 'agent:notion-tree',
+  agentSetNotionSelection: 'agent:set-notion-selection',
+  /** main → renderer: progreso de la lectura del contenido de Notion de una mesa. */
+  agentContextProgress: 'agent:context-progress',
   resultsUpdate: 'results:update',
   resultsRemove: 'results:remove',
   resultsOpen: 'results:open',
@@ -219,17 +227,27 @@ export interface TableApi {
     onSession(listener: (session: SessionInfo) => void): () => void
   }
   /**
-   * Contexto de la mesa para los agentes, por archivos (T-008). Table escribe
-   * `TABLE.md` en la carpeta de trabajo de la mesa; nunca campos excluidos.
+   * Contexto de la mesa para los agentes, por archivos (T-008 y T-009). Table
+   * escribe `TABLE.md` y el contenido filtrado de Notion (`notion/`) en la
+   * carpeta de trabajo de la mesa; nunca campos excluidos.
    */
   readonly agent: {
-    /** Reescribe `TABLE.md` (y crea los punteros que falten). */
+    /** Reescribe `TABLE.md` (y crea los punteros que falten) y vuelve a leer Notion en segundo plano. */
     refreshContext(mesaId: MesaId): Promise<void>
     /**
      * Texto de la selección para pegarlo en la sesión; también lo anota en
      * `TABLE.md` como última selección enviada.
      */
     selectionText(mesaId: MesaId, itemIds: readonly ItemId[]): Promise<string>
+    /** «Ver contexto»: abre `TABLE.md` con la app del sistema y muestra la carpeta `notion/`. */
+    openContext(mesaId: MesaId): Promise<void>
+    /** Último progreso de la lectura de Notion de la mesa, o null. */
+    contextState(mesaId: MesaId): Promise<NotionContextProgress | null>
+    onProgress(listener: (progress: NotionContextProgress) => void): () => void
+    /** Árbol de las fichas de la mesa con la selección guardada («Elegir páginas de Notion…»). */
+    notionTree(mesaId: MesaId): Promise<NotionTree>
+    /** Guarda la selección de páginas por ficha y vuelve a leer Notion en segundo plano. */
+    setNotionSelection(mesaId: MesaId, selections: Readonly<Record<string, NotionPageSelection>>): Promise<void>
   }
   /** Tarjetas de resultado: archivos de `resultados/` en la carpeta de la mesa (T-008). */
   readonly results: {

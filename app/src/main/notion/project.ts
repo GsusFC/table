@@ -34,7 +34,7 @@ export class UnrecognizedResponseError extends Error {
   }
 }
 
-function envelope(raw: string): Record<string, unknown> {
+export function envelope(raw: string): Record<string, unknown> {
   try {
     const parsed = asRecord(JSON.parse(raw))
     if (parsed && typeof parsed['text'] === 'string') {
@@ -46,7 +46,7 @@ function envelope(raw: string): Record<string, unknown> {
   throw new UnrecognizedResponseError()
 }
 
-function taggedJson(text: string, tag: string): Record<string, unknown> | null {
+export function taggedJson(text: string, tag: string): Record<string, unknown> | null {
   const match = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(text)
   if (!match) {
     return null
