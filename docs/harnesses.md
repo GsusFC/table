@@ -1,6 +1,6 @@
 # Terminal universal y arneses
 
-Estado: principio aceptado, integración por implementar.
+Estado a 2026-10-28: terminal (T-007), contexto y resultados por archivos (T-008/T-009), MCP de plataformas (T-010), MCP de Table (T-011) y navegación en sus webs (T-012) implementados. Fase 2 en curso; faltan pruebas completas con arneses y cuentas reales. La configuración del MCP de Chrome se retiró con D-021.
 
 ## Qué significa «trae tu arnés»
 
@@ -21,12 +21,12 @@ Una terminal universal no convierte cualquier suscripción en una API universal.
 
 No interpretar códigos de color ni texto de terminal como fuente fiable de estado o de decisiones. Priorizar mecanismos documentados o importación explícita cuando no haya integración estructurada.
 
-## Perfil de ejecución propuesto
+## Perfil de ejecución
 
-- Nombre visible, ejecutable y argumentos separados.
+- Catálogo de arneses conocidos y perfiles propios con nombre visible y comando de una línea, guardados en Ajustes (T-007).
 - Directorio de trabajo del proyecto.
-- Variables necesarias y referencias seguras a credenciales, sin guardar sus valores en la mesa.
-- Capacidades declaradas: terminal, archivos, MCP y adaptador opcional.
+- Entorno preparado para el proceso y, cuando corresponde, configuración MCP mediante argumentos, variables o archivos del proyecto según el adaptador (T-010/T-011). Nunca credenciales de Table en la mesa ni en esa configuración.
+- Compatibilidad distinta según el arnés: terminal y archivos como base, MCP en los adaptadores compatibles y motivo visible cuando no se configura. No se presupone un adaptador estructurado de permisos o conversaciones para todos los proveedores.
 - Política de inicio: manual por defecto; no iniciar todos los arneses al abrir la app.
 
 Un perfil no equivale a una sesión. Cada sesión tiene su proceso, estado, registros y relación con el proyecto. Reanudar una conversación solo se ofrece si el arnés lo soporta; no basta con volver a abrir su terminal.
@@ -126,8 +126,8 @@ Implementación de [T-012](tasks/012-el-agente-trabaja-en-table.md) ([D-021](dec
 ## Memoria y ciclo de vida
 
 - Dos agentes que llaman a modelos remotos no equivalen a dos modelos cargados en RAM; sus clientes, herramientas y subprocesos sí consumen recursos.
-- Mantener acotado el historial de terminal en memoria y guardar registros según una política de retención.
-- Registrar subprocesos iniciados y definir qué ocurre al cerrar una sesión: terminar, dejar en ejecución o conservar solo el registro.
+- El historial de terminal está acotado en memoria; no hay reanudación de sesiones ni una política de registros persistentes implementada.
+- Cerrar una sesión termina su proceso y los descendientes identificados según T-007; los demonios que ya se separaron del árbol no se tocan. La validación completa con dos arneses reales y su consumo sigue pendiente.
 - Mostrar al usuario si una tarea sigue trabajando aunque la tarjeta no esté visible.
 - Probar señales, cierre y procesos huérfanos. La limpieza no debe terminar procesos ajenos a Table.
 - No instalar ni ejecutar nuevos arneses automáticamente por abrir un proyecto.

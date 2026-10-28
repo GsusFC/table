@@ -1,6 +1,6 @@
 # Notion como contexto del proyecto
 
-Estado: contrato propuesto sobre un principio aceptado. Esquema y uso comprobados contra la API el 2026-10-26, con la integración conectada a la base de proyectos. La ficha con lista cerrada está implementada en [T-003](tasks/003-ajustes-y-ficha-notion.md) (solo para la interfaz; la entrega a agentes es de la Fase 2). Table se conecta con el MCP oficial de Notion mediante OAuth con la cuenta de cada persona (decisión del usuario del 2026-10-26); la integración interna y su token quedan para el análisis del esquema hecho aquí.
+Estado a 2026-10-28: ficha con lista cerrada implementada en [T-003](tasks/003-ajustes-y-ficha-notion.md) y entregada a agentes por archivos y MCP de Table (T-008/T-011); contenido filtrado y selección de páginas implementados en [T-009](tasks/009-contexto-notion-completo.md). Falta comprobar el recorrido completo de las 63 páginas del piloto con el modo `view`. Esquema y uso comprobados contra la API el 2026-10-26, con la integración conectada a la base de proyectos. Table se conecta con el MCP oficial de Notion mediante OAuth con la cuenta de cada persona; la integración interna y su token quedan como evidencia del análisis de esquema. El MCP completo del agente es una opción por mesa (D-019); las webs de Notion se bloquean en las herramientas de Table con modo filtrado (D-021/T-012).
 
 ## Fuente de verdad
 

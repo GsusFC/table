@@ -35,7 +35,7 @@ La primera versión usaba el token de una integración interna pegado en Ajustes
 
 ## Criterios de aceptación
 
-- [x] Conectar y desconectar desde Ajustes; las credenciales no aparecen en `settings.json` ni llegan al renderer. *Guardado cifrado y desconexión comprobados en el smoke; la autorización real en el navegador falta probarla desde la app.*
+- [x] Conectar y desconectar desde Ajustes; las credenciales no aparecen en `settings.json` ni llegan al renderer. *Guardado cifrado y desconexión comprobados en el smoke; el usuario conectó Notion desde la app y vio la ficha real. Las correcciones posteriores de OAuth se verificaron con pruebas sintéticas, sin repetir la autorización con una cuenta real.*
 - [x] Una tarjeta de una ficha de proyecto muestra los campos permitidos, con fecha de lectura y origen; una página de otra base sigue como tarjeta web normal.
 - [x] Un fixture con `Budget`, `Lead`, `Notion Link`, `Preview`, la fórmula y un cuerpo con importes no saca nada de eso de la ficha (test y smoke).
 - [x] Sin conexión o con error, la tarjeta muestra la caché con su fecha y el motivo, sin declarar que está actualizada.

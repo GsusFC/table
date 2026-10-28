@@ -1,26 +1,28 @@
 # Validación de memoria
 
-Fecha: 26 de octubre de 2026. Estado: protocolo propuesto; mediciones no ejecutadas.
+Protocolo iniciado el 26 de octubre de 2026; estado revisado el 2026-10-28. Escenario A medido en T-001 y apto con límites; B con mediciones parciales en T-002 y validación real pendiente de T-006; C con dos agentes no ejecutado. Los umbrales de A y B están fijados; los de C siguen pendientes.
 
 ## Objetivo
 
 Comprobar si Table permite trabajar con el proyecto, el editor de Figma, referencias y agentes dentro de un presupuesto de memoria útil para el equipo. Comparar el mismo trabajo en Table y en las aplicaciones separadas. Reunir herramientas en una ventana no garantiza ahorrar RAM.
 
-La RAM del equipo de referencia todavía no se ha identificado. No hay cifras de consumo verificadas ni una mejora atribuible a Electron, Tauri o Rust.
+Equipo de referencia confirmado en D-011: Apple M2 Pro, 16 GiB, macOS 27.2. Los resultados medidos están al final de este documento. La comparación favorable de T-001 solo corresponde al navegador mínimo con el mismo archivo de Figma; no valida el flujo completo ni una ventaja general de Electron frente a otros runtimes.
 
 ## Qué se mantiene cargado
 
-| Elemento | Propuesta inicial | Qué medir |
+| Elemento | Política del prototipo | Qué medir |
 | --- | --- | --- |
 | Ficha de Notion | Datos filtrados por API y componentes propios; editor completo solo bajo demanda. | Coste de la ficha y de cada refresco, separado del navegador completo. |
 | Figma | Un editor del proyecto en uso; otros frames como miniaturas limitadas en resolución. | Apertura, edición, retorno al lienzo, conservación y cierre seguro. |
 | Pinterest y referencias web | Navegación bajo demanda; captura y enlace cuando se descarga la página. | Pico al abrir, recursos retenidos y coste de volver a cargar. |
 | Lienzo | Renderizar los elementos necesarios para la vista y limitar imágenes decodificadas. | Coste según tarjetas visibles, imágenes y desplazamiento. |
-| Terminales | Historial visible acotado; registros persistidos en disco. | Renderizado, salida abundante, sesión ociosa y proceso asociado. |
+| Terminales | Historial acotado en memoria y terminal visible; las sesiones no sobreviven al cierre y no hay una política de registros persistentes implementada. | Renderizado, salida abundante, sesión ociosa y proceso asociado. |
 | Arneses | Sesiones iniciadas por el usuario, con autenticación propia de cada herramienta. | Árbol completo de procesos y herramientas que lanza cada arnés. |
 | Otros proyectos | Guardar datos y distribución; no iniciar sus editores o arneses al arrancar Table. | Coste residual tras cambiar o cerrar un proyecto. |
 
-Estas medidas son hipótesis de diseño. La implementación y el resultado deben demostrarse.
+Estas políticas tienen implementación en T-002 a T-012; su coste conjunto en una mesa real debe medirse. La Fase 1 se cerró por decisión del usuario sin completar esa sesión (D-018), y los pendientes pasan al uso real en Fase 2.
+
+**Excepción con agentes (T-012):** las webs con actividad u operaciones en curso quedan fijadas y pueden superar el límite habitual de dos cargadas. También pueden requerir editores adicionales de Figma del mismo archivo. Registrar estos casos en C; no extrapolar los resultados parciales de B a esa carga.
 
 ## Estados de una tarjeta web
 

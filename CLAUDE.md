@@ -4,10 +4,12 @@ Lee `AGENTS.md` antes de actuar: contiene las instrucciones comunes del proyecto
 
 ## Situación actual
 
-- El repositorio contiene la app en `app/` (T-002) y el ensayo de T-001 en `spikes/desktop-001/`.
-- Fase 1 cerrada por decisión del usuario (D-018): T-002 a T-006 en `docs/tasks/`. Fase 2 en curso con T-007 (terminal universal). Decisiones en `docs/decisions.md`; diseño en `docs/design.md`.
+- Estado revisado el 2026-10-28. El repositorio contiene el prototipo funcional en `app/` y el ensayo de T-001 en `spikes/desktop-001/`.
+- Fase 1 cerrada por decisión del usuario (D-018), con pendientes de T-006 trasladados al uso real en Fase 2. T-007 a T-012 están implementadas: terminal, contexto y resultados por archivos, contenido filtrado de Notion, MCP de plataformas, MCP de Table y navegación en las webs de Table. Falta completar las pruebas con arneses y cuentas reales. Decisiones en `docs/decisions.md`; estado y siguiente hito en `docs/roadmap.md`; diseño en `docs/design.md`.
 - T-001 está completada: apto para continuar, con límites. Figma y Pinterest funcionan integrados y la memoria del escenario A cumple los umbrales. Estado en `docs/tasks/001-desktop-spike.md` y resultados en `docs/research/001-desktop-spike-results.md`.
 - Base del prototipo aceptada: Electron + React + TypeScript con `WebContentsView` (D-010), lienzo con React Flow y un JSON por mesa (D-017). Terminal con node-pty + xterm.js (T-007, propuesta P-004 en uso).
+- Las webs del agente se usan dentro de Table, sin el MCP de Chrome (D-021). El diseño se edita por el MCP oficial de Figma; la actividad de esas llamadas requiere que el agente la anuncie. Notion completo es opcional por mesa (D-019): cambiar el modo no reconfigura el MCP de una sesión ya abierta, y Table no controla los MCP externos del arnés.
+- No presentar el cierre de Fase 1 como validación completa de memoria: A tiene resultados, B solo mediciones parciales y C con dos agentes no se ha ejecutado. La publicación al cliente sigue en Fase 3.
 
 ## En cada sesión
 

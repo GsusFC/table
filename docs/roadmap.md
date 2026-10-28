@@ -1,6 +1,6 @@
 # Fases y estado
 
-Fecha: 2026-10-27. **Estado actual: Fase 1 cerrada ([D-018](decisions.md)). Fase 2 en curso: terminal (T-007), contexto y resultados por archivos (T-008, T-009), MCP de Figma y Notion en cada agente (T-010, [D-019](decisions.md)), MCP de Table (T-011, [D-020](decisions.md)) y el agente en las webs de Table, a la vista, sin Chrome (T-012, [D-021](decisions.md)).**
+Estado revisado el 2026-10-28. **Fase 1 cerrada por decisión del usuario, con validaciones pendientes ([D-018](decisions.md)). Fase 2 en curso: terminal (T-007), contexto y resultados por archivos (T-008, T-009), MCP de Figma y Notion en cada agente compatible (T-010, [D-019](decisions.md)), MCP de Table (T-011, [D-020](decisions.md)) y el agente en las webs de Table, a la vista, sin Chrome (T-012, [D-021](decisions.md)). T-007 a T-012 están implementadas; no se da por validado el flujo real completo.**
 
 Los hitos preservan el orden acordado. Los hallazgos de una prueba pueden cambiar una propuesta técnica sin ampliar la fase entera.
 
@@ -14,7 +14,7 @@ Los hitos preservan el orden acordado. Los hallazgos de una prueba pueden cambia
 - [x] Validar campos, permisos y enlaces de Notion. Integración de solo lectura conectada a la base de proyectos; esquema, estados y uso de campos comprobados ([contexto de Notion](notion-context.md#esquema-comprobado)). La duda de Pinterest la cierra [D-012](decisions.md).
 - [x] Ejecutar [T-001: prueba de escritorio](tasks/001-desktop-spike.md). Apto para continuar, con límites ([resultados](research/001-desktop-spike-results.md)).
 - [x] Comparar una base propia con la reutilización que realmente ahorre trabajo. Mesa no ofrece implementación pública; OpenCove [evaluado](research/opencove-evaluation.md) y usado como referencia; ccanvas descartado (Tauri). Resultado: base propia ([D-010](decisions.md)).
-- [x] Registrar la decisión técnica y el protocolo de memoria aplicable: [D-010](decisions.md) y umbrales del escenario A en [validación de memoria](memory-validation.md). B y C sin umbrales.
+- [x] Registrar la decisión técnica y el protocolo de memoria aplicable: [D-010](decisions.md) y umbrales del escenario A en [validación de memoria](memory-validation.md). B se fijó después en D-017; C sigue sin umbrales.
 
 Salida: evidencia de que la edición integrada y su ciclo de vida funcionan, decisiones documentadas y una tarea de producto delimitada. Un fallo de login o de estado pendiente puede cambiar el alcance; no se declara la fase libre de bloqueos por anticipado.
 
@@ -34,7 +34,7 @@ Salida: una sesión de trabajo real que pueda retomarse, con resultados de uso y
 
 ## Fase 2 · Terminal universal y contexto compartido
 
-- [x] Integrar PTY y perfiles de arnés configurables. T-007 (falta la prueba con los arneses reales).
+- [x] Integrar PTY y perfiles de arnés configurables. T-007: una sesión probada por el usuario; falta completar pruebas con los demás arneses reales.
 - [ ] Probar al menos dos arneses disponibles con la autenticación oficial de cada usuario; uno alternativo a Codex/Claude Code si está disponible y autorizado.
 - [x] Consultar contexto filtrado de Notion y entregar la selección explícita del lienzo. T-008 («Enviar al agente»), T-009 (contenido completo filtrado y elegible) y T-010 (MCP de Notion opcional por mesa).
 - [x] Ofrecer exportación temporal para arneses sin MCP. T-008/T-009 (`TABLE.md` y `notion/`).
@@ -65,4 +65,8 @@ Salida: publicación deliberada y trazable de un resultado revisado. Workers y e
 
 ## Próxima tarea
 
-T-007 a T-012 están implementadas; falta que el usuario las pruebe con los arneses reales (autorizar Figma y Notion; pedir a un agente que lea la selección, añada una nota conectada a sus fuentes y borre algo con confirmación; que abra el frame V1 y diga qué ve en Table, y que levante una web de prueba y la enseñe en la mesa). Pendiente de proponer: la validación de la Fase 2. No ejecutar toda la hoja de ruta de forma automática. Cada sesión debe terminar con un resultado verificable y el estado real de su tarea.
+El siguiente hito es validar T-007 a T-012 con los arneses reales y completar los pendientes de T-006: autorizar Figma y, si la mesa lo permite, Notion; revisar el contexto del piloto por modo `view`; pedir a un agente que lea la selección, añada una nota conectada a sus fuentes, devuelva un resultado y borre algo con confirmación; que abra el frame V1 y diga qué ve en Table, y que levante una web de prueba y la enseñe en la mesa. Incluir dos sesiones, cierre y consumo de memoria; los umbrales de C aún deben fijarse. No se ha creado ni cerrado una tarea adicional de validación de Fase 2.
+
+La verificación integrada tras la auditoría del 2026-10-27 (tipos, tests y smoke Electron) está registrada en [T-012](tasks/012-el-agente-trabaja-en-table.md). Es anterior al ajuste de interfaz del 28 de octubre: actividad persistente con «Ver», modo de Notion visible y distinción entre MCP configurado y autorizado. No acredita una nueva ejecución sobre ese ajuste ni las pruebas con cuentas reales.
+
+No ejecutar toda la hoja de ruta de forma automática. Cada sesión debe terminar con un resultado verificable y el estado real de su tarea.

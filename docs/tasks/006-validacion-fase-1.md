@@ -28,7 +28,7 @@ Con las demás apps cerradas, el modo de medición de T-002 con las URLs de la m
 - [ ] Ficha y miniaturas muestran si son caché y de cuándo.
 - [ ] Escenario B: estable ≤ 2 048 MiB y pico ≤ 3 584 MiB con el límite de 2 webs, presión normal.
 - [ ] Pendientes de T-004 y T-005 comprobados.
-- [ ] Sesión real del usuario con su resultado registrado; la Fase 1 se declara cerrada solo si se cumple todo lo anterior.
+- [ ] Completar y registrar la sesión real de validación. Era el criterio de salida original; D-018 cerró la Fase 1 por decisión del usuario sin completarlo y trasladó los pendientes al uso real en Fase 2. El cierre de fase no acredita estos criterios como superados.
 
 ## Resultados
 

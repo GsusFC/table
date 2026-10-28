@@ -1,6 +1,6 @@
 # Fuentes y alcance de la revisión
 
-Consultadas el 2026-10-26. Son fuentes de decisiones técnicas; no constituyen pruebas de que Table funcione. No se han validado cuentas privadas, planes del estudio, hardware, edición integrada ni consumo real.
+Fuentes públicas consultadas inicialmente el 2026-10-26; alcance de las comprobaciones actualizado el 2026-10-28 con la evidencia del repositorio. Las fuentes externas fundamentan decisiones técnicas, pero no prueban por sí solas que Table funcione. Las pruebas de cuentas, hardware, edición y consumo realizadas después se distinguen en el estado de comprobaciones y en las tareas enlazadas. Esta actualización documental no supone una nueva consulta de las fuentes externas.
 
 ## Escritorio y memoria
 
@@ -52,9 +52,11 @@ Kosmik, Milanote, Maestri y Podium se mencionaron como referencias en el documen
 
 - Revisión documental de fuentes públicas: realizada.
 - Inspección funcional de repos candidatos: OpenCove revisado y arrancado ([evaluación](opencove-evaluation.md)); ccanvas no realizada.
-- Acceso y esquema real de Notion/Figma del piloto: no comprobados.
-- Autenticación de Figma/Pinterest dentro de Table: no probada.
-- Memoria del equipo o del prototipo: no medida.
-- Implementación de Table: no iniciada.
+- Equipo de referencia: Apple M2 Pro, 16 GiB, macOS 27.2, confirmado por el usuario (D-011).
+- Acceso y esquema de Notion: base y campos comprobados; conexión y ficha reales probadas por el usuario ([T-003](../tasks/003-ajustes-y-ficha-notion.md)). T-009 comprobó el límite de consultas del plan y pasó a modo `view`; falta verificar el recorrido de las 63 páginas del piloto con ese modo ([T-009](../tasks/009-contexto-notion-completo.md)).
+- Figma: token, miniaturas y apertura de un frame probados con un archivo real ([T-005](../tasks/005-frames-figma.md)); la autorización y el flujo MCP de los arneses siguen pendientes de completar ([T-010](../tasks/010-mcp-de-los-agentes.md)).
+- Autenticación, sesión y edición integradas de Figma/Pinterest: comprobaciones reales de T-001, con límites en sus [resultados](001-desktop-spike-results.md). No validan el recorrido web completo de un agente de T-012.
+- Memoria: escenario A medido y apto con límites; B parcialmente medido; B completo y C con dos agentes pendientes ([protocolo y resultados](../memory-validation.md)). El cierre de Fase 1 fue por decisión del usuario, sin completar T-006 (D-018).
+- Implementación: prototipo en `app/`, Fase 1 cerrada y T-007 a T-012 implementadas. La verificación integrada de tipos, tests y smoke tras la auditoría del 2026-10-27 se registra en [T-012](../tasks/012-el-agente-trabaja-en-table.md); es anterior al ajuste de interfaz del 28 de octubre y no sustituye las pruebas pendientes con arneses y cuentas reales. La publicación al portal permanece en Fase 3.
 
 Revalidar las fuentes al implementar, especialmente autenticación, licencias, versiones, capacidades y APIs experimentales. Registrar la versión exacta que se pruebe; no usar «latest» como evidencia reproducible.
