@@ -13,11 +13,13 @@ import {
   SquareTerminal,
   X,
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
-import type { AgentNotionMode, MesaId } from '../../shared/model'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react'
+import type { AgentNotionMode, Card, MesaId } from '../../shared/model'
 import type { NotionContextProgress } from '../../shared/notionContext'
 import type { AgentMcpName, HarnessProfile, SessionInfo } from '../../shared/terminal'
+import { serviceById } from '../../shared/services'
 import { errorMessage } from '../lib/errors'
+import { displayHost } from '../lib/format'
 import { activityLabel, useAgentActivities, useFollowAgent } from '../lib/agentActivity'
 import {
   attachSession,
@@ -50,6 +52,7 @@ export function clampAgentsWidth(width: number): number {
 
 interface AgentsPanelProps {
   readonly mesaId: MesaId
+  readonly cards: readonly Card[]
   readonly width: number
   readonly onResize: (width: number) => void
   readonly onCollapse: () => void
@@ -83,7 +86,7 @@ function progressText(progress: NotionContextProgress): string {
  * sesiones son del proceso principal: plegar el panel o cambiar de mesa no las
  * detiene.
  */
-export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onExitWeb, notify }: AgentsPanelProps) {
+export function AgentsPanel({ mesaId, cards, width, onResize, onCollapse, entered, onExitWeb, notify }: AgentsPanelProps) {
   const sessions = useMesaSessions(mesaId)
   const detached = useDetached()
   const active = useActiveSession(mesaId, sessions)
@@ -101,6 +104,7 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
   const [choosingPages, setChoosingPages] = useState(false)
   /** «Notion para el agente» de la mesa (T-010); null mientras se lee. */
   const [notionMode, setNotionMode] = useState<AgentNotionMode | null>(null)
+  const [notionModeError, setNotionModeError] = useState<string | null>(null)
   const [confirmNotionMcp, setConfirmNotionMcp] = useState(false)
   const bodyRef = useRef<HTMLDivElement>(null)
 
@@ -126,18 +130,17 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
 
   const loadNotionMode = useCallback((): (() => void) => {
     let current = true
+    setNotionMode(null)
+    setNotionModeError(null)
     api.mesas.get(mesaId).then(
       mesa => current && setNotionMode(mesa.agentNotion),
-      () => undefined,
+      (error: unknown) => current && setNotionModeError(errorMessage(error)),
     )
     return () => {
       current = false
     }
   }, [mesaId])
-  useEffect(() => {
-    setNotionMode(null)
-    return loadNotionMode()
-  }, [loadNotionMode])
+  useEffect(loadNotionMode, [loadNotionMode])
 
   const saveNotionMode = (mode: AgentNotionMode): Promise<void> =>
     api.agent.setNotionMode(mesaId, mode).then(
@@ -166,6 +169,11 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
     } else {
       setChoosingPages(true)
     }
+  }
+
+  const toggleContextMenu = (event: MouseEvent<HTMLButtonElement>): void => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    setMoreAnchor(current => current ? null : { x: rect.right, y: rect.bottom + 4 })
   }
 
   const loadProfiles = useCallback(() => {
@@ -260,6 +268,22 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
 
   const activeDetached = active ? detached.has(active.id) : false
   const activeStatus = active ? sessionStatus(active) : null
+  const working = active ? activities.find(activity => activity.sessionId === active.id && activity.mesaId === mesaId) : undefined
+  const workingCard = working ? cards.find(card => card.id === working.cardId) : undefined
+  const workingTitle = workingCard ? (workingCard.title ?? displayHost(workingCard.url)) : 'una tarjeta'
+  const workingText = workingCard
+    ? `Trabajando en ${serviceById(workingCard.serviceId).name} · ${workingTitle}`
+    : 'Trabajando en una tarjeta'
+  const folderName = active ? (active.cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || active.cwd) : ''
+  const showContextProgress = contextProgress !== null &&
+    !(contextProgress.phase === 'done' && contextProgress.projects === 0 && contextProgress.warnings.length === 0)
+  const notionModeLabel = notionMode === 'mcp' ? 'acceso completo' : notionMode === 'files' ? 'filtrado' : notionModeError ? 'sin datos' : 'leyendo…'
+  const sessionHasNotion = active?.mcp.some(item => item.name === 'notion' && item.status === 'configured') === true
+  const sessionModeNote = notionMode === 'files' && sessionHasNotion
+    ? 'Esta sesión conserva el MCP de Notion completo. El cambio de MCP se aplica al abrir otra sesión.'
+    : notionMode === 'mcp' && active && !sessionHasNotion
+      ? 'El MCP completo se configura en las nuevas sesiones compatibles; no está configurado en esta.'
+      : null
 
   return (
     <aside className="agents" aria-label="Agentes">
@@ -356,14 +380,7 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
             title="Más acciones"
             aria-haspopup="menu"
             aria-expanded={moreAnchor !== null}
-            onClick={event => {
-              if (moreAnchor) {
-                setMoreAnchor(null)
-                return
-              }
-              const rect = event.currentTarget.getBoundingClientRect()
-              setMoreAnchor({ x: rect.right, y: rect.bottom + 4 })
-            }}
+            onClick={toggleContextMenu}
           >
             <Ellipsis aria-hidden size={16} strokeWidth={1.75} />
           </button>
@@ -373,51 +390,71 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
         </div>
       </div>
 
-      {contextProgress && !(contextProgress.phase === 'done' && contextProgress.projects === 0 && contextProgress.warnings.length === 0) && (
-        <div className="agents-context">
-          <div className="agents-context-line">
-            <span
-              className={contextProgress.phase === 'error' ? 'agents-context-text agents-context-error' : 'agents-context-text tabular'}
-              role="status"
-              title={progressText(contextProgress)}
-            >
-              {progressText(contextProgress)}
-            </span>
-            {contextProgress.warnings.length > 0 && (
-              <button
-                type="button"
-                className="agents-context-toggle"
-                aria-expanded={showWarnings}
-                onClick={() => setShowWarnings(shown => !shown)}
+      <div className="agents-context">
+        <div className="agents-context-line">
+          <button
+            type="button"
+            className="agents-notion-mode"
+            aria-label={`Notion de la mesa: ${notionModeLabel}`}
+            aria-haspopup="menu"
+            aria-expanded={moreAnchor !== null}
+            disabled={notionMode === null}
+            title={notionModeError ?? 'Ajuste de esta mesa. Cambia las webs permitidas y los MCP de las sesiones nuevas, no los de una sesión ya abierta. No limita MCP externos del arnés.'}
+            onClick={toggleContextMenu}
+          >
+            {notionMode === 'mcp' ? <Plug aria-hidden size={13} /> : <ShieldCheck aria-hidden size={13} />}
+            Notion · {notionModeLabel}
+          </button>
+          {showContextProgress && contextProgress && (
+            <>
+              <span
+                className={contextProgress.phase === 'error' ? 'agents-context-text agents-context-error' : 'agents-context-text tabular'}
+                role="status"
+                title={progressText(contextProgress)}
               >
-                {contextProgress.warnings.length === 1 ? '1 aviso' : `${contextProgress.warnings.length} avisos`}
-              </button>
-            )}
-          </div>
-          {showWarnings && contextProgress.warnings.length > 0 && (
-            <ul className="agents-context-warnings">
-              {contextProgress.warnings.map(warning => (
-                <li key={warning}>{warning}</li>
-              ))}
-            </ul>
+                {progressText(contextProgress)}
+              </span>
+              {contextProgress.warnings.length > 0 && (
+                <button
+                  type="button"
+                  className="agents-context-toggle"
+                  aria-expanded={showWarnings}
+                  onClick={() => setShowWarnings(shown => !shown)}
+                >
+                  {contextProgress.warnings.length === 1 ? '1 aviso' : `${contextProgress.warnings.length} avisos`}
+                </button>
+              )}
+            </>
           )}
         </div>
-      )}
+        {notionModeError && <p className="agents-context-note agents-context-error" role="alert">{notionModeError}</p>}
+        {sessionModeNote && <p className="agents-context-note">{sessionModeNote}</p>}
+        {showWarnings && contextProgress && contextProgress.warnings.length > 0 && (
+          <ul className="agents-context-warnings">
+            {contextProgress.warnings.map(warning => (
+              <li key={warning}>{warning}</li>
+            ))}
+          </ul>
+        )}
+      </div>
 
       {active && activeStatus && (
         <div className="agents-session-bar">
           <span className="agents-cwd" title={active.cwd}>
-            {active.cwd}
+            {folderName}
           </span>
           {active.mcp.length > 0 && (
-            <span className="agents-mcp" aria-label="MCP de la sesión">
+            <span className="agents-mcp" aria-label="MCP configurados para esta sesión; autorización no comprobada por Table">
+              <span className="agents-mcp-label" aria-hidden>MCP sesión</span>
               {active.mcp.map(item => (
                 <span
                   key={item.name}
                   className={item.status === 'configured' ? 'agents-mcp-chip' : 'agents-mcp-chip agents-mcp-unsupported'}
                   data-mcp={item.name}
                   data-status={item.status}
-                  title={item.status === 'configured' ? item.hint : `No configurado: ${item.hint}`}
+                  title={item.status === 'configured'
+                    ? `Configurado para esta sesión; no confirma que esté autorizado. ${item.hint}`
+                    : `No configurado: ${item.hint}`}
                 >
                   {MCP_LABELS[item.name]}
                 </span>
@@ -431,6 +468,27 @@ export function AgentsPanel({ mesaId, width, onResize, onCollapse, entered, onEx
               Desacoplar
             </button>
           )}
+        </div>
+      )}
+
+      {working && (
+        <div className="agents-activity">
+          <span className="agents-activity-dot" aria-hidden />
+          <span className="agents-activity-text" role="status" title={`${activityLabel(working)} · ${workingTitle}`}>
+            {workingText}
+          </span>
+          <button
+            type="button"
+            className="button button-small"
+            aria-label={`Ver ${workingTitle}`}
+            disabled={!workingCard}
+            onClick={() => {
+              api.surface.enter(mesaId, working.cardId, { follow: true, nodeId: working.nodeId })
+                .catch((error: unknown) => notify(errorMessage(error)))
+            }}
+          >
+            Ver
+          </button>
         </div>
       )}
 

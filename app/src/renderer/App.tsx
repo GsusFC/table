@@ -1046,6 +1046,7 @@ export function App() {
         <AgentsPanel
           key={showingMesa.id}
           mesaId={showingMesa.id}
+          cards={showingMesa.cards}
           width={agentsWidth}
           onResize={setAgentsWidth}
           onCollapse={() => setAgentsOpen(false)}

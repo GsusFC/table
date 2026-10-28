@@ -2,7 +2,7 @@ import { app, webContents, type BrowserWindow, type WebContents } from 'electron
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
@@ -1280,6 +1280,14 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
           !credentialLike.test(args),
         { chips: shownChips.map(chip => chip.text) },
       )
+      const folderLabel = await inUi<{ text: string; title: string }>(`(() => {
+        const label = document.querySelector('.agents-cwd')
+        return { text: label?.textContent.trim() ?? '', title: label?.title ?? '' }
+      })()`)
+      record(
+        'agentes: la carpeta muestra su nombre y conserva la ruta completa en el título',
+        folderLabel.text === basename(folder) && folderLabel.title === folder,
+      )
       await shot('31-mcp-chips')
 
       await inUi(`window.table.terminal.start(${mcpArg}, ${JSON.stringify(fakeId('Gemini falso'))}, { cols: 80, rows: 24 })`)
@@ -1296,7 +1304,7 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
 
       // «Notion para el agente: MCP completo» avisa antes; cancelar no cambia nada.
       const openMoreMcp = async (label: string): Promise<void> => {
-        await inUi(`document.querySelector('.agents [aria-label="Más acciones de agentes"]').click()`)
+        await inUi(`document.querySelector('.agents-notion-mode').click()`)
         await clickMenuItem(label)
       }
       const savedMode = async (): Promise<string> => (await inUi<Mesa>(`window.table.mesas.get(${mcpArg})`)).agentNotion
@@ -1371,6 +1379,18 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
           !('table-notion' in geminiWithout.mcpServers) &&
           'table-figma' in geminiWithout.mcpServers &&
           readFileSync(join(folder, 'TABLE.md'), 'utf8').includes('- **Notion**: sin MCP en esta mesa'),
+      )
+      const visibleMode = await waitFor(
+        () => inUi<string>(`document.querySelector('.agents-notion-mode')?.textContent ?? ''`),
+        text => text.includes('filtrado'),
+        'modo de la mesa visible',
+      ).catch(() => '')
+      const sessionNotice = await inUi<string>(`document.querySelector('.agents-context-note')?.textContent ?? ''`)
+      record(
+        'agentes: distingue el modo filtrado de la mesa del MCP de Notion que conserva la sesión anterior',
+        visibleMode.includes('filtrado') &&
+          sessionNotice.includes('conserva el MCP de Notion') &&
+          (await chips()).some(chip => chip.text === 'Notion' && chip.status === 'configured'),
       )
 
       for (const session of await inUi<SessionInfo[]>(`window.table.terminal.sessions(${mcpArg})`)) {
@@ -1767,7 +1787,7 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
       // table_clear_activity apaga la luz.
       await json('table_clear_activity', {})
       const unlit = await waitFor(
-        () => inUi<boolean>(`!document.querySelector('.card-agent-active') && !document.querySelector('.topbar .agent-activity-badge')`),
+        () => inUi<boolean>(`!document.querySelector('.card-agent-active') && !document.querySelector('.topbar .agent-activity-badge') && !document.querySelector('.agents-activity')`),
         Boolean,
         'luz apagada',
       ).catch(() => false)
@@ -1805,6 +1825,21 @@ export async function runSmoke(window: BrowserWindow, surface: SurfaceManager, s
         () => false,
       )
       record('web: «Ver» en el aviso abre la tarjeta en la que trabaja el agente', viewed)
+
+      // El aviso ya se cerró, pero la actividad de la sesión conserva su propia acción «Ver».
+      await inUi(`window.table.surface.exit()`)
+      await waitFor(enteredCard, id => id === null, 'lienzo tras cerrar el aviso')
+      const persistentActivity = await inUi<string>(`document.querySelector('.agents-activity')?.textContent ?? ''`)
+      await inUi(`document.querySelector('.agents-activity button')?.click()`)
+      const viewedFromPanel = await waitFor(enteredCard, id => id === localId, '«Ver» persistente abre la tarjeta').then(
+        () => true,
+        () => false,
+      )
+      record(
+        'agentes: la actividad y «Ver» permanecen después de cerrar el aviso transitorio',
+        persistentActivity.includes('App sintética') && viewedFromPanel,
+      )
+      await shot('38-agentes-actividad-persistente')
 
       // Cerrar la sesión apaga la luz.
       await inUi(`window.table.terminal.close(${JSON.stringify(webSession!.id)})`)
